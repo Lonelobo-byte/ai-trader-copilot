@@ -1,0 +1,22 @@
+# Never send runtime secrets, local databases, or development artifacts to a
+# remote Docker builder.
+.env
+.env.*
+!.env.example
+.git
+.agents
+.vscode
+backend/.venv
+**/__pycache__
+**/*.py[cod]
+.pytest_cache
+data
+logs
+reports
+backups
+node_modules
+dist
+build
+*.db
+*.log
+cmd prompt.txt

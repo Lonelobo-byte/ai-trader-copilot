@@ -1,0 +1,12 @@
+.env
+.venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+data/*.db
+logs/*.log
+node_modules/
+dist/
+build/
+reports/
+backend/subscription_smoke.db

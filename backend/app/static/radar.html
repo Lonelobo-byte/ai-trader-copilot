@@ -1,0 +1,1346 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>APEX AI Breakout Radar & Momentum Scanner</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap"
+    rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+  <style>
+    /* Radar custom layout adjustments */
+    .radar-header-actions {
+      display: flex;
+      gap: 1rem;
+      align-items: center;
+    }
+
+    .radar-container {
+      padding: 1.5rem;
+      max-width: 1400px;
+      margin: 0 auto;
+      width: 100%;
+    }
+
+    .radar-summary-cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 1.25rem;
+      margin-bottom: 1.5rem;
+    }
+
+    .radar-summary-card {
+      border-left: 3px solid var(--neon-blue);
+    }
+
+    .radar-summary-card.active-breakouts {
+      border-left-color: var(--neon-purple);
+    }
+
+    .radar-summary-card.hot-zones {
+      border-left-color: var(--neon-gold);
+    }
+
+    .radar-filters {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 1rem;
+      background: rgba(13, 20, 35, 0.35);
+      padding: 0.75rem 1.25rem;
+      border-radius: 12px;
+      border: 1px solid var(--border-color);
+    }
+
+    .filter-group {
+      display: flex;
+      gap: 0.5rem;
+    }
+
+    .filter-btn {
+      background: transparent;
+      border: 1px solid transparent;
+      color: var(--text-muted);
+      font-size: 0.8rem;
+      font-weight: 600;
+      padding: 6px 14px;
+      border-radius: 15px;
+      cursor: pointer;
+      transition: all var(--transition-speed);
+    }
+
+    .filter-btn:hover {
+      color: var(--text-secondary);
+      background: rgba(255, 255, 255, 0.02);
+    }
+
+    .filter-btn.active {
+      color: var(--text-primary);
+      background: rgba(255, 255, 255, 0.08);
+      border-color: rgba(255, 255, 255, 0.1);
+    }
+
+    .filter-btn.active.bullish {
+      color: var(--neon-green);
+      background: rgba(16, 185, 129, 0.08);
+      border-color: rgba(16, 185, 129, 0.2);
+    }
+
+    .filter-btn.active.bearish {
+      color: var(--neon-red);
+      background: rgba(244, 63, 94, 0.08);
+      border-color: rgba(244, 63, 94, 0.2);
+    }
+
+    .radar-refresh-info {
+      font-size: 0.78rem;
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .radar-refresh-spinner {
+      width: 12px;
+      height: 12px;
+      border: 2px solid rgba(255, 255, 255, 0.1);
+      border-top-color: var(--neon-blue);
+      border-radius: 50%;
+      animation: spin 1s infinite linear;
+    }
+
+    @keyframes spin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
+
+    /* Radar Table Styles */
+    .radar-table-container {
+      background: var(--card-bg);
+      border: 1px solid rgba(255, 255, 255, 0.04);
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: var(--shadow-sm);
+    }
+
+    .radar-table {
+      width: 100%;
+      border-collapse: collapse;
+      text-align: left;
+    }
+
+    .radar-table th {
+      background: rgba(0, 0, 0, 0.12);
+      font-size: 0.72rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text-muted);
+      padding: 1.1rem 1.25rem;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    }
+
+    .radar-table td {
+      padding: 1rem 1.25rem;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+      font-size: 0.85rem;
+      vertical-align: middle;
+    }
+
+    .radar-table tr:hover {
+      background: rgba(255, 255, 255, 0.015);
+    }
+
+    .symbol-cell {
+      font-weight: 700;
+      color: var(--text-primary);
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .symbol-logo {
+      font-size: 1.1rem;
+    }
+
+    .score-cell {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+
+    .score-badge {
+      font-family: var(--font-mono);
+      font-weight: 600;
+      font-size: 0.85rem;
+      width: 32px;
+      text-align: right;
+    }
+
+    .score-bar {
+      flex: 1;
+      height: 6px;
+      background: rgba(255, 255, 255, 0.05);
+      border-radius: 3px;
+      overflow: hidden;
+      max-width: 100px;
+    }
+
+    .score-fill {
+      height: 100%;
+      border-radius: 3px;
+    }
+
+    .score-high {
+      color: var(--neon-green);
+    }
+
+    .score-high-fill {
+      background: var(--neon-green);
+      box-shadow: 0 0 8px var(--neon-green-glow);
+    }
+
+    .score-medium {
+      color: var(--neon-gold);
+    }
+
+    .score-medium-fill {
+      background: var(--neon-gold);
+      box-shadow: 0 0 8px var(--neon-gold-glow);
+    }
+
+    .score-low {
+      color: var(--text-muted);
+    }
+
+    .score-low-fill {
+      background: var(--text-muted);
+    }
+
+    .direction-badge {
+      display: inline-block;
+      font-size: 0.7rem;
+      font-weight: 700;
+      padding: 2px 8px;
+      border-radius: 4px;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+    }
+
+    .direction-badge.bullish {
+      background: rgba(16, 185, 129, 0.1);
+      color: var(--neon-green);
+      border: 1px solid rgba(16, 185, 129, 0.2);
+    }
+
+    .direction-badge.bearish {
+      background: rgba(244, 63, 94, 0.1);
+      color: var(--neon-red);
+      border: 1px solid rgba(244, 63, 94, 0.2);
+    }
+
+    .radar-table .value-mono {
+      font-family: var(--font-mono);
+      font-weight: 500;
+    }
+
+    .change-pos {
+      color: var(--neon-green);
+    }
+
+    .change-neg {
+      color: var(--neon-red);
+    }
+
+    .priority-badge {
+      display: inline-block;
+      font-size: 0.72rem;
+      font-weight: 600;
+      padding: 3px 10px;
+      border-radius: 6px;
+    }
+
+    .priority-badge.critical {
+      background: rgba(139, 92, 246, 0.12);
+      color: var(--neon-purple);
+      border: 1px solid rgba(139, 92, 246, 0.2);
+      box-shadow: 0 0 10px rgba(139, 92, 246, 0.05);
+    }
+
+    .priority-badge.high {
+      background: rgba(251, 191, 36, 0.1);
+      color: var(--neon-gold);
+      border: 1px solid rgba(251, 191, 36, 0.2);
+    }
+
+    .priority-badge.medium {
+      background: rgba(6, 182, 212, 0.08);
+      color: var(--neon-blue);
+      border: 1px solid rgba(6, 182, 212, 0.15);
+    }
+
+    .priority-badge.low {
+      background: rgba(255, 255, 255, 0.02);
+      color: var(--text-muted);
+      border: 1px solid rgba(255, 255, 255, 0.04);
+    }
+
+    /* Top-Left AI & Quality Badge Tags */
+    .top-badge-tag {
+      font-size: 0.62rem;
+      font-weight: 800;
+      padding: 2px 7px;
+      border-radius: 4px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      white-space: nowrap;
+    }
+
+    .badge-verified {
+      background: rgba(80, 205, 137, 0.18);
+      color: #50cd89;
+      border: 1px solid rgba(80, 205, 137, 0.5);
+      box-shadow: 0 0 8px rgba(80, 205, 137, 0.25);
+    }
+
+    .badge-rejected {
+      background: rgba(241, 65, 108, 0.2);
+      color: #f1416c;
+      border: 1px solid rgba(241, 65, 108, 0.6);
+      box-shadow: 0 0 8px rgba(241, 65, 108, 0.25);
+    }
+
+    .badge-top-tier {
+      background: rgba(241, 188, 0, 0.18);
+      color: #ffc700;
+      border: 1px solid rgba(241, 188, 0, 0.5);
+      box-shadow: 0 0 8px rgba(241, 188, 0, 0.2);
+    }
+
+    .badge-quant {
+      background: rgba(62, 151, 255, 0.12);
+      color: #3e97ff;
+      border: 1px solid rgba(62, 151, 255, 0.3);
+    }
+
+    .row-verified {
+      border-left: 3px solid #50cd89 !important;
+      background: rgba(80, 205, 137, 0.02) !important;
+    }
+
+    .row-rejected {
+      border-left: 3px solid #f1416c !important;
+      background: rgba(241, 65, 108, 0.03) !important;
+      opacity: 0.85;
+    }
+
+    .action-btn-sm {
+      text-decoration: none;
+      font-size: 0.78rem;
+      font-weight: 600;
+      color: var(--text-primary);
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      padding: 5px 12px;
+      border-radius: 6px;
+      transition: all var(--transition-speed);
+      cursor: pointer;
+    }
+
+    .action-btn-sm:hover {
+      background: var(--neon-blue);
+      border-color: var(--neon-blue);
+      color: #000;
+      box-shadow: 0 0 12px var(--neon-blue-glow);
+    }
+
+    .action-btn-sm.ai-btn {
+      color: var(--neon-purple);
+      border-color: rgba(139, 92, 246, 0.25);
+      background: rgba(139, 92, 246, 0.03);
+      margin-left: 0.35rem;
+    }
+
+    .action-btn-sm.ai-btn:hover {
+      background: var(--neon-purple);
+      border-color: var(--neon-purple);
+      color: #fff;
+      box-shadow: 0 0 12px var(--neon-purple-glow);
+    }
+
+    .radar-empty-state {
+      padding: 4rem 2rem;
+      text-align: center;
+      color: var(--text-muted);
+    }
+
+    .radar-empty-state .icon {
+      font-size: 2.5rem;
+      display: block;
+      margin-bottom: 1rem;
+    }
+
+    /* Premium Modal Window */
+    .modal-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(4, 6, 12, 0.85);
+      backdrop-filter: blur(16px);
+      z-index: 100;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 1.5rem;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.3s ease;
+    }
+
+    .modal-overlay.active {
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    .modal-card {
+      background: rgba(12, 22, 38, 0.95);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 20px;
+      max-width: 650px;
+      width: 100%;
+      box-shadow: var(--shadow-lg), 0 0 30px rgba(139, 92, 246, 0.1);
+      overflow: hidden;
+      transform: scale(0.95);
+      transition: transform 0.3s ease;
+    }
+
+    .modal-overlay.active .modal-card {
+      transform: scale(1);
+    }
+
+    .modal-header {
+      padding: 1.25rem 1.5rem;
+      border-bottom: 1px solid var(--border-color);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: rgba(0, 0, 0, 0.15);
+    }
+
+    .modal-header h3 {
+      font-size: 1.1rem;
+      font-weight: 700;
+      margin: 0;
+      color: var(--text-primary);
+    }
+
+    .modal-close {
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      font-size: 1.5rem;
+      cursor: pointer;
+      line-height: 1;
+      transition: color 0.2s;
+    }
+
+    .modal-close:hover {
+      color: var(--neon-red);
+    }
+
+    .modal-body {
+      padding: 1.5rem;
+      max-height: 70vh;
+      overflow-y: auto;
+    }
+
+    /* AI Result Card Styling */
+    .ai-verdict-banner {
+      padding: 0.75rem 1.25rem;
+      border-radius: 8px;
+      font-weight: 700;
+      font-size: 0.95rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 1.25rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .verdict-continuation {
+      background: rgba(16, 185, 129, 0.1);
+      color: var(--neon-green);
+      border: 1px solid rgba(16, 185, 129, 0.2);
+    }
+
+    .verdict-pullback {
+      background: rgba(6, 182, 212, 0.1);
+      color: var(--neon-blue);
+      border: 1px solid rgba(6, 182, 212, 0.2);
+    }
+
+    .verdict-sweep {
+      background: rgba(139, 92, 246, 0.1);
+      color: var(--neon-purple);
+      border: 1px solid rgba(139, 92, 246, 0.25);
+    }
+
+    .verdict-reversal {
+      background: rgba(244, 63, 94, 0.1);
+      color: var(--neon-red);
+      border: 1px solid rgba(244, 63, 94, 0.25);
+    }
+
+    .ai-levels-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 1rem;
+      margin-bottom: 1.25rem;
+    }
+
+    .ai-level-item {
+      background: rgba(0, 0, 0, 0.2);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      padding: 0.65rem 0.85rem;
+      text-align: center;
+    }
+
+    .ai-level-item span {
+      display: block;
+      font-size: 0.65rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      margin-bottom: 0.25rem;
+    }
+
+    .ai-level-item strong {
+      font-family: var(--font-mono);
+      font-size: 0.95rem;
+      color: var(--text-primary);
+    }
+
+    .ai-level-item.invalid strong {
+      color: var(--neon-red);
+    }
+
+    .ai-reasoning-section {
+      background: rgba(255, 255, 255, 0.01);
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      padding: 1.25rem;
+      margin-top: 1rem;
+    }
+
+    .ai-reasoning-section h4 {
+      font-size: 0.85rem;
+      font-weight: 700;
+      color: var(--text-secondary);
+      margin-bottom: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+    }
+
+    .ai-reasoning-list {
+      margin-left: 1.25rem;
+      font-size: 0.85rem;
+      line-height: 1.5;
+      color: var(--text-secondary);
+    }
+
+    .ai-reasoning-list li {
+      margin-bottom: 0.5rem;
+    }
+
+    .ai-loading-box {
+      text-align: center;
+      padding: 3rem 1rem;
+    }
+
+    .ai-loader-ring {
+      width: 48px;
+      height: 48px;
+      border: 3px solid rgba(139, 92, 246, 0.1);
+      border-top-color: var(--neon-purple);
+      border-radius: 50%;
+      margin: 0 auto 1.5rem;
+      animation: spin 1s infinite linear;
+      box-shadow: 0 0 15px rgba(139, 92, 246, 0.1);
+    }
+  </style>
+</head>
+
+<body class="single-page">
+  <canvas id="scifi-canvas"></canvas>
+  <div class="scanline"></div>
+  <div class="glow-bg">
+    <div class="glow-blob blob-1"></div>
+    <div class="glow-blob blob-2"></div>
+    <div class="glow-blob blob-3"></div>
+  </div>
+
+  <!-- Left Sidebar -->
+  <aside class="sidebar">
+    <div class="sidebar-logo" onclick="window.location.href='index.html'" title="APEX AI Logo">
+      <span style="font-size: 1.5rem; filter: drop-shadow(0 0 8px var(--neon-blue-glow));">🔮</span>
+    </div>
+    <nav class="sidebar-nav">
+      <a href="index.html" class="nav-item" title="Co-Pilot Dashboard">
+        <svg class="nav-icon" viewBox="0 0 24 24">
+          <rect x="3" y="3" width="7" height="9" rx="1" />
+          <rect x="14" y="3" width="7" height="5" rx="1" />
+          <rect x="14" y="10" width="7" height="11" rx="1" />
+          <rect x="3" y="14" width="7" height="7" rx="1" />
+        </svg>
+      </a>
+      <a href="radar.html" class="nav-item active" title="Breakout Radar">
+        <svg class="nav-icon" viewBox="0 0 24 24">
+          <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" fill="none" />
+          <circle cx="12" cy="12" r="6" stroke="currentColor" stroke-width="1.5" fill="none" />
+          <line x1="12" y1="2" x2="12" y2="22" stroke="currentColor" stroke-width="1.5" />
+          <line x1="2" y1="12" x2="22" y2="12" stroke="currentColor" stroke-width="1.5" />
+        </svg>
+      </a>
+    </nav>
+    <div class="sidebar-footer">
+      <span class="user-avatar" title="Apex AI Co-Pilot">AP</span>
+    </div>
+  </aside>
+
+  <div class="main-wrapper">
+    <header class="main-header">
+      <div class="header-title-sec">
+        <h1>Breakout Radar</h1>
+        <div class="breadcrumbs">Home <span class="bullet">/</span> Breakout Radar <span class="badge">V1.0.0</span>
+        </div>
+      </div>
+
+      <div class="radar-header-actions">
+        <div class="connection-status"
+          style="border-color: rgba(139, 92, 246, 0.3); background: rgba(139, 92, 246, 0.05); color: var(--neon-purple);">
+          <span style="font-size: 0.85rem;">🛡️ MTF Trap Shield: Active</span>
+        </div>
+        <div class="connection-status" id="radar-status">
+          <span class="dot green"></span>
+          <span class="text">Radar Online</span>
+        </div>
+      </div>
+    </header>
+
+    <main class="radar-container">
+      <!-- SUMMARY BANNER CARDS -->
+      <div class="radar-summary-cards">
+        <div class="card radar-summary-card active-breakouts">
+          <h3>Active Breakouts</h3>
+          <div style="display: flex; justify-content: space-between; align-items: flex-end; margin-top: 0.5rem;">
+            <h2 id="summary-breakout-count" style="font-size: 2rem; font-weight: 700; line-height: 1;">0</h2>
+            <span class="label" style="margin-bottom: 2px;">MTF-aligned review candidates</span>
+          </div>
+        </div>
+        <div class="card radar-summary-card hot-zones">
+          <h3>Highest Breakout Score</h3>
+          <div style="display: flex; justify-content: space-between; align-items: flex-end; margin-top: 0.5rem;">
+            <h2 id="summary-top-score"
+              style="font-size: 2rem; font-weight: 700; line-height: 1; font-family: var(--font-mono); color: var(--neon-gold);">
+              -</h2>
+            <span id="summary-top-symbol" class="label" style="margin-bottom: 2px; font-weight: 700;">-</span>
+          </div>
+        </div>
+        <div class="card radar-summary-card">
+          <h3>Market Volatility Pool</h3>
+          <div style="display: flex; justify-content: space-between; align-items: flex-end; margin-top: 0.5rem;">
+            <h2 id="summary-vol-state"
+              style="font-size: 1.5rem; font-weight: 700; line-height: 1; color: var(--neon-blue);">STABLE</h2>
+            <span class="label" style="margin-bottom: 2px;">Average ATR Multiplier</span>
+          </div>
+        </div>
+        <div class="card radar-summary-card"
+          style="display: flex; align-items: center; justify-content: center; padding: 0.75rem 1.5rem; min-height: 105px; position: relative;">
+          <h3 style="position: absolute; top: 1rem; left: 1.5rem; margin: 0; padding: 0; border: none;">Live Scan
+            Telemetry</h3>
+          <div class="radar-scope" style="margin: 1.35rem auto 0 auto; width: 80px; height: 80px; border-width: 1px;">
+            <div class="radar-sweep"></div>
+            <div class="radar-grid-circle"></div>
+            <div class="radar-grid-circle-inner"></div>
+            <div class="radar-crosshair-h"></div>
+            <div class="radar-crosshair-v"></div>
+            <div class="radar-dot" style="width: 4px; height: 4px; top: 25%; left: 70%;"></div>
+            <div class="radar-dot red-alert" style="width: 4px; height: 4px; top: 70%; left: 30%;"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- FILTER BAR -->
+      <div class="radar-filters">
+        <div class="filter-group">
+          <button class="filter-btn active" data-filter="all">All Breakouts</button>
+          <button class="filter-btn" data-filter="recommended">⭐ Top Picks Only</button>
+          <button class="filter-btn" data-filter="bullish">🟢 Bullish Trends</button>
+          <button class="filter-btn" data-filter="bearish">🔴 Bearish Trends</button>
+        </div>
+
+        <div style="display: flex; align-items: center; gap: 0.75rem;">
+          <label for="scan-mode-select" style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary);">Scan
+            Mode:</label>
+          <select id="scan-mode-select"
+            style="background: rgba(8, 14, 24, 0.9); border: 1px solid var(--border-color); color: var(--text-primary); font-size: 0.8rem; font-weight: 600; padding: 6px 16px; border-radius: 8px; outline: none; cursor: pointer; transition: all var(--transition-speed);">
+            <option value="5m,1h">⚡ Scalp Scan (5m / 1h)</option>
+            <option value="15m,4h" selected>🕒 Intraday Scan (15m / 4h)</option>
+            <option value="1h,1d">📅 Swing Scan (1h / 1d)</option>
+          </select>
+          <button id="ai-radar-btn" hidden onclick="fetchBreakouts(true)"
+            style="background: linear-gradient(135deg, rgba(62, 151, 255, 0.2), rgba(157, 78, 221, 0.25)); border: 1px solid rgba(157, 78, 221, 0.6); color: #e0aaff; font-size: 0.8rem; font-weight: 700; padding: 6px 14px; border-radius: 8px; cursor: pointer; transition: all 0.2s ease; display: flex; align-items: center; gap: 0.5rem; box-shadow: 0 0 10px rgba(157, 78, 221, 0.2);">
+            <span>🤖 Run AI Scoring on Top 3</span>
+            <span
+              style="background: rgba(80, 205, 137, 0.2); color: #50cd89; border: 1px solid rgba(80, 205, 137, 0.5); font-family: var(--font-mono); font-size: 0.7rem; font-weight: 700; padding: 2px 6px; border-radius: 6px;">READY</span>
+          </button>
+        </div>
+
+        <div class="radar-refresh-info">
+          <span class="radar-refresh-spinner" id="refresh-spinner"></span>
+          <span id="refresh-text">Next scan in 30s</span>
+        </div>
+      </div>
+
+      <!-- BREAKOUT RECORDS TABLE -->
+      <div class="radar-table-container">
+        <table class="radar-table">
+          <thead>
+            <tr>
+              <th>Symbol / Evidence Tag</th>
+              <th>Evidence Score</th>
+              <th>Trend</th>
+              <th>Relative Vol (RVol)</th>
+              <th>Vol Multiplier (ATR)</th>
+              <th>RSI (14)</th>
+              <th>5m Change</th>
+              <th>5m Volume</th>
+              <th>Review Status</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody id="radar-records-tbody">
+            <!-- Populated dynamically via JS -->
+            <tr>
+              <td colspan="10">
+                <div class="radar-empty-state">
+                  <span class="icon">🔍</span>
+                  <p>Initializing breakout scanner. Fetching market data...</p>
+                </div>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </main>
+
+    <!-- AI VERIFICATION OVERLAY MODAL -->
+    <div class="modal-overlay" id="ai-modal-overlay">
+      <div class="modal-card">
+        <div class="modal-header">
+          <h3 id="modal-title-symbol">AI SMC Trend Verification</h3>
+          <button class="modal-close" id="modal-close-btn">&times;</button>
+        </div>
+        <div class="modal-body" id="modal-body-content">
+          <!-- Render loading or verification results dynamically -->
+        </div>
+      </div>
+    </div>
+
+    <script>
+      // State management
+      let activeFilter = 'all';
+      let rawBreakouts = [];
+      let refreshTimer = null;
+      let secondsRemaining = 30;
+
+      // DOM Elements
+      const recordsTbody = document.getElementById('radar-records-tbody');
+      const refreshText = document.getElementById('refresh-text');
+      const breakoutCountEl = document.getElementById('summary-breakout-count');
+      const topScoreEl = document.getElementById('summary-top-score');
+      const topSymbolEl = document.getElementById('summary-top-symbol');
+      const volStateEl = document.getElementById('summary-vol-state');
+      const spinner = document.getElementById('refresh-spinner');
+
+      const modalOverlay = document.getElementById('ai-modal-overlay');
+      const modalCloseBtn = document.getElementById('modal-close-btn');
+      const modalTitleSymbol = document.getElementById('modal-title-symbol');
+      const modalBodyContent = document.getElementById('modal-body-content');
+      const scanModeSelect = document.getElementById('scan-mode-select');
+
+      // AI Radar Cooldown Manager (Hardened 5-minute / 300s limit)
+      const AI_COOLDOWN_MS = 5 * 60 * 1000; // 300,000 ms = 5 minutes
+      let isFetchingAI = false;
+
+      function updateAICooldownUI() {
+        const aiBtn = document.getElementById('ai-radar-btn');
+        if (!aiBtn) return;
+
+        // If currently in-flight evaluating, don't overwrite evaluating badge
+        if (isFetchingAI) return;
+
+        const cooldownUntil = parseInt(localStorage.getItem('ai_radar_cooldown_until') || '0', 10);
+        const remaining = cooldownUntil - Date.now();
+
+        if (remaining > 0) {
+          const mins = Math.floor(remaining / 60000);
+          const secs = Math.floor((remaining % 60000) / 1000);
+          const formatted = `${mins}:${secs < 10 ? '0' : ''}${secs}`;
+          aiBtn.disabled = true;
+          aiBtn.style.opacity = '0.7';
+          aiBtn.style.cursor = 'not-allowed';
+          aiBtn.innerHTML = `
+            <span>🤖 Run AI Scoring</span>
+            <span style="background: rgba(241, 65, 108, 0.25); color: #f1416c; border: 1px solid rgba(241, 65, 108, 0.6); font-family: var(--font-mono); font-size: 0.75rem; font-weight: 800; padding: 2px 7px; border-radius: 6px; box-shadow: 0 0 8px rgba(241, 65, 108, 0.3); letter-spacing: 0.5px;">⏳ ${formatted}</span>
+          `;
+        } else {
+          aiBtn.disabled = false;
+          aiBtn.style.opacity = '1';
+          aiBtn.style.cursor = 'pointer';
+          aiBtn.innerHTML = `
+            <span>🤖 Run AI Scoring on Top 3</span>
+            <span style="background: rgba(80, 205, 137, 0.2); color: #50cd89; border: 1px solid rgba(80, 205, 137, 0.5); font-family: var(--font-mono); font-size: 0.7rem; font-weight: 700; padding: 2px 6px; border-radius: 6px;">READY</span>
+          `;
+        }
+      }
+
+      // Fetch records (default: 0 AI calls for background/automatic scans)
+      async function fetchBreakouts(useAi = false) {
+        const aiBtn = document.getElementById('ai-radar-btn');
+
+        if (useAi) {
+          if (isFetchingAI || (aiBtn && aiBtn.disabled)) {
+            return; // Block repeat clicks while evaluating or during cooldown
+          }
+
+          const cooldownUntil = parseInt(localStorage.getItem('ai_radar_cooldown_until') || '0', 10);
+          if (cooldownUntil > Date.now()) {
+            updateAICooldownUI();
+            return;
+          }
+
+          isFetchingAI = true;
+          spinner.style.display = 'block';
+          refreshText.textContent = "Running AI scoring on top candidates...";
+          if (aiBtn) {
+            aiBtn.disabled = true;
+            aiBtn.style.opacity = '0.65';
+            aiBtn.style.cursor = 'not-allowed';
+            aiBtn.innerHTML = `
+              <span>🤖 Run AI Scoring</span>
+              <span style="background: rgba(157, 78, 221, 0.3); color: #e0aaff; border: 1px solid rgba(157, 78, 221, 0.6); font-family: var(--font-mono); font-size: 0.7rem; font-weight: 800; padding: 2px 7px; border-radius: 6px; box-shadow: 0 0 8px rgba(157, 78, 221, 0.3);">⏳ EVALUATING...</span>
+            `;
+          }
+        } else {
+          spinner.style.display = 'block';
+          refreshText.textContent = "Scanning market (Quant Mode)...";
+        }
+
+        const [ltf, htf] = (scanModeSelect.value || '5m,1h').split(',');
+
+        try {
+          const response = await fetch(`/quant/breakout-radar?ltf=${ltf}&htf=${htf}&use_ai=${useAi}`);
+          if (!response.ok) {
+            const errData = await response.json().catch(() => ({}));
+            if (response.status === 429) {
+              const detail = errData.detail || '';
+              const match = detail.match(/(\d+)s/);
+              const secs = match ? parseInt(match[1], 10) : 300;
+              localStorage.setItem('ai_radar_cooldown_until', (Date.now() + secs * 1000).toString());
+              alert(detail || "AI Radar scan is on 5-minute cooldown.");
+            }
+            throw new Error(errData.detail || 'API query failed.');
+          }
+          rawBreakouts = await response.json();
+
+          if (useAi) {
+            // Set 5-minute cooldown in localStorage upon successful AI scan
+            localStorage.setItem('ai_radar_cooldown_until', (Date.now() + AI_COOLDOWN_MS).toString());
+          }
+
+          renderTable();
+          updateSummary();
+        } catch (error) {
+          console.error("Error loading breakout data:", error);
+        } finally {
+          if (useAi) isFetchingAI = false;
+          spinner.style.display = 'none';
+          secondsRemaining = 30;
+          updateAICooldownUI();
+        }
+      }
+
+      // Render breakout records
+      function renderTable() {
+        const filtered = rawBreakouts.filter(item => {
+          if (activeFilter === 'recommended') {
+            return item.review_status === 'REVIEW_CANDIDATE';
+          }
+          if (activeFilter === 'bullish') return item.direction === 'BULLISH';
+          if (activeFilter === 'bearish') return item.direction === 'BEARISH';
+          return true;
+        });
+
+        if (filtered.length === 0) {
+          recordsTbody.innerHTML = `
+          <tr>
+            <td colspan="10">
+              <div class="radar-empty-state">
+                <span class="icon">💤</span>
+                <p>No active breakouts match the filter category.</p>
+              </div>
+            </td>
+          </tr>
+        `;
+          return;
+        }
+
+        recordsTbody.innerHTML = filtered.map(item => {
+          // Color mapping for score
+          let scoreClass = 'score-low';
+          let fillClass = 'score-low-fill';
+          if (item.score >= 75) {
+            scoreClass = 'score-high';
+            fillClass = 'score-high-fill';
+          } else if (item.score >= 40) {
+            scoreClass = 'score-medium';
+            fillClass = 'score-medium-fill';
+          }
+
+          // Trend indicators
+          let trendText = item.direction === 'BULLISH' ? '🟢 Buy' : '🔴 Sell';
+          if (item.status.includes('EXHAUSTED')) {
+            trendText = item.direction === 'BULLISH' ? '🟢 Reversal Long' : '🔴 Reversal Short';
+          } else if (item.status.includes('BREAKDOWN')) {
+            trendText = '📉 Breakdown Short';
+          } else if (item.status.includes('BREAKOUT')) {
+            trendText = '🚀 Breakout Long';
+          }
+          let trendClass = item.direction === 'BULLISH' ? 'bullish' : 'bearish';
+
+          // Direction is only labelled a breakout after the API confirms both
+          // timeframe structure and a completed close through the prior swing.
+          if (item.status === 'LIVE_CONFIRMED_REVIEW') {
+            trendText = item.direction === 'BULLISH' ? 'Live-Confirmed Long Review' : 'Live-Confirmed Short Review';
+            trendClass = item.direction === 'BULLISH' ? 'bullish' : 'bearish';
+          } else if (item.status === 'STRUCTURE_CONFIRMED_PENDING_LIVE_CONFIRMATION') {
+            trendText = item.direction === 'BULLISH' ? 'Breakout — Live Check Pending' : 'Breakdown — Live Check Pending';
+            trendClass = item.direction === 'BULLISH' ? 'bullish' : 'bearish';
+          } else if (item.status === 'LIVE_CONFIRMATION_REJECTED') {
+            trendText = item.direction === 'BULLISH' ? 'Long Structure — Live Flow Rejected' : 'Short Structure — Live Flow Rejected';
+            trendClass = 'neutral';
+          } else if (item.status === 'CONFIRMED_BULLISH_BREAKOUT') {
+            trendText = 'Confirmed Breakout Long';
+            trendClass = 'bullish';
+          } else if (item.status === 'CONFIRMED_BEARISH_BREAKDOWN') {
+            trendText = 'Confirmed Breakdown Short';
+            trendClass = 'bearish';
+          } else if (item.status === 'BULLISH_TREND_WATCH') {
+            trendText = 'Bullish Trend Watch';
+            trendClass = 'bullish';
+          } else if (item.status === 'BEARISH_TREND_WATCH') {
+            trendText = 'Bearish Trend Watch';
+            trendClass = 'bearish';
+          } else {
+            trendText = 'Structure unconfirmed';
+            trendClass = 'neutral';
+          }
+
+          // Quality Badge formatting for Top-Left tag
+          let qualityBadgeHtml = item.quality_badge || '🔍 QUANT VERIFIED';
+          const smc = item.smc_confluence || {};
+          const smcSummary = smc.phase
+            ? `Phase: ${smc.phase.replace(/_/g, ' ')} · SMC confluence ${smc.score_adjustment >= 0 ? '+' : ''}${smc.score_adjustment || 0}`
+            : 'SMC confluence unavailable';
+          let badgeTheme = 'badge-quant';
+          let rowTheme = '';
+
+          if (item.review_status === 'REVIEW_CANDIDATE') {
+            badgeTheme = 'badge-verified';
+            rowTheme = 'row-verified';
+          } else if (qualityBadgeHtml.includes('HIGH RISK') || (item.risk_flags || []).length > 0) {
+            badgeTheme = 'badge-rejected';
+            rowTheme = 'row-rejected';
+          } else if (qualityBadgeHtml.includes('TOP TIER')) {
+            badgeTheme = 'badge-top-tier';
+          }
+
+          // Recommendation Tag (Clear decision helper for user)
+          let recBadge = '<span class="priority-badge low">🟡 WATCHLIST</span>';
+          if (qualityBadgeHtml.includes('REJECTED') || item.ai_verdict === 'AVOID' || item.ai_verdict === 'LIKELY_TRAP') {
+            recBadge = '<span class="priority-badge" style="background: rgba(241, 65, 108, 0.2); color: #f1416c; border: 1px solid rgba(241, 65, 108, 0.5); font-weight: 700;">🔴 AVOID / TRAP</span>';
+          } else if (item.score >= 75 && (qualityBadgeHtml.includes('AI VERIFIED') || qualityBadgeHtml.includes('TOP TIER'))) {
+            recBadge = '<span class="priority-badge critical" style="background: rgba(80, 205, 137, 0.2); color: #50cd89; border: 1px solid rgba(80, 205, 137, 0.5); font-weight: 700;">🟢 TOP CONVICTION</span>';
+          } else if (item.score >= 50) {
+            recBadge = '<span class="priority-badge high" style="background: rgba(62, 151, 255, 0.15); color: #3e97ff; border: 1px solid rgba(62, 151, 255, 0.35); font-weight: 700;">🟢 RECOMMENDED</span>';
+          }
+
+          // Radar never authorizes a trade. Override legacy score-only labels
+          // with the evidence-backed manual-review state from the API.
+          recBadge = item.review_status === 'REVIEW_CANDIDATE'
+            ? '<span class="priority-badge high">REVIEW CANDIDATE</span>'
+            : '<span class="priority-badge low">WATCH ONLY</span>';
+
+          // Price formatting
+          const priceText = `${item.price_change_pct >= 0 ? '+' : ''}${item.price_change_pct}%`;
+          const priceClass = item.price_change_pct >= 0 ? 'change-pos' : 'change-neg';
+
+          // Volume formatting
+          const volUsdt = item.volume_usdt;
+          const formattedVol = volUsdt >= 1000000
+            ? `$${(volUsdt / 1000000).toFixed(2)}M`
+            : `$${(volUsdt / 1000).toFixed(0)}K`;
+
+          const emoji = item.direction === 'BULLISH' ? '📈' : '📉';
+
+          return `
+          <tr class="${rowTheme}">
+            <td class="symbol-cell" style="padding-top: 10px; padding-bottom: 10px;">
+              <div style="display: flex; flex-direction: column; align-items: flex-start; gap: 4px;">
+                <span class="top-badge-tag ${badgeTheme}" title="${(smc.supporting_factors || smc.risk_flags || []).join(' ')}">${qualityBadgeHtml}</span>
+                <div style="display: flex; align-items: center; gap: 6px; margin-top: 2px;">
+                  <span class="symbol-logo">${emoji}</span>
+                  <strong style="font-size: 0.95rem; font-weight: 800;">${item.symbol}</strong>
+                </div>
+                <span style="font-size: 0.62rem; color: var(--text-muted); font-family: var(--font-mono);">${smcSummary}</span>
+              </div>
+            </td>
+            <td>
+              <div class="score-cell">
+                <span class="score-badge ${scoreClass}">${item.score}</span>
+                <div class="score-bar">
+                  <div class="score-fill ${fillClass}" style="width: ${item.score}%"></div>
+                </div>
+              </div>
+            </td>
+            <td>
+              <span class="direction-badge ${trendClass}">${trendText}</span>
+            </td>
+            <td class="value-mono">${item.rvol}x</td>
+            <td class="value-mono">${item.atr_ratio}x</td>
+            <td class="value-mono">${item.rsi}</td>
+            <td class="value-mono ${priceClass}" style="font-weight: 600;">${priceText}</td>
+            <td class="value-mono">${formattedVol}</td>
+            <td>
+              ${recBadge}
+            </td>
+            <td>
+              <a href="index.html?symbol=${item.symbol}" class="action-btn-sm">Review↗️</a>
+            </td>
+          </tr>
+        `;
+        }).join('');
+      }
+
+      // Trigger AI verification modal
+      async function verifySetupWithAI(symbol) {
+        modalTitleSymbol.textContent = `AI SMC structure analysis: ${symbol}`;
+        modalOverlay.classList.add('active');
+        modalBodyContent.innerHTML = `
+        <div class="ai-loading-box">
+          <div class="ai-loader-ring"></div>
+          <p style="color: var(--text-secondary); font-size: 0.9rem;">Gathering timeframe candle histories...</p>
+          <p class="text-muted" style="font-size: 0.75rem; margin-top: 0.35rem;">Analyzing order books and volatility bands...</p>
+        </div>
+      `;
+
+        try {
+          const response = await fetch('/quant/verify-setup', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ symbol })
+          });
+
+          const data = await response.json();
+          if (!response.ok) throw new Error(data.detail || 'AI Verification query failed.');
+
+          renderAIResult(data);
+        } catch (err) {
+          modalBodyContent.innerHTML = `
+          <div class="radar-empty-state" style="color: var(--neon-red); padding: 2rem 1rem;">
+            <span class="icon">⚠️</span>
+            <p>Setup Verification Failed</p>
+            <span class="text-muted" style="font-size: 0.8rem; display: block; margin-top: 0.5rem;">${err.message}</span>
+          </div>
+        `;
+        }
+      }
+
+      // Render AI setup verification payload
+      function renderAIResult(data) {
+        // Normalize underscores to spaces for style matching
+        const normalizedVerdict = (data.verdict || '').replace(/_/g, ' ').toUpperCase();
+
+        // Determine color banner mapping
+        let bannerClass = 'verdict-continuation';
+        if (normalizedVerdict === 'PULLBACK ENTRY') bannerClass = 'verdict-pullback';
+        else if (normalizedVerdict === 'LIQUIDITY SWEEP TRAP') bannerClass = 'verdict-sweep';
+        else if (normalizedVerdict === 'REVERSAL WARNING') bannerClass = 'verdict-reversal';
+
+        const levels = data.levels || {};
+        const invalidLevel = levels.invalidation_level || 'N/A';
+
+        const bullets = (data.reasoning || [])
+          .map(bullet => `<li>${bullet}</li>`)
+          .join('');
+
+        modalBodyContent.innerHTML = `
+        <div class="ai-verdict-banner ${bannerClass}">
+          <span>Verdict: ${data.verdict}</span>
+          <span>Confidence: ${data.confidence_pct}%</span>
+        </div>
+
+        <!-- LIQUIDITY & SLIPPAGE SHIELD -->
+        <div style="background: rgba(255,255,255,0.02); border: 1px solid var(--border-color); border-radius: 8px; padding: 0.75rem 1rem; margin-bottom: 1.25rem; display: flex; flex-direction: column; gap: 0.5rem;">
+          <h4 style="font-size: 0.75rem; font-weight: 700; text-transform: uppercase; color: var(--text-muted); margin: 0; display: flex; justify-content: space-between; align-items: center;">
+            <span>🛡️ Liquidity Safety Shield</span>
+            <span style="font-size: 0.7rem; font-weight: 600; color: ${(data.liquidity?.spread_pct > 0.15 || data.liquidity?.depth_bids_1pct < 15000) ? 'var(--neon-red)' : 'var(--neon-green)'};">
+              ${(data.liquidity?.spread_pct > 0.15 || data.liquidity?.depth_bids_1pct < 15000) ? '⚠️ THIN LIQUIDITY RISK' : '✅ LIQUIDITY SECURE'}
+            </span>
+          </h4>
+          <div style="display: flex; gap: 1rem; margin-top: 0.25rem;">
+            <div style="flex: 1;">
+              <span style="display: block; font-size: 0.65rem; color: var(--text-muted);">Bid-Ask Spread</span>
+              <strong style="font-family: var(--font-mono); font-size: 0.85rem; color: ${data.liquidity?.spread_pct > 0.15 ? 'var(--neon-red)' : 'var(--text-primary)'};">
+                ${data.liquidity?.spread_pct ? data.liquidity.spread_pct.toFixed(4) : '0.0000'}%
+              </strong>
+            </div>
+            <div style="flex: 1;">
+              <span style="display: block; font-size: 0.65rem; color: var(--text-muted);">1% Bid Depth</span>
+              <strong style="font-family: var(--font-mono); font-size: 0.85rem; color: ${data.liquidity?.depth_bids_1pct < 15000 ? 'var(--neon-red)' : 'var(--text-primary)'};">
+                $${data.liquidity?.depth_bids_1pct ? data.liquidity.depth_bids_1pct.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '0.00'}
+              </strong>
+            </div>
+            <div style="flex: 1;">
+              <span style="display: block; font-size: 0.65rem; color: var(--text-muted);">1% Ask Depth</span>
+              <strong style="font-family: var(--font-mono); font-size: 0.85rem; color: ${data.liquidity?.depth_asks_1pct < 15000 ? 'var(--neon-red)' : 'var(--text-primary)'};">
+                $${data.liquidity?.depth_asks_1pct ? data.liquidity.depth_asks_1pct.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '0.00'}
+              </strong>
+            </div>
+          </div>
+        </div>
+
+        <!-- TOKEN HEALTH & VESTING RISK AUDIT -->
+        <div style="background: rgba(255,255,255,0.02); border: 1px solid var(--border-color); border-radius: 8px; padding: 0.75rem 1rem; margin-bottom: 1.25rem; display: flex; flex-direction: column; gap: 0.5rem;">
+          <h4 style="font-size: 0.75rem; font-weight: 700; text-transform: uppercase; color: var(--text-muted); margin: 0; display: flex; justify-content: space-between; align-items: center;">
+            <span>🛡️ Token Health & Vesting Audit</span>
+            <span style="font-size: 0.7rem; font-weight: 600; color: ${(data.token_health?.unlocks_warning !== 'None' || data.token_health?.concentration_risk !== 'None' || data.token_health?.dead_coin_signals !== 'None') ? 'var(--neon-gold)' : 'var(--neon-blue)'};">
+              ${(data.token_health?.unlocks_warning !== 'None' || data.token_health?.concentration_risk !== 'None' || data.token_health?.dead_coin_signals !== 'None') ? '⚠️ RISK DETECTED' : '✅ SECURE STRUCTURE'}
+            </span>
+          </h4>
+          <div style="display: flex; gap: 1rem; margin-top: 0.25rem;">
+            <div style="flex: 1;">
+              <span style="display: block; font-size: 0.65rem; color: var(--text-muted);">V/MC Ratio</span>
+              <strong style="font-family: var(--font-mono); font-size: 0.85rem; color: ${data.token_health?.v_mc_ratio < 0.01 ? 'var(--neon-red)' : 'var(--text-primary)'};">
+                ${data.token_health?.v_mc_ratio ? data.token_health.v_mc_ratio.toFixed(4) : 'N/A'}
+              </strong>
+            </div>
+            <div style="flex: 2;">
+              <span style="display: block; font-size: 0.65rem; color: var(--text-muted);">Unlocks & Vesting</span>
+              <span style="font-size: 0.75rem; color: ${data.token_health?.unlocks_warning !== 'None' ? 'var(--neon-gold)' : 'var(--text-secondary)'};">
+                ${data.token_health?.unlocks_warning || 'Clean'}
+              </span>
+            </div>
+            <div style="flex: 2;">
+              <span style="display: block; font-size: 0.65rem; color: var(--text-muted);">Whale Concentration</span>
+              <span style="font-size: 0.75rem; color: ${data.token_health?.concentration_risk !== 'None' ? 'var(--neon-gold)' : 'var(--text-secondary)'};">
+                ${data.token_health?.concentration_risk || 'Normal Distribution'}
+              </span>
+            </div>
+          </div>
+          ${data.token_health?.dead_coin_signals !== 'None' ? `
+            <div style="margin-top: 0.35rem; padding: 0.35rem 0.5rem; background: rgba(244,63,94,0.08); border-left: 2px solid var(--neon-red); border-radius: 4px; font-size: 0.72rem; color: var(--neon-red);">
+              ⚠️ Dead Coin Signal: ${data.token_health.dead_coin_signals}
+            </div>
+          ` : ''}
+        </div>
+
+        <p style="font-size: 0.9rem; font-weight: 500; margin-bottom: 1rem; color: var(--text-primary);">
+          ${data.structure}
+        </p>
+
+        <div class="ai-levels-grid">
+          <div class="ai-level-item">
+            <span>Target Resistance</span>
+            <strong>${levels.key_resistance || 'N/A'}</strong>
+          </div>
+          <div class="ai-level-item">
+            <span>Key Support</span>
+            <strong>${levels.key_support || 'N/A'}</strong>
+          </div>
+          <div class="ai-level-item invalid">
+            <span>Invalidation</span>
+            <strong>${invalidLevel}</strong>
+          </div>
+        </div>
+
+        <div class="ai-reasoning-section">
+          <h4>SMC Price Action Breakdown</h4>
+          <ul class="ai-reasoning-list">
+            ${bullets}
+          </ul>
+        </div>
+      `;
+      }
+
+      // Modal close controls
+      modalCloseBtn.addEventListener('click', () => {
+        modalOverlay.classList.remove('active');
+      });
+
+      modalOverlay.addEventListener('click', (e) => {
+        if (e.target === modalOverlay) {
+          modalOverlay.classList.remove('active');
+        }
+      });
+
+      // Update Summary Header metrics
+      function updateSummary() {
+        const activeCount = rawBreakouts.filter(item => item.review_status === 'REVIEW_CANDIDATE').length;
+        breakoutCountEl.textContent = activeCount;
+
+        if (rawBreakouts.length > 0) {
+          const topItem = rawBreakouts[0];
+          topScoreEl.textContent = topItem.score;
+          topSymbolEl.textContent = topItem.symbol;
+        } else {
+          topScoreEl.textContent = "-";
+          topSymbolEl.textContent = "-";
+        }
+
+        if (rawBreakouts.length > 0) {
+          const avgAtr = rawBreakouts.reduce((acc, item) => acc + item.atr_ratio, 0) / rawBreakouts.length;
+          if (avgAtr >= 1.6) {
+            volStateEl.textContent = "EXPLOSIVE";
+            volStateEl.style.color = "var(--neon-red)";
+          } else if (avgAtr >= 1.1) {
+            volStateEl.textContent = "VOLATILE";
+            volStateEl.style.color = "var(--neon-gold)";
+          } else {
+            volStateEl.textContent = "STABLE";
+            volStateEl.style.color = "var(--neon-blue)";
+          }
+        }
+      }
+
+      // Setup filter listeners
+      document.querySelectorAll('.filter-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+          btn.classList.add('active');
+          activeFilter = btn.getAttribute('data-filter');
+          renderTable();
+        });
+      });
+
+      // Scan Mode Dropdown change listener
+      scanModeSelect.addEventListener('change', () => {
+        fetchBreakouts();
+      });
+
+      // Timing scanning loops
+      function startTimer() {
+        refreshTimer = setInterval(() => {
+          secondsRemaining--;
+          if (secondsRemaining <= 0) {
+            fetchBreakouts();
+          } else {
+            refreshText.textContent = `Next scan in ${secondsRemaining}s`;
+          }
+        }, 1000);
+      }
+
+      // Load on start
+      fetchBreakouts();
+      startTimer();
+      updateAICooldownUI();
+      setInterval(updateAICooldownUI, 1000);
+    </script>
+    <script>
+      // Sci-Fi neural constellation background
+      const canvas = document.getElementById('scifi-canvas');
+      if (canvas) {
+        const ctx = canvas.getContext('2d');
+        let particles = [];
+        const particleCount = 70;
+
+        function resizeCanvas() {
+          canvas.width = window.innerWidth;
+          canvas.height = window.innerHeight;
+        }
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+
+        class Particle {
+          constructor() {
+            this.x = Math.random() * canvas.width;
+            this.y = Math.random() * canvas.height;
+            this.vx = (Math.random() - 0.5) * 0.45;
+            this.vy = (Math.random() - 0.5) * 0.45;
+            this.radius = Math.random() * 1.5 + 0.6;
+          }
+          update() {
+            this.x += this.vx;
+            this.y += this.vy;
+            if (this.x < 0 || this.x > canvas.width) this.vx *= -1;
+            if (this.y < 0 || this.y > canvas.height) this.vy *= -1;
+          }
+          draw() {
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+            ctx.fillStyle = 'rgba(62, 151, 255, 0.4)';
+            ctx.fill();
+          }
+        }
+
+        for (let i = 0; i < particleCount; i++) {
+          particles.push(new Particle());
+        }
+
+        function animate() {
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+          // Draw links
+          for (let i = 0; i < particles.length; i++) {
+            particles[i].update();
+            particles[i].draw();
+
+            for (let j = i + 1; j < particles.length; j++) {
+              const dx = particles[i].x - particles[j].x;
+              const dy = particles[i].y - particles[j].y;
+              const dist = Math.sqrt(dx * dx + dy * dy);
+
+              if (dist < 110) {
+                ctx.beginPath();
+                ctx.moveTo(particles[i].x, particles[i].y);
+                ctx.lineTo(particles[j].x, particles[j].y);
+                ctx.strokeStyle = 'rgba(62, 151, 255, ' + (0.12 * (1 - dist / 110)) + ')';
+                ctx.lineWidth = 0.5;
+                ctx.stroke();
+              }
+            }
+          }
+          requestAnimationFrame(animate);
+        }
+        animate();
+      }
+    </script>
+  </div>
+</body>
+
+</html>
+
+</html>

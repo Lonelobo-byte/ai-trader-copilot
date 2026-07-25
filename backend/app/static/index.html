@@ -1,0 +1,876 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>APEX Institutional Market Intelligence</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap"
+    rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+</head>
+
+<body class="single-page">
+  <canvas id="scifi-canvas"></canvas>
+  <div class="scanline"></div>
+  <div class="glow-bg">
+    <div class="glow-blob blob-1"></div>
+    <div class="glow-blob blob-2"></div>
+    <div class="glow-blob blob-3"></div>
+  </div>
+
+  <div id="auth-gate" style="position:fixed; inset:0; z-index:10000; display:flex; align-items:center; justify-content:center; background:rgba(3,8,18,.94); backdrop-filter:blur(8px);">
+    <form id="auth-form" style="width:min(390px,calc(100vw - 32px)); padding:28px; border:1px solid rgba(82,190,255,.35); border-radius:16px; background:#0c1528; box-shadow:0 0 45px rgba(0,175,255,.16);">
+      <div style="font-size:1.35rem;font-weight:800;color:#fff;margin-bottom:6px;">AI Trader Copilot</div>
+      <div id="auth-copy" style="font-size:.82rem;color:#aab8d5;margin-bottom:22px;">Sign in to access your subscription.</div>
+      <input id="auth-email" type="email" required autocomplete="email" placeholder="Email" style="box-sizing:border-box;width:100%;padding:12px;margin-bottom:10px;border-radius:8px;border:1px solid #32466c;background:#111d34;color:#fff;">
+      <input id="auth-password" type="password" required minlength="12" autocomplete="current-password" placeholder="Password (12+ characters)" style="box-sizing:border-box;width:100%;padding:12px;margin-bottom:12px;border-radius:8px;border:1px solid #32466c;background:#111d34;color:#fff;">
+      <div id="auth-error" style="min-height:18px;color:#ff8591;font-size:.8rem;margin-bottom:8px;"></div>
+      <button type="submit" id="auth-submit" style="width:100%;padding:12px;border:0;border-radius:8px;background:#16b8ff;color:#06111e;font-weight:800;cursor:pointer;">Sign in</button>
+      <button type="button" id="auth-toggle" style="width:100%;padding:10px;border:0;background:transparent;color:#8edcff;cursor:pointer;">Create an account</button>
+    </form>
+    <div id="plan-picker" hidden style="width:min(390px,calc(100vw - 32px)); padding:28px; border:1px solid rgba(82,190,255,.35); border-radius:16px; background:#0c1528; box-shadow:0 0 45px rgba(0,175,255,.16); color:#fff;">
+      <div style="font-size:1.25rem;font-weight:800;margin-bottom:7px;">Choose a plan</div>
+      <div style="font-size:.82rem;color:#aab8d5;margin-bottom:16px;">Secure crypto checkout opens with the payment provider.</div>
+      <div id="plan-options"></div>
+      <div id="plan-error" style="min-height:18px;color:#ff8591;font-size:.8rem;margin-top:10px;"></div>
+    </div>
+  </div>
+
+  <!-- Left Sidebar -->
+  <aside class="sidebar">
+    <div class="sidebar-logo" onclick="window.location.href='index.html'" title="APEX AI Logo">
+      <span style="font-size: 1.5rem; filter: drop-shadow(0 0 8px var(--neon-blue-glow));">🔮</span>
+    </div>
+    <nav class="sidebar-nav">
+      <a href="index.html" class="nav-item active" title="Co-Pilot Dashboard">
+        <svg class="nav-icon" viewBox="0 0 24 24">
+          <rect x="3" y="3" width="7" height="9" rx="1" />
+          <rect x="14" y="3" width="7" height="5" rx="1" />
+          <rect x="14" y="10" width="7" height="11" rx="1" />
+          <rect x="3" y="14" width="7" height="7" rx="1" />
+        </svg>
+      </a>
+      <a href="radar.html" class="nav-item" title="Breakout Radar">
+        <svg class="nav-icon" viewBox="0 0 24 24">
+          <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" fill="none" />
+          <circle cx="12" cy="12" r="6" stroke="currentColor" stroke-width="1.5" fill="none" />
+          <line x1="12" y1="2" x2="12" y2="22" stroke="currentColor" stroke-width="1.5" />
+          <line x1="2" y1="12" x2="22" y2="12" stroke="currentColor" stroke-width="1.5" />
+        </svg>
+      </a>
+    </nav>
+    <div class="sidebar-footer">
+      <span class="user-avatar" title="Apex AI Co-Pilot">AP</span>
+    </div>
+  </aside>
+
+  <div class="main-wrapper">
+    <header class="main-header">
+      <div class="header-title-sec">
+        <h1>Co-Pilot Dashboard</h1>
+        <div class="breadcrumbs">Home <span class="bullet">/</span> Co-Pilot Dashboard <span class="badge">V1.0.0</span>
+        </div>
+      </div>
+
+      <!-- Real-time Scanner status in header -->
+      <div class="header-scanner-status" id="header-scanner-info">
+        <span class="scanner-dot pulse green"></span>
+        <span class="scanner-text" id="header-scanner-status-text">Scanner: Active</span>
+      </div>
+
+      <div style="display: flex; gap: 1rem; align-items: center;">
+        <div class="connection-status" id="ws-status">
+          <span class="dot red"></span>
+          <span class="text">Disconnected</span>
+        </div>
+      </div>
+    </header>
+
+    <div id="macro-alert-banner" class="macro-alert-banner hidden">
+      <span class="banner-icon">⚠️</span>
+      <span id="macro-alert-text">High Impact Macro Volatility Blockout: Restricted sizing active.</span>
+      <button type="button" class="alert-close-btn" id="close-macro-alert" title="Dismiss Alert">&times;</button>
+    </div>
+
+    <main class="dashboard-grid">
+      <!-- LEFT PANEL: Controls & Watchlists -->
+      <section class="panel controls-panel">
+
+        <!-- CONTROL CONSOLE CARD -->
+        <div class="card controls-card">
+          <h3>Control Console</h3>
+          <form id="config-form" class="config-form">
+            <div class="form-group">
+              <label for="symbol-input">Trading Symbol</label>
+              <input type="text" id="symbol-input" value="BTCUSDT" placeholder="e.g. BTCUSDT" autocomplete="off" />
+            </div>
+            <div class="form-group">
+              <label for="timeframe-select">Analysis Interval</label>
+              <select id="timeframe-select">
+                <option value="1m">1m (Scalping)</option>
+                <option value="5m">5m (Intraday)</option>
+                <option value="15m" selected>15m (Confluence)</option>
+                <option value="1h">1h (Swing)</option>
+                <option value="4h">4h (Macro Swing)</option>
+                <option value="1d">1d (Position)</option>
+              </select>
+            </div>
+            <div class="form-group row">
+              <label for="ai-toggle" class="toggle-label">
+                <span>Enable CIO Memo Synthesis</span>
+                <input type="checkbox" id="ai-toggle" checked />
+                <span class="slider"></span>
+              </label>
+            </div>
+            <button type="submit" id="connect-btn" class="btn primary-btn">Activate Stream</button>
+          </form>
+        </div>
+
+
+        <!-- LIVE TICKER FEED CARD -->
+        <div class="card ticker-card">
+          <h3>Live Market Feed</h3>
+          <div class="ticker-grid">
+            <div class="ticker-item">
+              <span class="label">Last Price</span>
+              <span class="value font-mono" id="price-val">-</span>
+            </div>
+            <div class="ticker-item">
+              <span class="label">24h Change</span>
+              <span class="value" id="change-val">-</span>
+            </div>
+            <div class="ticker-item">
+              <span class="label">24h Volume</span>
+              <span class="value font-mono" id="volume-val">-</span>
+            </div>
+            <div class="ticker-item">
+              <span class="label">Spread</span>
+              <span class="value font-mono" id="spread-val">-</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- INSTITUTIONAL CVD & SQUEEZE TELEMETRY CARD -->
+        <div class="card cvd-telemetry-card" style="margin-top: 0.75rem;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+            <h3 style="margin-bottom: 0; font-size: 0.85rem;">Order Flow & Squeeze Telemetry</h3>
+            <span class="telemetry-badge" id="squeeze-alert-badge"
+              style="font-size: 0.65rem; padding: 2px 6px; border-radius: 4px; background: rgba(255,255,255,0.05); color: var(--text-muted); font-weight: 700;">STABLE</span>
+          </div>
+          <div class="ticker-grid" style="grid-template-columns: repeat(2, 1fr);">
+            <div class="ticker-item">
+              <span class="label">CVD Taker Delta</span>
+              <span class="value font-mono" id="cvd-delta-val"
+                style="font-size: 0.75rem; color: var(--neon-blue);">NEUTRAL</span>
+            </div>
+            <div class="ticker-item">
+              <span class="label">Open Interest 5m</span>
+              <span class="value font-mono" id="oi-delta-val" style="font-size: 0.75rem;">0.00%</span>
+            </div>
+            <div class="ticker-item">
+              <span class="label">Risk Appetite (F&amp;G)</span>
+              <span class="value font-mono" id="liquidity-index-val"
+                style="font-size: 0.75rem; color: var(--neon-green);">65/100</span>
+            </div>
+            <div class="ticker-item">
+              <span class="label">Market Sentiment</span>
+              <span class="value font-mono" id="sentiment-index-val" style="font-size: 0.75rem;">50 NEUTRAL</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- AUTONOMOUS SCANNER CONTROL CARD -->
+        <div class="card scanner-card">
+          <h3>Autonomous Background Scanner</h3>
+          <div class="scanner-meta">
+            <div class="meta-row">
+              <span>Status:</span>
+              <strong id="scanner-loop-status">Idle</strong>
+            </div>
+            <div class="meta-row">
+              <span>Last Scan:</span>
+              <span id="scanner-last-run">-</span>
+            </div>
+            <div class="meta-row">
+              <span>Next Scan:</span>
+              <span id="scanner-next-run">-</span>
+            </div>
+          </div>
+
+          <div class="radar-scope">
+            <div class="radar-sweep"></div>
+            <div class="radar-grid-circle"></div>
+            <div class="radar-grid-circle-inner"></div>
+            <div class="radar-crosshair-h"></div>
+            <div class="radar-crosshair-v"></div>
+            <div class="radar-dot"></div>
+            <div class="radar-dot red-alert"></div>
+          </div>
+
+          <div class="scanner-toggles">
+            <div class="form-group row">
+              <label for="scanner-enable-toggle" class="toggle-label">
+                <span>Scanner Loop Active</span>
+                <input type="checkbox" id="scanner-enable-toggle" />
+                <span class="slider"></span>
+              </label>
+            </div>
+            <div class="form-group row">
+              <label for="scanner-discovery-toggle" class="toggle-label">
+                <span>Autonomous AI Discovery</span>
+                <input type="checkbox" id="scanner-discovery-toggle" />
+                <span class="slider"></span>
+              </label>
+            </div>
+          </div>
+
+          <div class="scanner-actions">
+            <button id="trigger-scan-btn" class="btn action-btn">Scan Watchlist Now</button>
+          </div>
+
+          <div class="watchlist-section">
+            <h4>Watchlist Setup</h4>
+            <div class="watchlist-input-row">
+              <input type="text" id="new-pair-input" placeholder="e.g. SOLUSDT" />
+              <button id="add-pair-btn" class="btn plus-btn">+</button>
+            </div>
+            <div class="watchlist-tags" id="watchlist-tags-container">
+              <!-- Populated via JS -->
+            </div>
+          </div>
+
+          <div class="discovered-section hidden" id="discovered-section-box">
+            <h4>AI Discovered Pairs</h4>
+            <div class="discovered-tags" id="discovered-tags-container">
+              <!-- Populated via JS -->
+            </div>
+          </div>
+        </div>
+
+
+      </section>
+
+      <!-- CENTER PANEL: Active Trades & Sizing -->
+
+      <section class="panel ai-report-panel">
+
+        <!-- EXACT TRADE SETUP DETAILS -->
+        <div class="card exact-setup-card">
+          <h3>Trade Setup Plan</h3>
+          <div class="setup-status-row">
+            <span class="setup-status" id="setup-status-val">NO TRADE</span>
+            <span class="setup-reason" id="setup-reason-val">Waiting for a qualified setup.</span>
+          </div>
+          <div class="setup-grid">
+            <div class="setup-item">
+              <span class="label">Side</span>
+              <span class="value" id="setup-side-val">-</span>
+            </div>
+            <div class="setup-item">
+              <span class="label">Entry Zone</span>
+              <span class="value font-mono" id="setup-entry-val">-</span>
+            </div>
+            <div class="setup-item">
+              <span class="label">Stop</span>
+              <span class="value font-mono" id="setup-stop-val">-</span>
+            </div>
+            <div class="setup-item">
+              <span class="label">Risk per Unit</span>
+              <span class="value font-mono" id="setup-risk-val">-</span>
+            </div>
+          </div>
+          <div class="target-grid">
+            <div class="target-item"><span>TP1 1.5R</span><strong id="setup-tp1-val" class="font-mono">-</strong></div>
+            <div class="target-item"><span>TP2 2.5R</span><strong id="setup-tp2-val" class="font-mono">-</strong></div>
+            <div class="target-item"><span>TP3 3.5R</span><strong id="setup-tp3-val" class="font-mono">-</strong></div>
+            <div class="target-item"><span>Runner 5R</span><strong id="setup-runner-val" class="font-mono">-</strong>
+            </div>
+          </div>
+          <div class="leverage-summary">
+            <span>Recommended Leverage</span>
+            <strong id="setup-leverage-val">-</strong>
+          </div>
+          <div class="leverage-table" id="leverage-table-container">
+            <div class="empty-leverage">No leverage limits loaded.</div>
+          </div>
+        </div>
+
+        <!-- SIGNAL MONITOR CARD (ACTIVE SIGNAL LIFECYCLE) -->
+        <div class="card signal-monitor-card" id="signal-monitor-card">
+          <div class="monitor-heading">
+            <div>
+              <h3>Autonomous Signal Monitor</h3>
+              <p id="monitor-reason-val">The system is evaluating evidence against committee controls.</p>
+            </div>
+            <span class="monitor-status scanning" id="monitor-status-val">SCANNING</span>
+          </div>
+          <div class="monitor-command-row">
+            <span class="label">Command Output</span>
+            <strong id="monitor-action-val">SCANNING</strong>
+            <span class="monitor-id" id="monitor-id-val">No active signal</span>
+          </div>
+          <div class="monitor-grid">
+            <div class="monitor-metric"><span>Side</span><strong id="monitor-side-val">-</strong></div>
+            <div class="monitor-metric"><span>Live Price</span><strong id="monitor-price-val"
+                class="font-mono">-</strong>
+            </div>
+            <div class="monitor-metric"><span>Entry Zone</span><strong id="monitor-entry-val"
+                class="font-mono">-</strong>
+            </div>
+            <div class="monitor-metric"><span>Active Stop</span><strong id="monitor-stop-val"
+                class="font-mono">-</strong>
+            </div>
+          </div>
+
+          <div class="target-progress target-journey-progress">
+            <div class="target-progress-label"><span>Overall Trade Journey</span><strong
+                id="monitor-journey-progress-val">0%</strong></div>
+            <div class="target-progress-track">
+              <div id="monitor-journey-progress-fill"></div>
+            </div>
+          </div>
+
+          <div class="target-milestones" id="monitor-target-milestones" aria-label="Trade target milestones">
+            <div class="target-milestone" data-stage="0">
+              <span class="milestone-node">E</span>
+              <div><span>ENTRY ZONE</span><strong id="monitor-entry-price-val" class="font-mono">-</strong><small>WAIT
+                  FOR ENTRY</small></div>
+            </div>
+            <div class="target-milestone" data-stage="1">
+              <span class="milestone-node">1</span>
+              <div><span>TP1</span><strong id="monitor-tp1-val" class="font-mono">-</strong><small>WAITING</small></div>
+            </div>
+            <div class="target-milestone" data-stage="2">
+              <span class="milestone-node">2</span>
+              <div><span>TP2</span><strong id="monitor-tp2-val" class="font-mono">-</strong><small>WAITING</small></div>
+            </div>
+            <div class="target-milestone" data-stage="3">
+              <span class="milestone-node">3</span>
+              <div><span>TP3</span><strong id="monitor-tp3-val" class="font-mono">-</strong><small>WAITING</small></div>
+            </div>
+            <div class="target-milestone" data-stage="4">
+              <span class="milestone-node">4</span>
+              <div><span>RUNNER</span><strong id="monitor-runner-val" class="font-mono">-</strong><small>WAITING</small>
+              </div>
+            </div>
+          </div>
+
+          <div class="monitor-events" id="monitor-events-list">
+            <div class="monitor-empty">No active signal tracking events.</div>
+          </div>
+          <button type="button" class="btn dismiss-signal-btn hidden" id="dismiss-signal-btn">Dismiss Signal</button>
+        </div>
+
+
+        <!-- RISK CALCULATOR CARD -->
+        <div class="card risk-card">
+          <h3>Risk & Position Size Calculator</h3>
+          <div class="risk-info-grid" id="risk-info-display">
+            <div class="risk-metric">
+              <span class="label">Side</span>
+              <span class="value" id="risk-side">-</span>
+            </div>
+            <div class="risk-metric">
+              <span class="label">Entry Ref</span>
+              <span class="value font-mono" id="risk-entry">-</span>
+            </div>
+            <div class="risk-metric">
+              <span class="label">Calculated Stop</span>
+              <span class="value font-mono" id="risk-stop">-</span>
+            </div>
+            <div class="risk-metric">
+              <span class="label">Calculated Target</span>
+              <span class="value font-mono" id="risk-target">-</span>
+            </div>
+          </div>
+
+          <div class="stop-loss-selector">
+            <span class="label">Stop Method:</span>
+            <div class="selector-options">
+              <label class="radio-label">
+                <input type="radio" name="stop-method" id="stop-method-retail" value="retail" checked />
+                <span class="radio-btn"></span>
+                <span>AI Target Stop</span>
+              </label>
+              <label class="radio-label">
+                <input type="radio" name="stop-method" id="stop-method-smart" value="smart" />
+                <span class="radio-btn"></span>
+                <span>Smart Wall Stop (<span id="wall-price-display" class="font-mono">-</span>)</span>
+              </label>
+            </div>
+          </div>
+
+          <div class="risk-calculator-inputs">
+            <div class="input-inline">
+              <label for="acc-size-input">Capital Size ($)</label>
+              <input type="number" id="acc-size-input" value="1000" min="10" step="10" />
+            </div>
+            <div class="input-inline">
+              <label for="risk-pct-input">Max Risk (%)</label>
+              <input type="number" id="risk-pct-input" value="0.5" min="0.1" max="10" step="0.1" />
+            </div>
+          </div>
+
+          <!-- KELLY SIZING WITH RAG MEMORY -->
+          <div class="kelly-toggle-container">
+            <label for="kelly-toggle" class="toggle-label">
+              <span>Apply RAG Kelly Sizing</span>
+              <input type="checkbox" id="kelly-toggle" />
+              <span class="slider"></span>
+            </label>
+            <div class="kelly-recommendation hidden" id="kelly-rec-box">
+              <span>Rec Sizing: <strong id="kelly-rec-val" class="font-mono">0.00%</strong></span>
+              <span class="kelly-status-badge" id="kelly-status-text">No History</span>
+            </div>
+          </div>
+
+          <div class="sizing-output" id="sizing-output-display">
+            <div class="sizing-row">
+              <span>Allowed Risk Amount:</span>
+              <strong id="risk-amt-val" class="font-mono">$0.00</strong>
+            </div>
+            <div class="sizing-row">
+              <span>Position Size Units:</span>
+              <strong id="sizing-units-val" class="font-mono">0.00 units</strong>
+            </div>
+          </div>
+        </div>
+
+
+        <!-- MERGED MARKET INTELLIGENCE CARD -->
+        <div class="card intelligence-card" id="market-intel-panel-card">
+          <div class="card-tabs">
+            <button type="button" class="card-tab-btn active" data-card-tab="calendar">📅 Macro Calendar</button>
+            <button type="button" class="card-tab-btn" data-card-tab="news">📰 News Sentiment</button>
+            <button type="button" class="card-tab-btn" data-card-tab="liquidations">⚡ Liquidation Magnets</button>
+          </div>
+
+          <!-- Economic Calendar -->
+          <div class="card-tab-content" data-card-tab="calendar">
+            <div class="calendar-list" id="calendar-list-container">
+              <div class="empty-calendar">No upcoming US events loaded.</div>
+            </div>
+          </div>
+
+          <!-- News Sentiment -->
+          <div class="card-tab-content hidden" data-card-tab="news">
+            <div class="news-scope-selector"
+              style="display: flex; gap: 0.35rem; justify-content: flex-end; margin-bottom: 0.5rem;">
+              <button type="button" class="btn active" id="news-scope-token"
+                style="font-size: 0.62rem; padding: 2px 8px; border-radius: 4px; line-height: 1;">Token
+                Specific</button>
+              <button type="button" class="btn" id="news-scope-global"
+                style="font-size: 0.62rem; padding: 2px 8px; border-radius: 4px; line-height: 1;">Global Crypto</button>
+            </div>
+            <ul class="news-list" id="news-list-container" style="list-style-type: none;">
+              <li class="empty-news">No headlines.</li>
+            </ul>
+          </div>
+
+          <!-- Liquidation Magnet price levels -->
+          <div class="card-tab-content hidden" data-card-tab="liquidations">
+            <div class="liquidation-list" id="liquidation-list-container">
+              <div class="empty-liq">No liquidation clusters loaded.</div>
+            </div>
+          </div>
+        </div>
+
+
+      </section>
+
+      <!-- RIGHT PANEL: AI Consensus & Intelligence -->
+      <section class="panel analytics-panel">
+        <!-- DECISION ROOM SUMMARY CARD -->
+        <div class="card decision-card" id="decision-card-container">
+          <h3>Research Status</h3>
+          <div class="decision-display">
+            <span class="decision-text" id="decision-val">OFFLINE</span>
+            <span class="grade-badge" id="grade-val">-</span>
+          </div>
+
+          <!-- Overall Radial SVG Confidence Gauge -->
+          <div class="overall-confidence-gauge"
+            style="position: relative; width: 110px; height: 110px; margin: 1.25rem auto; display: flex; align-items: center; justify-content: center;">
+            <svg width="110" height="110" viewBox="0 0 110 110"
+              style="transform: rotate(-90deg); width: 110px; height: 110px;">
+              <circle cx="55" cy="55" r="46" fill="none" stroke="rgba(255, 255, 255, 0.04)" stroke-width="8"></circle>
+              <circle id="overall-gauge-ring" cx="55" cy="55" r="46" fill="none" stroke="rgba(255,255,255,0.1)"
+                stroke-width="8" stroke-dasharray="289" stroke-dashoffset="289"
+                style="transition: stroke-dashoffset 0.8s ease-in-out, stroke var(--transition-speed); filter: drop-shadow(0 0 4px var(--neon-blue-glow));">
+              </circle>
+            </svg>
+            <div class="overall-gauge-text"
+              style="position: absolute; display: flex; flex-direction: column; align-items: center; justify-content: center; top: 50%; left: 50%; transform: translate(-50%, -50%); text-align: center; width: 100%;">
+              <span id="overall-gauge-percent" class="font-mono"
+                style="font-size: 1.35rem; font-weight: 800; text-shadow: 0 0 10px rgba(62, 151, 255, 0.45); color: #fff;">0%</span>
+              <span
+                style="font-size: 0.58rem; color: var(--text-muted); text-transform: uppercase; font-weight: 700; letter-spacing: 0.5px; margin-top: -1px;">Confidence</span>
+            </div>
+          </div>
+
+          <!-- RAG Win Rate Memory -->
+          <div class="historical-stats-display hidden" id="historical-stats-display">
+            <span class="stats-icon">🧠</span>
+            <span class="stats-text" id="historical-stats-text">Matched 0 similar setups. Win Rate: -</span>
+          </div>
+
+          <!-- CONFIDENCE PIE / RADAR -->
+          <div class="confidence-radar">
+            <div class="radar-row">
+              <span class="radar-label">Bullish Probability</span>
+              <div class="radar-bar-container">
+                <div class="radar-bar bullish" id="radar-bullish" style="width: 0%"></div>
+              </div>
+              <span class="radar-val font-mono" id="radar-bullish-val">0%</span>
+            </div>
+            <div class="radar-row">
+              <span class="radar-label">Bearish Probability</span>
+              <div class="radar-bar-container">
+                <div class="radar-bar bearish" id="radar-bearish" style="width: 0%"></div>
+              </div>
+              <span class="radar-val font-mono" id="radar-bearish-val">0%</span>
+            </div>
+            <div class="radar-row">
+              <span class="radar-label">Uncertainty</span>
+              <div class="radar-bar-container">
+                <div class="radar-bar uncertain" id="radar-uncertain" style="width: 100%"></div>
+              </div>
+              <span class="radar-val font-mono" id="radar-uncertain-val">100%</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- INSTITUTIONAL COMMITTEE CARD -->
+        <div class="card council-card" id="ai-council-panel-card">
+          <div class="card-tabs">
+            <button type="button" class="card-tab-btn active" data-card-tab="consensus">📢 Evidence Committee</button>
+            <button type="button" class="card-tab-btn" data-card-tab="report">📋 CIO Memorandum</button>
+          </div>
+
+          <!-- Consensus Grid Content -->
+          <div class="card-tab-content" data-card-tab="consensus">
+            <div class="council-heading" style="border-bottom: none; margin-bottom: 0.5rem; padding-bottom: 0;">
+              <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
+                <div style="display: flex; align-items: center; gap: 0.65rem;">
+                  <h2>Institutional Committee</h2>
+                  <!-- Processing Pulse Indicator -->
+                  <div class="processing-ticker" id="council-processing-ticker"
+                    style="display: flex; align-items: center; gap: 0.35rem; margin-top: -2px;">
+                    <span class="ticker-dot"
+                      style="display: inline-block; width: 6px; height: 6px; background-color: rgba(255,255,255,0.15); border-radius: 50%; transition: all 0.3s ease;"></span>
+                    <span class="ticker-text font-mono"
+                      style="font-size: 0.6rem; color: var(--text-muted); letter-spacing: 0.5px; font-weight: 700; text-transform: uppercase; transition: all 0.3s ease;">STANDBY</span>
+                  </div>
+                </div>
+                <span class="consensus-badge" id="council-consensus-badge">Consensus</span>
+              </div>
+            </div>
+            <p class="council-desc" style="font-size: 0.72rem; color: var(--text-muted); margin-bottom: 0.75rem;">
+              Independent engines publish measured evidence; Risk and Adversarial Review have hard veto authority.</p>
+            <div class="council-grid" id="council-agents-grid">
+              <div class="empty-council-state">
+                <span class="icon">💬</span>
+                <p>Activate the live stream or trigger a scan to build the evidence dossier.</p>
+              </div>
+            </div>
+          </div>
+
+          <!-- CIO Report Content -->
+          <div class="card-tab-content hidden" data-card-tab="report">
+            <div class="ai-report-view" id="ai-report-body">
+              <div class="ai-meta-summary"
+                style="margin-bottom: 0.75rem; display: flex; justify-content: space-between; align-items: center;">
+                <div class="meta-badge" id="ai-sentiment-badge"
+                  style="background: rgba(139, 92, 246, 0.08); color: var(--neon-purple); border: 1px solid rgba(139, 92, 246, 0.15); padding: 2px 8px; border-radius: 4px; font-size: 0.7rem; font-weight: 600;">
+                  CIO DECISION</div>
+                <div class="meta-confidence" style="font-size: 0.75rem; color: var(--text-muted);">Confidence: <span
+                    id="ai-confidence-val" class="font-mono">-</span>%</div>
+              </div>
+              <div class="markdown-content" id="report-md-render"
+                style="max-height: 380px; overflow-y: auto; padding-right: 0.25rem;">
+                <div class="empty-state" id="ai-empty-state">
+                  <span class="icon">🤖</span>
+                  <p>Build the evidence dossier to render the Chief Investment Officer's memorandum.</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+
+
+        <div class="card signal-history-card" id="signal-history-card">
+          <div class="monitor-heading">
+            <div>
+              <h3>Signal Outcome History</h3>
+              <p>Every published setup is tracked until completion, failure, expiry, or cancellation.</p>
+            </div>
+            <span class="history-count" id="signal-history-count">0 signals</span>
+          </div>
+          <div class="signal-history-summary" id="signal-history-summary">
+            <span><strong id="history-wins-val">0</strong> successful</span>
+            <span><strong id="history-losses-val">0</strong> failed</span>
+            <span><strong id="history-open-val">0</strong> active</span>
+          </div>
+          <div class="signal-history-list" id="signal-history-list">
+            <div class="monitor-empty">No published signals yet.</div>
+          </div>
+        </div>
+
+
+        <!-- QUANT STRATEGY LAB CARD -->
+        <div class="card operations-card">
+          <h3>Quant Strategy Testing</h3>
+          <div class="ops-controls">
+            <div class="form-group-inline">
+              <label for="ops-candles">Lookback candles</label>
+              <input type="number" id="ops-candles" value="500" min="100" max="1000" />
+            </div>
+            <div class="ops-buttons">
+              <button id="run-backtest-btn" class="btn secondary-btn">Run Backtest</button>
+              <button id="train-model-btn" class="btn secondary-btn">Retrain Model</button>
+            </div>
+          </div>
+          <div class="ops-results hidden" id="ops-results-box">
+            <div class="ops-header">
+              <span class="ops-title" id="ops-results-title">Backtest Result</span>
+              <span class="ops-badge" id="ops-results-badge">Success</span>
+            </div>
+            <div class="ops-metrics-grid" id="ops-metrics-display"></div>
+            <div class="ops-log" id="ops-results-log"></div>
+          </div>
+        </div>
+      </section>
+
+
+    </main>
+
+    <footer>
+      <div class="footer-grid">
+        <div class="console-logs">
+          <h3>System Operations Log</h3>
+          <div class="log-output font-mono" id="log-output-box">
+            <div class="log-entry system">APEX Quant Trader Dashboard Initialized.</div>
+          </div>
+        </div>
+      </div>
+      <div class="credits">
+        <p>&copy; 2026 APEX Institutional Market Intelligence. Research and monitoring only. No auto order routing.</p>
+      </div>
+    </footer>
+  </div>
+
+  <script>
+    (() => {
+      const gate = document.getElementById('auth-gate'), form = document.getElementById('auth-form'), picker = document.getElementById('plan-picker');
+      const error = document.getElementById('auth-error'), submit = document.getElementById('auth-submit');
+      const toggle = document.getElementById('auth-toggle'), copy = document.getElementById('auth-copy');
+      let register = false;
+      let paymentPollTimer = null;
+      const unlock = (token) => {
+        gate.style.display = 'none';
+        window.atcAuthenticated = true;
+        window.dispatchEvent(new CustomEvent('atc:authenticated', { detail: { token } }));
+      };
+      const showLogin = (message = '') => { picker.hidden = true; form.style.display = 'block'; error.textContent = message; };
+      const showPlans = async (token) => {
+        form.style.display = 'none'; picker.hidden = false;
+        const options = document.getElementById('plan-options'), planError = document.getElementById('plan-error');
+        try {
+          const response = await fetch('/billing/plans'); const data = await response.json();
+          if (!data.checkout_available) { planError.textContent = data.checkout_message || 'Checkout is temporarily unavailable.'; return; }
+          options.replaceChildren(...data.plans.map(plan => {
+            const button = document.createElement('button');
+            button.type = 'button'; button.style.cssText = 'width:100%;margin:5px 0;padding:11px;border:1px solid #32466c;border-radius:8px;background:#111d34;color:#fff;text-align:left;cursor:pointer;';
+            button.textContent = `${plan.code.replace(/_/g, ' ')} — ${data.currency} ${plan.amount}`;
+            button.onclick = async () => { button.disabled = true; planError.textContent = ''; try {
+              const checkout = await fetch('/billing/checkout', {method:'POST',headers:{'Content-Type':'application/json','Authorization':`Bearer ${token}`},body:JSON.stringify({plan_code:plan.code})});
+              const invoice = await checkout.json(); if (!checkout.ok) throw new Error(invoice.detail || 'Checkout is unavailable.');
+              if (!invoice.invoice_url) throw new Error('Checkout did not return an invoice URL.');
+              window.location.assign(invoice.invoice_url);
+            } catch (err) { planError.textContent = err.message; button.disabled = false; } };
+            return button;
+          }));
+        } catch (err) { planError.textContent = 'Plans are temporarily unavailable.'; }
+      };
+      const waitForPayment = async (token, attempts = 0) => {
+        const planError = document.getElementById('plan-error');
+        try {
+          const r = await fetch('/billing/payment-status', {headers:{'Authorization':`Bearer ${token}`}});
+          if (r.status === 401) return restore(true);
+          const d = await r.json();
+          if (!r.ok) throw new Error(d.detail || 'Could not verify the payment.');
+          const subscription = d.payment?.subscription;
+          if (subscription?.active) {
+            if (paymentPollTimer) clearTimeout(paymentPollTimer);
+            history.replaceState({}, '', '/dashboard');
+            return unlock(token);
+          }
+          if (attempts >= 30) {
+            planError.textContent = 'Payment is still being confirmed. Refresh this page in a few minutes; access will unlock after verified confirmation.';
+            return;
+          }
+          planError.textContent = d.payment?.awaiting_provider_callback
+            ? 'Payment return received. Waiting for secure confirmation from NOWPayments…'
+            : 'Checking verified payment status…';
+          paymentPollTimer = setTimeout(() => waitForPayment(token, attempts + 1), 5000);
+        } catch (err) {
+          planError.textContent = err.message || 'Could not verify the payment yet. Please refresh shortly.';
+        }
+      };
+      const routeAfterAuth = async (token, wasRefreshed = false) => {
+        try {
+          const r = await fetch('/billing/me', {headers:{'Authorization':`Bearer ${token}`}});
+          if (r.status === 401) {
+            sessionStorage.removeItem('atc_access_token');
+            return wasRefreshed ? showLogin('Your session expired. Please sign in again.') : restore(true);
+          }
+          const d = await r.json();
+          if (!r.ok) throw new Error('Could not verify your account.');
+          if (d.role === 'admin' || (d.subscription && d.subscription.active)) return unlock(token);
+          if (new URLSearchParams(location.search).get('payment') === 'success') {
+            await showPlans(token);
+            return waitForPayment(token);
+          }
+          if (new URLSearchParams(location.search).get('payment') === 'cancelled') {
+            await showPlans(token);
+            document.getElementById('plan-error').textContent = 'Payment was cancelled. You can choose a plan again when ready.';
+            return;
+          }
+          showPlans(token);
+        } catch (err) { showLogin(err.message || 'Could not verify your account.'); }
+      };
+      const restore = async (expiredSession = false) => {
+        try {
+          const r = await fetch('/auth/refresh', { method: 'POST' });
+          if (!r.ok) return showLogin(expiredSession ? 'Your session expired. Please sign in again.' : '');
+          const d = await r.json(); sessionStorage.setItem('atc_access_token', d.access_token); routeAfterAuth(d.access_token, true);
+        } catch (_) { showLogin('Could not restore your session. Please sign in again.'); }
+      };
+      if (sessionStorage.getItem('atc_access_token')) routeAfterAuth(sessionStorage.getItem('atc_access_token')); else restore();
+      toggle.onclick = () => { register = !register; submit.textContent = register ? 'Create account' : 'Sign in'; toggle.textContent = register ? 'I already have an account' : 'Create an account'; copy.textContent = register ? 'Create an account, then choose a plan.' : 'Sign in to access your subscription.'; error.textContent = ''; };
+      form.onsubmit = async (event) => {
+        event.preventDefault(); error.textContent = ''; submit.disabled = true;
+        try {
+          const r = await fetch(register ? '/auth/register' : '/auth/login', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({email:document.getElementById('auth-email').value,password:document.getElementById('auth-password').value}) });
+          const d = await r.json(); if (!r.ok) throw new Error(d.detail || 'Could not authenticate.');
+          sessionStorage.setItem('atc_access_token', d.access_token); routeAfterAuth(d.access_token);
+        } catch (e) { error.textContent = e.message; } finally { submit.disabled = false; }
+      };
+    })();
+  </script>
+  <script src="app.js"></script>
+  <script>
+    // Sci-Fi neural constellation background
+    const canvas = document.getElementById('scifi-canvas');
+    if (canvas) {
+      const ctx = canvas.getContext('2d');
+      let particles = [];
+      const particleCount = 70;
+
+      function resizeCanvas() {
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+      }
+      window.addEventListener('resize', resizeCanvas);
+      resizeCanvas();
+
+      class Particle {
+        constructor() {
+          this.x = Math.random() * canvas.width;
+          this.y = Math.random() * canvas.height;
+          this.vx = (Math.random() - 0.5) * 0.45;
+          this.vy = (Math.random() - 0.5) * 0.45;
+          this.radius = Math.random() * 1.5 + 0.6;
+        }
+        update() {
+          this.x += this.vx;
+          this.y += this.vy;
+          if (this.x < 0 || this.x > canvas.width) this.vx *= -1;
+          if (this.y < 0 || this.y > canvas.height) this.vy *= -1;
+        }
+        draw() {
+          ctx.beginPath();
+          ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+          ctx.fillStyle = 'rgba(62, 151, 255, 0.4)';
+          ctx.fill();
+        }
+      }
+
+      for (let i = 0; i < particleCount; i++) {
+        particles.push(new Particle());
+      }
+
+      function animate() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        // Draw links
+        for (let i = 0; i < particles.length; i++) {
+          particles[i].update();
+          particles[i].draw();
+
+          for (let j = i + 1; j < particles.length; j++) {
+            const dx = particles[i].x - particles[j].x;
+            const dy = particles[i].y - particles[j].y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+
+            if (dist < 110) {
+              ctx.beginPath();
+              ctx.moveTo(particles[i].x, particles[i].y);
+              ctx.lineTo(particles[j].x, particles[j].y);
+              ctx.strokeStyle = 'rgba(62, 151, 255, ' + (0.12 * (1 - dist / 110)) + ')';
+              ctx.lineWidth = 0.5;
+              ctx.stroke();
+            }
+          }
+        }
+        requestAnimationFrame(animate);
+      }
+      animate();
+    }
+  </script>
+  <!-- AGENT DOSSIER MODAL OVERLAY -->
+  <div class="modal-overlay" id="agent-dossier-modal"
+    style="display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(8, 10, 18, 0.85); backdrop-filter: blur(10px); z-index: 99999; align-items: center; justify-content: center;"
+    onclick="if(event.target===this) closeAgentDossierModal()">
+    <div class="modal-card"
+      style="background: #141625; border: 1px solid rgba(62, 151, 255, 0.3); border-radius: 12px; width: 90%; max-width: 680px; max-height: 85vh; display: flex; flex-direction: column; box-shadow: 0 0 35px rgba(0, 0, 0, 0.8), 0 0 15px rgba(62, 151, 255, 0.25); overflow: hidden; position: relative;">
+      <div
+        style="position: absolute; top: 0; left: 0; right: 0; height: 3px; background: linear-gradient(90deg, var(--neon-blue), var(--neon-purple));">
+      </div>
+
+      <!-- Modal Header -->
+      <div
+        style="padding: 1.25rem 1.5rem; border-bottom: 1px solid rgba(255, 255, 255, 0.08); display: flex; align-items: center; justify-content: space-between; background: rgba(0, 0, 0, 0.25);">
+        <div style="display: flex; align-items: center; gap: 0.75rem;">
+          <span id="dossier-modal-icon" style="font-size: 1.6rem;">📐</span>
+          <div>
+            <h3 id="dossier-modal-title" style="font-size: 1.05rem; font-weight: 800; color: #ffffff; margin: 0;">Market
+              Structure Analyst</h3>
+            <span id="dossier-modal-subtitle"
+              style="font-size: 0.72rem; color: var(--text-muted); font-weight: 500;">Order Blocks & Structure
+              Shifts</span>
+          </div>
+        </div>
+        <div style="display: flex; align-items: center; gap: 0.75rem;">
+          <div id="dossier-modal-badge"></div>
+          <button id="close-dossier-modal-btn" onclick="closeAgentDossierModal()"
+            style="background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.15); color: #fff; border-radius: 6px; width: 32px; height: 32px; font-size: 1.2rem; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.2s;">&times;</button>
+        </div>
+      </div>
+
+      <!-- Modal Body -->
+      <div id="dossier-modal-body"
+        style="padding: 1.5rem; overflow-y: auto; flex-grow: 1; font-size: 0.8rem; line-height: 1.6; color: var(--text-secondary);">
+        <!-- Agent Dossier content rendered dynamically -->
+      </div>
+    </div>
+  </div>
+</body>
+
+</html>
