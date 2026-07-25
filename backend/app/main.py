@@ -68,8 +68,12 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Institutional Crypto Market Intelligence System", version="0.6.0", lifespan=lifespan)
 _settings = get_settings()
 _trusted_hosts = list(_settings.trusted_hosts)
-if _settings.app_env.lower() in {"local", "test", "development"} and "testserver" not in _trusted_hosts:
-    _trusted_hosts.append("testserver")
+# Internal Docker health checks call the app through loopback.  These names are
+# never publicly published by Compose, but must be allowed in every environment
+# or a healthy app is incorrectly marked unhealthy with HTTP 400.
+for _internal_host in ("localhost", "127.0.0.1", "testserver"):
+    if _internal_host not in _trusted_hosts:
+        _trusted_hosts.append(_internal_host)
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=_trusted_hosts)
 
 

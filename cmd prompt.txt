@@ -2,7 +2,7 @@ cd "C:\Users\Yadav\Documents\AI-Trader-Copilot\backend"
 .\.venv\Scripts\Activate.ps1
 python -m uvicorn app.main:app --reload
 
-
+docker compose up -d --build
 
 
 
@@ -11,3 +11,15 @@ for AI_TOKEN_DOCTOR
 docker compose up -d --force-recreate worker
 
 npm --workspace security-platform run dev
+
+
+↗️
+
+
+
+
+hex 32 (postgres_password)
+507e9d738aa6d3995814d3b40f6ac4b2a6134973b9f07b6c970b4ab2e48e6203
+
+base64 48 (auth_jwt)
+5RbCuJU0yu8t6LS2OTbRYBgpdngE2p1I2yl8SgOf194dIjDfxGIEluba33lo8e6u
