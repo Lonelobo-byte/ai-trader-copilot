@@ -89,7 +89,9 @@ async def analyze(request: AnalyzeRequest):
 async def websocket_analyze(websocket: WebSocket):
     if await websocket_subscription(websocket) is None:
         return
-    await websocket.accept()
+    # Echo the non-secret protocol identifier selected by the browser.  The
+    # JWT is the second requested subprotocol and is never reflected/logged.
+    await websocket.accept(subprotocol="atc-auth")
     subscriber = None
     try:
         config_msg = await websocket.receive_text()
@@ -139,8 +141,8 @@ async def websocket_analyze(websocket: WebSocket):
             payload["type"] = event["type"]
             await websocket.send_json(payload)
 
-    except WebSocketDisconnect:
-        logger.info("WebSocket client disconnected.")
+    except WebSocketDisconnect as exc:
+        logger.info("WebSocket client disconnected.", extra={"close_code": exc.code})
     except Exception as e:
         logger.error(f"WebSocket execution error: {e}", exc_info=True)
         try:

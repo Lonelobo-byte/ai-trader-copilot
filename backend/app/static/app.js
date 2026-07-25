@@ -865,6 +865,7 @@ async function startStream(symbol, timeframe, useAi) {
   socket.onclose = (event) => {
     socket = null;
     updateConnectionUI(false);
+    logMsg(`WebSocket closed (code ${event.code}${event.reason ? `: ${event.reason}` : ''}).`, event.code === 1000 ? 'system' : 'error');
     // Only attempt reconnect if the user did NOT intentionally disconnect
     if (!userIntentDisconnect && !event.wasClean) {
       logMsg('Connection dropped unexpectedly. Reconnecting in 5s...', 'error');
