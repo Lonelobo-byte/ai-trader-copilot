@@ -2977,6 +2977,7 @@ body::before {
   overflow: hidden;
   width: 100%;
 }
+.access-shell[hidden] { display: none; }
 
 .access-intelligence {
   background:

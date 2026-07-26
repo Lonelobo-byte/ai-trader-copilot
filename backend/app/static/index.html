@@ -24,7 +24,7 @@
   </div>
 
   <div id="auth-gate" class="access-gate">
-    <div class="access-shell">
+    <div id="access-shell" class="access-shell">
       <section class="access-intelligence" aria-label="AI Trader Copilot overview">
         <div class="access-brand"><span class="access-mark">◇</span><span>APEX Intelligence</span></div>
         <div class="access-copy-wrap">
@@ -689,7 +689,7 @@
 
   <script>
     (() => {
-      const gate = document.getElementById('auth-gate'), form = document.getElementById('auth-form'), picker = document.getElementById('plan-picker');
+      const gate = document.getElementById('auth-gate'), shell = document.getElementById('access-shell'), form = document.getElementById('auth-form'), picker = document.getElementById('plan-picker');
       const error = document.getElementById('auth-error'), submit = document.getElementById('auth-submit');
       const toggle = document.getElementById('auth-toggle'), copy = document.getElementById('auth-copy');
       let register = false;
@@ -699,9 +699,9 @@
         window.atcAuthenticated = true;
         window.dispatchEvent(new CustomEvent('atc:authenticated', { detail: { token } }));
       };
-      const showLogin = (message = '') => { picker.hidden = true; form.style.display = 'block'; error.textContent = message; };
+      const showLogin = (message = '') => { picker.hidden = true; shell.hidden = false; form.style.display = 'block'; error.textContent = message; };
       const showPlans = async (token) => {
-        form.style.display = 'none'; picker.hidden = false;
+        shell.hidden = true; picker.hidden = false;
         const options = document.getElementById('plan-options'), planError = document.getElementById('plan-error');
         try {
           const response = await fetch('/billing/plans'); const data = await response.json();
