@@ -23,21 +23,43 @@
     <div class="glow-blob blob-3"></div>
   </div>
 
-  <div id="auth-gate" style="position:fixed; inset:0; z-index:10000; display:flex; align-items:center; justify-content:center; background:rgba(3,8,18,.94); backdrop-filter:blur(8px);">
-    <form id="auth-form" style="width:min(390px,calc(100vw - 32px)); padding:28px; border:1px solid rgba(82,190,255,.35); border-radius:16px; background:#0c1528; box-shadow:0 0 45px rgba(0,175,255,.16);">
-      <div style="font-size:1.35rem;font-weight:800;color:#fff;margin-bottom:6px;">AI Trader Copilot</div>
-      <div id="auth-copy" style="font-size:.82rem;color:#aab8d5;margin-bottom:22px;">Sign in to access your subscription.</div>
-      <input id="auth-email" type="email" required autocomplete="email" placeholder="Email" style="box-sizing:border-box;width:100%;padding:12px;margin-bottom:10px;border-radius:8px;border:1px solid #32466c;background:#111d34;color:#fff;">
-      <input id="auth-password" type="password" required minlength="12" autocomplete="current-password" placeholder="Password (12+ characters)" style="box-sizing:border-box;width:100%;padding:12px;margin-bottom:12px;border-radius:8px;border:1px solid #32466c;background:#111d34;color:#fff;">
-      <div id="auth-error" style="min-height:18px;color:#ff8591;font-size:.8rem;margin-bottom:8px;"></div>
-      <button type="submit" id="auth-submit" style="width:100%;padding:12px;border:0;border-radius:8px;background:#16b8ff;color:#06111e;font-weight:800;cursor:pointer;">Sign in</button>
-      <button type="button" id="auth-toggle" style="width:100%;padding:10px;border:0;background:transparent;color:#8edcff;cursor:pointer;">Create an account</button>
-    </form>
-    <div id="plan-picker" hidden style="width:min(390px,calc(100vw - 32px)); padding:28px; border:1px solid rgba(82,190,255,.35); border-radius:16px; background:#0c1528; box-shadow:0 0 45px rgba(0,175,255,.16); color:#fff;">
-      <div style="font-size:1.25rem;font-weight:800;margin-bottom:7px;">Choose a plan</div>
-      <div style="font-size:.82rem;color:#aab8d5;margin-bottom:16px;">Secure crypto checkout opens with the payment provider.</div>
-      <div id="plan-options"></div>
-      <div id="plan-error" style="min-height:18px;color:#ff8591;font-size:.8rem;margin-top:10px;"></div>
+  <div id="auth-gate" class="access-gate">
+    <div class="access-shell">
+      <section class="access-intelligence" aria-label="AI Trader Copilot overview">
+        <div class="access-brand"><span class="access-mark">◇</span><span>APEX Intelligence</span></div>
+        <div class="access-copy-wrap">
+          <span class="eyebrow">Private analyst workspace</span>
+          <h2>Institutional access.<br><em>Built for conviction.</em></h2>
+          <p>Real-time market evidence, autonomous scans, and disciplined risk context in one private command center.</p>
+          <ul class="access-proof-list">
+            <li><span>✓</span> Multi-agent evidence synthesis</li>
+            <li><span>✓</span> Live order-flow telemetry</li>
+            <li><span>✓</span> Server-enforced subscription access</li>
+          </ul>
+        </div>
+        <div class="access-security"><span class="security-dot"></span> Encrypted session · Verified payment activation</div>
+      </section>
+      <section class="access-form-zone">
+        <form id="auth-form" class="access-form">
+          <div class="access-form-heading"><span class="eyebrow">Member access</span><h1>Welcome back</h1><p id="auth-copy">Sign in to access your subscription.</p></div>
+          <label class="field-label" for="auth-email">Email address</label>
+          <input id="auth-email" class="access-input" type="email" required autocomplete="email" placeholder="analyst@company.com">
+          <label class="field-label" for="auth-password">Password</label>
+          <input id="auth-password" class="access-input" type="password" required minlength="12" autocomplete="current-password" placeholder="Enter your password">
+          <div id="auth-error" class="access-error" aria-live="polite"></div>
+          <button type="submit" id="auth-submit" class="access-primary">Sign in securely <span>→</span></button>
+          <button type="button" id="auth-toggle" class="access-secondary">Create an account</button>
+        </form>
+        <div class="access-footer-note">Research and monitoring only. No automated order routing.</div>
+      </section>
+    </div>
+    <div id="plan-picker" class="membership-picker" hidden>
+      <div class="membership-topline"><span class="eyebrow">Membership</span><span class="secure-chip"><span></span> Secure checkout</span></div>
+      <h2>Choose your research edge.</h2>
+      <p>Unlock the full analyst workstation. Payment activation occurs only after verified provider confirmation.</p>
+      <div id="plan-options" class="plan-options"></div>
+      <div id="plan-error" class="plan-error" aria-live="polite"></div>
+      <div class="membership-footer"><span>◇</span> Powered by secure crypto checkout · No private keys stored</div>
     </div>
   </div>
 
@@ -684,16 +706,36 @@
         try {
           const response = await fetch('/billing/plans'); const data = await response.json();
           if (!data.checkout_available) { planError.textContent = data.checkout_message || 'Checkout is temporarily unavailable.'; return; }
+          const planLabels = { monthly: 'Monthly', quarterly: 'Quarterly', half_yearly: 'Half-yearly', annual: 'Annual' };
+          const planNotes = {
+            monthly: 'Flexible access, billed monthly',
+            quarterly: 'Built for an active market cycle',
+            half_yearly: 'Six months of uninterrupted research',
+            annual: 'Best value for committed analysts'
+          };
           options.replaceChildren(...data.plans.map(plan => {
+            const featured = plan.code === 'annual';
             const button = document.createElement('button');
-            button.type = 'button'; button.style.cssText = 'width:100%;margin:5px 0;padding:11px;border:1px solid #32466c;border-radius:8px;background:#111d34;color:#fff;text-align:left;cursor:pointer;';
-            button.textContent = `${plan.code.replace(/_/g, ' ')} — ${data.currency} ${plan.amount}`;
-            button.onclick = async () => { button.disabled = true; planError.textContent = ''; try {
+            button.type = 'button';
+            button.className = `plan-card${featured ? ' plan-card-featured' : ''}`;
+            button.setAttribute('aria-label', `Choose ${planLabels[plan.code] || plan.code} plan`);
+            button.innerHTML = `
+              ${featured ? '<span class="plan-card-badge">Most popular</span>' : ''}
+              <span class="plan-card-top">
+                <span><span class="plan-card-name">${planLabels[plan.code] || plan.code.replace(/_/g, ' ')}</span><span class="plan-card-note">${planNotes[plan.code] || 'Premium platform access'}</span></span>
+                <span class="plan-card-radio" aria-hidden="true"></span>
+              </span>
+              <span class="plan-card-price"><strong>${data.currency} ${plan.amount}</strong><small>${plan.code === 'monthly' ? '/ month' : `/ ${plan.days} days`}</small></span>
+              <span class="plan-card-value">${featured ? 'Priority value plan' : `${plan.days} days of full access`}</span>`;
+            button.onclick = async () => {
+              options.querySelectorAll('.plan-card').forEach(card => card.classList.remove('is-selected'));
+              button.classList.add('is-selected', 'is-loading');
+              button.disabled = true; planError.textContent = ''; try {
               const checkout = await fetch('/billing/checkout', {method:'POST',headers:{'Content-Type':'application/json','Authorization':`Bearer ${token}`},body:JSON.stringify({plan_code:plan.code})});
               const invoice = await checkout.json(); if (!checkout.ok) throw new Error(invoice.detail || 'Checkout is unavailable.');
               if (!invoice.invoice_url) throw new Error('Checkout did not return an invoice URL.');
               window.location.assign(invoice.invoice_url);
-            } catch (err) { planError.textContent = err.message; button.disabled = false; } };
+            } catch (err) { planError.textContent = err.message; button.disabled = false; button.classList.remove('is-loading'); } };
             return button;
           }));
         } catch (err) { planError.textContent = 'Plans are temporarily unavailable.'; }
