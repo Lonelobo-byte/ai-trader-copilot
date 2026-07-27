@@ -15,6 +15,7 @@ from ..billing import (
     PaymentProviderError,
     callback_configuration_error,
     complete_subscription,
+    fetch_nowpayments_invoice_payments,
     create_nowpayments_invoice,
     fetch_nowpayments_payment,
     plan_details,
@@ -27,6 +28,9 @@ from ..settings import get_settings
 
 router = APIRouter(prefix="/billing", tags=["billing"])
 logger = logging.getLogger(__name__)
+
+_ACTIVE_PROVIDER_STATUSES = {"waiting", "confirming", "sending", "partially_paid"}
+_TERMINAL_PROVIDER_STATUSES = {"finished", "confirmed", "failed", "expired", "refunded"}
 
 
 class CheckoutRequest(BaseModel):
@@ -65,6 +69,8 @@ def _payment_view(payment: Payment | None, subscription: Subscription | None) ->
         return None
     return {
         "status": payment.status,
+        "order_id": payment.order_id,
+        "provider_invoice_id": payment.provider_invoice_id,
         "provider_payment_id": payment.provider_payment_id,
         "transaction_hash": payment.transaction_hash,
         "subscription": _subscription_view(subscription),
@@ -107,6 +113,45 @@ def _apply_provider_status(payment: Payment, subscription: Subscription, payload
         subscription.status = "cancelled" if status_value == "refunded" else "expired"
 
 
+async def _reconcile_pending_payment(payment: Payment, subscription: Subscription) -> bool:
+    """Synchronize one pending checkout from NOWPayments without trusting UI redirects.
+
+    Hosted invoices do not have a payment ID until the customer selects a
+    payment route.  We therefore use the stored invoice ID to discover that
+    provider payment first, then reconcile its authoritative status.
+    """
+    try:
+        if payment.provider_payment_id:
+            provider_payload = await fetch_nowpayments_payment(payment.provider_payment_id)
+            _apply_provider_status(payment, subscription, provider_payload)
+            return True
+
+        if not payment.provider_invoice_id:
+            if not (payment.raw_payload or {}).get("invoice_url"):
+                payment.status = "expired"
+                if subscription.status == "pending":
+                    subscription.status = "expired"
+                return True
+            return False
+        provider_payments = await fetch_nowpayments_invoice_payments(payment.provider_invoice_id)
+        matching = next((item for item in provider_payments if _provider_payload_is_expected(payment, item)), None)
+        if matching:
+            _apply_provider_status(payment, subscription, matching)
+            return True
+
+        # Legacy records created before invoice_url validation cannot be
+        # resumed by the customer.  A provider lookup confirming that no
+        # payment exists makes this local lock safe to release.
+        if not (payment.raw_payload or {}).get("invoice_url"):
+            payment.status = "expired"
+            if subscription.status == "pending":
+                subscription.status = "expired"
+        return True
+    except (PaymentProviderError, ValueError) as exc:
+        logger.warning("Could not reconcile NOWPayments payment %s: %s", payment.id, exc)
+        return False
+
+
 @router.get("/me")
 async def my_subscription(user: User = Depends(current_user)):
     async with AsyncSessionLocal() as session:
@@ -129,19 +174,31 @@ async def checkout(body: CheckoutRequest, request: Request, user: User = Depends
         raise HTTPException(status_code=503, detail=configuration_error)
 
     # Do not let a double-click or refresh create multiple live invoices for
-    # the same user.  The original invoice remains payable and is reusable.
+    # the same user.  Reconcile the existing provider record first: terminal
+    # invoices are released, while a still-pending payment remains reusable.
     async with AsyncSessionLocal() as session:
         existing = await session.scalar(
             select(Payment)
             .join(Subscription, Payment.subscription_id == Subscription.id)
-            .where(Payment.user_id == user.id, Subscription.status == "pending", Payment.status.in_({"waiting", "confirming"}))
+            .where(Payment.user_id == user.id, Subscription.status == "pending", Payment.status.in_(_ACTIVE_PROVIDER_STATUSES))
             .order_by(Payment.created_at.desc())
         )
         if existing:
+            subscription = await session.get(Subscription, existing.subscription_id)
+            reconciled = await _reconcile_pending_payment(existing, subscription)
+            if reconciled:
+                session.add(AuditEvent(id=str(uuid.uuid4()), user_id=user.id, event_type="payment_checkout_reconciled", metadata_json={"order_id": existing.order_id, "status": existing.status}))
+                await session.commit()
+            if existing.status not in _ACTIVE_PROVIDER_STATUSES:
+                existing = None
+            elif not reconciled:
+                raise HTTPException(status_code=409, detail="Your existing payment could not be verified with NOWPayments yet. Please wait a moment and retry; a new checkout was not created to avoid duplicate charges.")
+
+        if existing:
             invoice_url = (existing.raw_payload or {}).get("invoice_url")
             if invoice_url:
-                return {"payment_id": existing.id, "invoice_url": invoice_url, "order_id": existing.order_id, "reused": True}
-            raise HTTPException(status_code=409, detail="A payment is already being processed. Wait for confirmation before starting another checkout.")
+                return {"payment_id": existing.id, "provider_invoice_id": existing.provider_invoice_id, "provider_payment_id": existing.provider_payment_id, "invoice_url": invoice_url, "order_id": existing.order_id, "reused": True}
+            raise HTTPException(status_code=409, detail="A verified NOWPayments payment is still pending, but its checkout URL is unavailable. Contact support with this order reference: " + existing.order_id)
 
     subscription_id, payment_id, order_id = str(uuid.uuid4()), str(uuid.uuid4()), f"atc-{uuid.uuid4().hex}"
     try:
@@ -156,7 +213,7 @@ async def checkout(body: CheckoutRequest, request: Request, user: User = Depends
         payment = Payment(id=payment_id, user_id=user.id, subscription_id=subscription_id, provider="nowpayments", provider_invoice_id=str(invoice["id"]), provider_payment_id=None, order_id=order_id, status="waiting", amount=plan["amount"], currency=get_settings().billing_currency, raw_payload=invoice)
         session.add_all([subscription, payment])
         await session.commit()
-    return {"payment_id": payment_id, "invoice_url": invoice.get("invoice_url"), "order_id": order_id}
+    return {"payment_id": payment_id, "provider_invoice_id": str(invoice["id"]), "invoice_url": invoice.get("invoice_url"), "order_id": order_id}
 
 
 @router.get("/payment-status")
@@ -172,16 +229,13 @@ async def payment_status(user: User = Depends(current_user)):
         if payment is None:
             return {"payment": None}
         subscription = await session.get(Subscription, payment.subscription_id)
-        verification_pending = False
-        if payment.provider_payment_id:
-            try:
-                provider_payload = await fetch_nowpayments_payment(payment.provider_payment_id)
-                _apply_provider_status(payment, subscription, provider_payload)
+        verification_pending = payment.status in _ACTIVE_PROVIDER_STATUSES
+        if verification_pending:
+            reconciled = await _reconcile_pending_payment(payment, subscription)
+            verification_pending = not reconciled
+            if reconciled:
                 session.add(AuditEvent(id=str(uuid.uuid4()), user_id=user.id, event_type="payment_status_reconciled", metadata_json={"order_id": payment.order_id, "status": payment.status}))
                 await session.commit()
-            except (PaymentProviderError, ValueError) as exc:
-                logger.warning("Could not reconcile NOWPayments payment %s: %s", payment.id, exc)
-                verification_pending = True
         return {"payment": _payment_view(payment, subscription), "verification_pending": verification_pending}
 
 

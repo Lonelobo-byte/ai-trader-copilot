@@ -84,6 +84,31 @@ async def fetch_nowpayments_payment(payment_id: str) -> dict[str, Any]:
     return payload
 
 
+async def fetch_nowpayments_invoice_payments(invoice_id: str) -> list[dict[str, Any]]:
+    """Find provider payments created from one hosted NOWPayments invoice.
+
+    A hosted invoice has its own ``id``.  The customer only receives a
+    ``payment_id`` after choosing a coin/payment route, so invoice lookup is
+    the safe way to reconcile an older checkout that has not sent us an IPN.
+    """
+    settings = get_settings()
+    if not settings.nowpayments_api_key:
+        raise PaymentProviderError("NOWPayments API key is missing.")
+    async with httpx.AsyncClient(timeout=15) as client:
+        response = await client.get(
+            f"{settings.nowpayments_api_base_url.rstrip('/')}/payment/",
+            params={"invoiceId": invoice_id, "limit": 50, "page": 0, "sortBy": "created_at", "orderBy": "desc"},
+            headers={"x-api-key": settings.nowpayments_api_key},
+        )
+    if response.is_error:
+        raise PaymentProviderError(f"NOWPayments invoice lookup failed ({response.status_code}).")
+    payload = response.json()
+    records = payload.get("data", payload.get("payments", [])) if isinstance(payload, dict) else payload
+    if not isinstance(records, list) or not all(isinstance(item, dict) for item in records):
+        raise PaymentProviderError("NOWPayments returned an invalid invoice payment list.")
+    return records
+
+
 def verify_nowpayments_ipn(raw: bytes, signature: str | None) -> dict[str, Any]:
     secret = get_settings().nowpayments_ipn_secret
     expected = hmac.new(secret.encode(), raw, hashlib.sha512).hexdigest() if secret else ""

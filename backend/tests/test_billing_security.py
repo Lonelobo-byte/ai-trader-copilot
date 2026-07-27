@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 from datetime import timedelta
+import asyncio
+from unittest.mock import AsyncMock, patch
 
 from app.auth import utcnow
 from app.billing import callback_configuration_error
 from app.db.models import Payment, Subscription
-from app.routes.billing import _apply_provider_status, _pick_subscription
+from app.routes.billing import _apply_provider_status, _pick_subscription, _reconcile_pending_payment
 from app.settings import get_settings
 
 
@@ -53,3 +55,23 @@ def test_only_matching_provider_payment_activates_subscription() -> None:
     _apply_provider_status(payment, subscription, payload)
     assert payment.status == "finished"
     assert subscription.status == "active"
+
+
+def test_pending_invoice_is_reconciled_before_another_checkout() -> None:
+    subscription = Subscription(id="sub", user_id="user", plan_code="monthly", status="pending")
+    payment = Payment(id="pay", user_id="user", subscription_id="sub", provider="nowpayments", provider_invoice_id="invoice-1", order_id="atc-order", status="waiting", amount=19.0, currency="usd", raw_payload={"invoice_url": "https://nowpayments.example/invoice"})
+    provider_payment = {"payment_id": "provider-pay", "payment_status": "failed", "order_id": "atc-order", "price_amount": 19.0, "price_currency": "usd"}
+    with patch("app.routes.billing.fetch_nowpayments_invoice_payments", AsyncMock(return_value=[provider_payment])):
+        assert asyncio.run(_reconcile_pending_payment(payment, subscription)) is True
+    assert payment.provider_payment_id == "provider-pay"
+    assert payment.status == "failed"
+    assert subscription.status == "expired"
+
+
+def test_orphaned_legacy_checkout_is_released_only_after_provider_lookup() -> None:
+    subscription = Subscription(id="sub", user_id="user", plan_code="monthly", status="pending")
+    payment = Payment(id="pay", user_id="user", subscription_id="sub", provider="nowpayments", provider_invoice_id="invoice-1", order_id="atc-order", status="waiting", amount=19.0, currency="usd", raw_payload={})
+    with patch("app.routes.billing.fetch_nowpayments_invoice_payments", AsyncMock(return_value=[])):
+        assert asyncio.run(_reconcile_pending_payment(payment, subscription)) is True
+    assert payment.status == "expired"
+    assert subscription.status == "expired"
