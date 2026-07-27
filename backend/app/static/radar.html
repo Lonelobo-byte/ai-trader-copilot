@@ -110,8 +110,9 @@
       border: 2px solid rgba(255, 255, 255, 0.1);
       border-top-color: var(--neon-blue);
       border-radius: 50%;
-      animation: spin 1s infinite linear;
     }
+
+    .radar-refresh-spinner.is-active { animation: spin 1s infinite linear; }
 
     @keyframes spin {
       to {
@@ -437,16 +438,17 @@
       inset: -13px;
       opacity: 0;
       position: absolute;
-      animation: evidence-ping 2.6s ease-out infinite;
+      animation: none;
     }
 
-    .evidence-radar-orbit::after { animation-delay: 1.3s; }
+    .radar-evidence-loading.is-active .evidence-radar-orbit::before { animation: evidence-ping 2.6s ease-out infinite; }
+    .radar-evidence-loading.is-active .evidence-radar-orbit::after { animation: evidence-ping 2.6s ease-out 1.3s infinite; }
     .evidence-radar-orbit span {
       background: conic-gradient(from 0deg, rgba(62, 151, 255, .4), transparent 30%);
       border-radius: inherit;
       inset: 0;
       position: absolute;
-      animation: evidence-sweep 3.5s linear infinite;
+      animation: none;
     }
 
     .evidence-radar-orbit i {
@@ -460,6 +462,7 @@
       width: 6px;
     }
 
+    .radar-evidence-loading.is-active .evidence-radar-orbit span { animation: evidence-sweep 3.5s linear infinite; }
     .evidence-loading-copy { flex: 1 1 460px; min-width: 0; }
     .evidence-loading-meta {
       align-items: center;
@@ -490,9 +493,11 @@
     .evidence-stage.active { opacity: 1; }
     .evidence-stage.active .evidence-stage-label { color: #c9dfff; }
     .evidence-stage.active .evidence-stage-label::before { background: var(--neon-blue); box-shadow: 0 0 8px rgba(62,151,255,.8); }
-    .evidence-stage.active .evidence-stage-bar::after { animation: evidence-shimmer 1.7s ease-in-out infinite; background: linear-gradient(90deg, transparent, var(--neon-blue), transparent); content: ''; inset: 0; position: absolute; transform: translateX(-100%); }
+    .evidence-stage.active .evidence-stage-bar::after { animation: none; background: linear-gradient(90deg, transparent, var(--neon-blue), transparent); content: ''; inset: 0; position: absolute; transform: translateX(-100%); }
+    .radar-evidence-loading.is-active .evidence-stage.active .evidence-stage-bar::after { animation: evidence-shimmer 1.7s ease-in-out infinite; }
     .evidence-loading-progress { background: rgba(255,255,255,.07); border-radius: 999px; height: 3px; margin-top: 1.1rem; overflow: hidden; }
-    .evidence-loading-progress span { animation: evidence-progress 1.8s ease-in-out infinite; background: linear-gradient(90deg, transparent, rgba(62,151,255,.95), transparent); display: block; height: 100%; transform: translateX(-100%); width: 42%; }
+    .evidence-loading-progress span { animation: none; background: linear-gradient(90deg, transparent, rgba(62,151,255,.95), transparent); display: block; height: 100%; transform: translateX(-100%); width: 42%; }
+    .radar-evidence-loading.is-active .evidence-loading-progress span { animation: evidence-progress 1.8s ease-in-out infinite; }
 
     @keyframes evidence-ping { 0% { opacity: .7; transform: scale(.7); } 100% { opacity: 0; transform: scale(1.3); } }
     @keyframes evidence-sweep { to { transform: rotate(360deg); } }
@@ -1168,7 +1173,7 @@
             <!-- Populated dynamically via JS -->
             <tr>
               <td colspan="9">
-                <div class="radar-evidence-loading" role="status" aria-live="polite">
+                <div class="radar-evidence-loading is-active" role="status" aria-live="polite">
                   <div class="evidence-radar-orbit" aria-hidden="true"><span></span><i></i></div>
                   <div class="evidence-loading-copy">
                     <div class="evidence-loading-meta">Live collection in progress</div>
@@ -1252,6 +1257,42 @@
       const modalCloseBtn = document.getElementById('modal-close-btn');
       const modalTitleSymbol = document.getElementById('modal-title-symbol');
       const modalBodyContent = document.getElementById('modal-body-content');
+      let radarEvidenceStageTimer = null;
+
+      const radarEvidenceLoadingMarkup = () => `
+        <tr><td colspan="9">
+          <div class="radar-evidence-loading is-active" role="status" aria-live="polite">
+            <div class="evidence-radar-orbit" aria-hidden="true"><span></span><i></i></div>
+            <div class="evidence-loading-copy">
+              <div class="evidence-loading-meta">Live collection in progress</div>
+              <h3>Acquiring market evidence</h3>
+              <p>Mapping liquidity, positioning, and order-flow context before Radar ranks an opportunity.</p>
+              <div class="evidence-loading-stages" aria-label="Evidence collection stages">
+                <div class="evidence-stage active"><span class="evidence-stage-label">Liquidity map</span><div class="evidence-stage-bar"></div></div>
+                <div class="evidence-stage"><span class="evidence-stage-label">Positioning</span><div class="evidence-stage-bar"></div></div>
+                <div class="evidence-stage"><span class="evidence-stage-label">Order flow</span><div class="evidence-stage-bar"></div></div>
+              </div>
+              <div class="evidence-loading-progress" aria-hidden="true"><span></span></div>
+            </div>
+          </div>
+        </td></tr>`;
+
+      function showRadarEvidenceLoading() {
+        window.clearInterval(radarEvidenceStageTimer);
+        recordsTbody.innerHTML = radarEvidenceLoadingMarkup();
+        const stages = [...recordsTbody.querySelectorAll('.evidence-stage')];
+        let activeIndex = 0;
+        radarEvidenceStageTimer = window.setInterval(() => {
+          stages[activeIndex]?.classList.remove('active');
+          activeIndex = (activeIndex + 1) % stages.length;
+          stages[activeIndex]?.classList.add('active');
+        }, 1100);
+      }
+
+      function stopRadarEvidenceLoading() {
+        window.clearInterval(radarEvidenceStageTimer);
+        radarEvidenceStageTimer = null;
+      }
       const scanModeSelect = document.getElementById('scan-mode-select');
 
       // Radar is a separate static surface, so it does not inherit the
@@ -1435,6 +1476,7 @@
 
       // Render breakout records
       function renderTable() {
+        stopRadarEvidenceLoading();
         const filtered = rawBreakouts.filter(item => {
           if (activeFilter === 'recommended') {
             return item.review_status === 'REVIEW_CANDIDATE';
@@ -1977,7 +2019,9 @@
       async function fetchBreakouts(retriedAfterPaymentCheck = false) {
         radarScanReady = false;
         setResearchButtonState('SCANNING');
+        showRadarEvidenceLoading();
         spinner.style.display = 'block';
+        spinner.classList.add('is-active');
         refreshText.textContent = 'Scanning causal market evidence...';
         const [ltf, htf] = (scanModeSelect.value || '5m,1h').split(',');
         try {
@@ -2012,7 +2056,9 @@
           showResearchBriefNotice('Radar scan unavailable', 'Research briefs cannot be built until a live Radar scan succeeds. Check your session or market-data connection, then let Radar retry.', 'SCAN FAILED');
           if (/sign in|unauthorized|401/i.test(error.message || '')) showRadarAuthRequired('Sign in is required before Radar can scan.');
         } finally {
+          stopRadarEvidenceLoading();
           spinner.style.display = 'none';
+          spinner.classList.remove('is-active');
           secondsRemaining = 30;
         }
       }
