@@ -54,6 +54,13 @@ subscription activation and the return-to-dashboard redirect, use a staging
 HTTPS URL instead of `localhost`, because the provider must be able to reach
 the webhook. The app intentionally blocks checkout when `PUBLIC_BASE_URL` is
 not public HTTPS so a customer cannot pay into an unverifiable local setup.
+
+When `APP_ENV=local` and `NOWPAYMENTS_SANDBOX=true`, local checkout is allowed
+solely to test invoice creation and the hosted payment screen. A localhost
+server cannot receive the signed provider IPN, so the subscription will remain
+pending; use a temporary HTTPS tunnel or staging URL to test automatic
+activation. The public-HTTPS requirement remains mandatory for production or
+non-sandbox payments.
 Return all values to the production defaults before launch.
 
 ## Institutional committee architecture

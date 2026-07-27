@@ -12,8 +12,10 @@ from app.settings import get_settings
 
 def test_checkout_requires_a_public_https_callback_url() -> None:
     settings = get_settings()
-    original = settings.public_base_url
+    original = settings.public_base_url, settings.nowpayments_sandbox, settings.app_env
     try:
+        settings.nowpayments_sandbox = False
+        settings.app_env = "production"
         settings.public_base_url = "https://localhost"
         assert callback_configuration_error() is not None
         settings.public_base_url = "http://billing.example.com"
@@ -21,7 +23,21 @@ def test_checkout_requires_a_public_https_callback_url() -> None:
         settings.public_base_url = "https://billing.example.com"
         assert callback_configuration_error() is None
     finally:
-        settings.public_base_url = original
+        settings.public_base_url, settings.nowpayments_sandbox, settings.app_env = original
+
+
+def test_local_sandbox_can_exercise_checkout_without_weakening_production_gate() -> None:
+    settings = get_settings()
+    original = settings.public_base_url, settings.nowpayments_sandbox, settings.app_env
+    try:
+        settings.public_base_url = "http://localhost:8000"
+        settings.nowpayments_sandbox = True
+        settings.app_env = "local"
+        assert callback_configuration_error() is None
+        settings.app_env = "production"
+        assert callback_configuration_error() is not None
+    finally:
+        settings.public_base_url, settings.nowpayments_sandbox, settings.app_env = original
 
 
 def test_active_subscription_wins_over_newer_pending_checkout() -> None:

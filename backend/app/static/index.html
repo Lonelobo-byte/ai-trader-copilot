@@ -732,7 +732,11 @@
               button.classList.add('is-selected', 'is-loading');
               button.disabled = true; planError.textContent = ''; try {
               const checkout = await fetch('/billing/checkout', {method:'POST',headers:{'Content-Type':'application/json','Authorization':`Bearer ${token}`},body:JSON.stringify({plan_code:plan.code})});
-              const invoice = await checkout.json(); if (!checkout.ok) throw new Error(invoice.detail || 'Checkout is unavailable.');
+              const raw = await checkout.text();
+              let invoice = {};
+              try { invoice = raw ? JSON.parse(raw) : {}; }
+              catch { invoice = {detail: raw || `Checkout failed with HTTP ${checkout.status}.`}; }
+              if (!checkout.ok) throw new Error(invoice.detail || 'Checkout is unavailable.');
               if (!invoice.invoice_url) throw new Error('Checkout did not return an invoice URL.');
               window.location.assign(invoice.invoice_url);
             } catch (err) { planError.textContent = err.message; button.disabled = false; button.classList.remove('is-loading'); } };

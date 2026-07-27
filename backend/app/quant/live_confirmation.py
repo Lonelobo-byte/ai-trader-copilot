@@ -62,18 +62,28 @@ def apply_live_confirmation(candidate: dict[str, Any], live: dict[str, Any]) -> 
         taker_ratio is not None
         and ((direction == "BULLISH" and taker_ratio >= 1.02) or (direction == "BEARISH" and taker_ratio <= 0.98))
     )
-    oi_expanding = oi_change is not None and oi_change >= 0.10
+    price_change = live.get("price_change_pct")
+    positioning_aligned = (
+        oi_change is not None and abs(_number(oi_change)) >= 0.10
+        and (
+            # The callable also supports legacy callers that did not supply a
+            # price window. The main signal path always supplies one.
+            price_change is None
+            or (direction == "BULLISH" and _number(price_change) > 0.0)
+            or (direction == "BEARISH" and _number(price_change) < 0.0)
+        )
+    )
     liquid = spread_bps is not None and spread_bps <= 12.0
     crowded = (direction == "BULLISH" and funding > 0.0005) or (direction == "BEARISH" and funding < -0.0005)
 
-    live_points = sum((8 if liquid else 0, 10 if depth_aligned else 0, 10 if flow_aligned else 0, 7 if oi_expanding else 0, 5 if not crowded else 0))
+    live_points = sum((8 if liquid else 0, 10 if depth_aligned else 0, 10 if flow_aligned else 0, 7 if positioning_aligned else 0, 5 if not crowded else 0))
     candidate["score"] = min(100, int(candidate["score"]) + live_points)
     checks = {
         "data_complete": bool(live.get("data_complete")),
         "spread_within_limit": liquid,
         "depth_aligned": depth_aligned,
         "taker_flow_aligned": flow_aligned,
-        "open_interest_expanding": oi_expanding,
+        "price_oi_aligned": positioning_aligned,
         "funding_not_crowded": not crowded,
     }
     risk_flags = candidate.setdefault("risk_flags", [])
@@ -82,7 +92,7 @@ def apply_live_confirmation(candidate: dict[str, Any], live: dict[str, Any]) -> 
         "spread_within_limit": "Live spread exceeds the execution-quality limit.",
         "depth_aligned": "Displayed 20-level order-book depth does not support the proposed direction.",
         "taker_flow_aligned": "Recent taker buy/sell flow does not support the proposed direction.",
-        "open_interest_expanding": "Open interest is not expanding with the move; participation is unconfirmed.",
+        "price_oi_aligned": "Price and open interest do not form an aligned positioning regime.",
         "funding_not_crowded": "Funding is crowded in the proposed direction; squeeze/flush risk is elevated.",
     }
     risk_flags.extend(message for key, message in messages.items() if not checks[key])
@@ -125,12 +135,11 @@ def verify_main_signal_snapshot(
             "reason": risk_flags[0], "evaluation_mode": "shared_radar_live_confirmation",
         }
 
-    closes = [_number(c.close) for c in primary]
-    higher_closes = [_number(c.close) for c in higher]
-    ema20, ema50 = _ema(closes, 20), _ema(closes, 50)
-    htf_ema20, htf_ema50 = _ema(higher_closes, 20), _ema(higher_closes, 50)
-    primary_direction = "BULLISH" if closes[-1] > ema20 > ema50 else "BEARISH" if closes[-1] < ema20 < ema50 else "NEUTRAL"
-    higher_direction = "BULLISH" if higher_closes[-1] > htf_ema20 > htf_ema50 else "BEARISH" if higher_closes[-1] < htf_ema20 < htf_ema50 else "NEUTRAL"
+    primary_phase = classify_market_phase(primary)
+    higher_phase = classify_market_phase(higher)
+    phase_direction = {"MARKUP": "BULLISH", "ACCUMULATION": "BULLISH", "MARKDOWN": "BEARISH", "DISTRIBUTION": "BEARISH"}
+    primary_direction = phase_direction.get(primary_phase, "NEUTRAL")
+    higher_direction = phase_direction.get(higher_phase, "NEUTRAL")
     prior_high = max(_number(c.high) for c in primary[-21:-1])
     prior_low = min(_number(c.low) for c in primary[-21:-1])
     latest = primary[-1]
@@ -142,7 +151,7 @@ def verify_main_signal_snapshot(
     rvol = _number(latest.quote_volume) / average_volume if average_volume > 0 else 0.0
     bos = detect_bos(primary)
     choch = detect_choch(primary)
-    phase = classify_market_phase(primary)
+    phase = primary_phase
     phase_aligned = phase in ({"MARKUP", "ACCUMULATION"} if direction == "BULLISH" else {"MARKDOWN", "DISTRIBUTION"})
     choch_opposes = bool(choch.get("detected")) and choch.get("direction") != direction.lower()
     breakout = _number(latest.close) > prior_high if direction == "BULLISH" else _number(latest.close) < prior_low
@@ -180,7 +189,8 @@ def verify_main_signal_snapshot(
         "spread_bps": (best_ask - best_bid) / midpoint * 10_000 if midpoint else None,
         "funding_rate": _number(funding.get("funding_rate")),
         "oi_change_pct": _number(oi_history.get("oi_change_pct")) if oi_history.get("available") else None,
-        "taker_buy_sell_ratio": _number(taker.get("buy_sell_ratio")) if taker.get("available") else None,
+        "price_change_pct": ((_number(primary[-1].close) - _number(primary[-6].close)) / _number(primary[-6].close) * 100.0) if _number(primary[-6].close) else 0.0,
+        "taker_buy_sell_ratio": _number(taker.get("ratio", taker.get("buy_sell_ratio"))) if taker.get("available") else None,
     }
     candidate = {"symbol": symbol, "direction": direction, "score": 75 if all(structure_checks.values()) else 0, "risk_flags": risk_flags}
     apply_live_confirmation(candidate, live)

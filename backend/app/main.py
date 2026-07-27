@@ -8,7 +8,7 @@ from pathlib import Path
 from time import time
 
 from fastapi import Depends, FastAPI, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
@@ -75,6 +75,16 @@ for _internal_host in ("localhost", "127.0.0.1", "testserver"):
     if _internal_host not in _trusted_hosts:
         _trusted_hosts.append(_internal_host)
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=_trusted_hosts)
+
+
+@app.exception_handler(Exception)
+async def unhandled_application_error(request: Request, exc: Exception):
+    """Keep API errors JSON-shaped so browser clients can report them safely."""
+    logger.exception("Unhandled request failure", extra={"method": request.method, "path": request.url.path})
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "The server could not complete this request. Check the server log for the underlying error."},
+    )
 
 
 @app.middleware("http")

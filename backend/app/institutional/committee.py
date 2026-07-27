@@ -206,6 +206,31 @@ def _market_structure_engine(features: dict[str, Any]) -> dict[str, Any]:
     )
 
 
+def _market_context_engine(features: dict[str, Any]) -> dict[str, Any]:
+    """Expose the causal scoring contract as the committee's primary thesis."""
+    context = features.get("market_context", {}) or {}
+    coverage = context.get("coverage", {}) or {}
+    direction = context.get("direction", "WAIT")
+    available = int(coverage.get("available_domains", 0))
+    complete = bool(coverage.get("complete"))
+    bias = "BULLISH" if direction == "LONG" else "BEARISH" if direction == "SHORT" else "NEUTRAL"
+    return _engine(
+        "causal_market_context_engine",
+        status="COMPLETE" if complete else "PARTIAL" if available else "UNAVAILABLE",
+        bias=bias,
+        confidence_pct=_number(context.get("score")) if direction != "WAIT" else 0.0,
+        evidence=[
+            {"metric": "direction", "value": direction, "source": context.get("method", "causal_market_context")},
+            {"metric": "context_score", "value": context.get("score"), "source": context.get("method", "causal_market_context")},
+            {"metric": "coverage", "value": coverage, "source": "feature_engine"},
+            {"metric": "components", "value": context.get("components", {}), "source": "feature_engine"},
+        ],
+        contradictory_evidence=[f"Causal context disagreement: {name}." for name in context.get("contradictions", [])],
+        unknowns=[] if complete else ["Causal setup coverage is incomplete; missing domains are not neutral evidence."],
+        limitations=context.get("limitations", []),
+    )
+
+
 def _derivatives_engine(features: dict[str, Any], intelligence: dict[str, Any]) -> dict[str, Any]:
     derivatives = features.get("derivatives", {}) or {}
     sources = _available_sources(intelligence)
@@ -291,7 +316,19 @@ def _macro_engine(features: dict[str, Any], intelligence: dict[str, Any]) -> dic
     )
 
 
-def _provisional_thesis(engines: dict[str, dict[str, Any]]) -> dict[str, Any]:
+def _provisional_thesis(engines: dict[str, dict[str, Any]], features: dict[str, Any] | None = None) -> dict[str, Any]:
+    context = ((features or {}).get("market_context") or {})
+    coverage = context.get("coverage", {}) or {}
+    if coverage.get("complete"):
+        direction = context.get("direction", "WAIT")
+        return {
+            "direction": direction if direction in {"LONG", "SHORT"} else "NEUTRAL",
+            "weighted_score": _number(context.get("normalized_directional_score")),
+            "engines_with_evidence": int(coverage.get("available_domains", 0)),
+            "method": context.get("method", "causal_market_context_v1"),
+            "setup_score": _number(context.get("score")),
+            "context_status": context.get("status", "WAIT"),
+        }
     weighted_score = 0.0
     total_weight = 0.0
     for report in engines.values():
@@ -303,7 +340,7 @@ def _provisional_thesis(engines: dict[str, dict[str, Any]]) -> dict[str, Any]:
         total_weight += weight
     normalized = weighted_score / total_weight if total_weight else 0.0
     direction = "LONG" if normalized >= 0.18 else "SHORT" if normalized <= -0.18 else "NEUTRAL"
-    return {"direction": direction, "weighted_score": round(normalized, 4), "engines_with_evidence": sum(r.get("status") != "UNAVAILABLE" for r in engines.values())}
+    return {"direction": direction, "weighted_score": round(normalized, 4), "engines_with_evidence": sum(r.get("status") != "UNAVAILABLE" for r in engines.values()), "method": "legacy_evidence_fallback"}
 
 
 def _adversarial_review(
@@ -380,6 +417,9 @@ def _risk_committee(
 
     if not data_quality.get("passed", False):
         hard_blockers.append("Required core market data is incomplete.")
+    context = features.get("market_context", {}) or {}
+    if context and context.get("status") != "SETUP_CANDIDATE":
+        hard_blockers.append("Causal market-context score is not an aligned setup; wait for regime, liquidity, positioning, and flow alignment.")
     # Estimate EV on the same horizon as the proposed trade plan. The quant
     # forecast is next-observation directional evidence; it cannot be compared
     # directly with a multi-bar ATR stop and target ladder. Engine agreement
@@ -509,13 +549,14 @@ def build_institutional_dossier(
     settings: Any,
 ) -> dict[str, Any]:
     engines = {
+        "causal_market_context_engine": _market_context_engine(features),
         "quant_research_engine": _quant_engine(quantitative),
         "market_structure_engine": _market_structure_engine(features),
         "market_microstructure_engine": _microstructure_engine(features, quantitative),
         "derivatives_engine": _derivatives_engine(features, intelligence),
         "macro_intelligence_engine": _macro_engine(features, intelligence),
     }
-    thesis = _provisional_thesis(engines)
+    thesis = _provisional_thesis(engines, features)
     adversarial = _adversarial_review(engines, thesis, features, macro_blockout)
     risk = _risk_committee(
         engines, quantitative, features, thesis, portfolio_state, features.get("data_quality", {}),

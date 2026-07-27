@@ -19,6 +19,12 @@ A research-first market-analysis platform for discovering, validating, and monit
 
 Technical indicators remain available in the codebase only as optional derived features; they are not used by the public research-assessment path.
 
+The active directional contract is `causal_market_context_v1`: it requires
+aligned regime/structure, liquidity behaviour, price × OI positioning,
+funding/crowding, order flow, volatility, volume-profile/VWAP, and available
+cross-market evidence. It does not impose a fixed daily or weekly trade count;
+the system returns `WAIT` whenever evidence is incomplete or contradictory.
+
 The signal path and research path now share a single market-intelligence snapshot on REST analysis. The snapshot records available and failed sources, and required core data (candles, ticker, and order book) must be present before a new signal can be approved. AI output is an explanation and decision layer over quantitative inputs; it is not evidence of predictive accuracy by itself.
 
 ## Alpha Research Engine

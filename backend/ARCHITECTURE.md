@@ -20,6 +20,23 @@ All engines consume the same snapshot. Each engine reports evidence, source,
 availability, contradictions, unknowns, limitations, bias, and evidence
 confidence. `UNAVAILABLE` is different from `NEUTRAL`.
 
+## Causal market-context score
+
+The directional thesis is owned by `causal_market_context_v1`. It scores only
+observable market context: regime/structure, candle-derived liquidity pools
+and sweeps, price × open-interest positioning, funding crowding, aggregated
+taker flow and displayed depth, realized-volatility state, candle-volume
+profile, daily/weekly/swing-anchored VWAP, and available cross-market context.
+At least four evidence domains must be available before it can nominate a
+setup. Any explicitly opposing domain is reported as a contradiction; missing
+domains are never silently interpreted as neutral.
+
+RSI, MACD, Bollinger values, and moving averages remain dashboard/research
+telemetry only. They do not enter the live market-context score, the
+production probability baseline, or the non-AI fallback. Historical ML
+artifacts are also excluded from production scoring until retrained and
+validated on timestamped causal features.
+
 ## Authority boundaries
 
 - Data adapters may report observations and failures. They cannot recommend an

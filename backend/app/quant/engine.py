@@ -27,8 +27,6 @@ def build_quantitative_assessment(
     # ``statistics``.
     context_features = context_features or {}
     derivatives = context_features.get("derivatives", {}) or {}
-    momentum = context_features.get("momentum", {}) or {}
-    volatility = context_features.get("volatility", {}) or {}
     if statistics.get("available"):
         squeeze = derivatives.get("squeeze", {}) or {}
         statistics.update(
@@ -36,16 +34,13 @@ def build_quantitative_assessment(
                 "funding_rate": float(derivatives.get("funding_rate") or 0.0),
                 "open_interest": float(derivatives.get("open_interest") or 0.0),
                 "funding_oi_strength": float(squeeze.get("strength") or 50.0),
-                "rsi": float(momentum.get("rsi") or 50.0),
-                "macd_hist": float((momentum.get("macd") or {}).get("histogram") or 0.0),
-                "bb_bandwidth": float((volatility.get("bollinger") or {}).get("bandwidth") or 0.0),
-                "bb_percent_b": float((volatility.get("bollinger") or {}).get("percent_b") or 50.0),
             }
         )
     microstructure = analyze_microstructure(order_book, candles)
     regime = classify_market_state(statistics, microstructure)
     probability = forecast_distribution(
-        statistics, microstructure, regime, symbol=symbol, timeframe=timeframe
+        statistics, microstructure, regime, symbol=symbol, timeframe=timeframe,
+        market_context=context_features.get("market_context", {}),
     )
     risk = build_risk_budget(
         probability, statistics, account_value=account_value, max_drawdown_pct=max_drawdown_pct,
@@ -53,7 +48,10 @@ def build_quantitative_assessment(
         gross_exposure_pct=gross_exposure_pct,
         max_gross_exposure_pct=max_gross_exposure_pct,
     )
-    explanation = explain_forecast(probability, statistics, microstructure, regime)
+    explanation = explain_forecast(
+        probability, statistics, microstructure, regime,
+        market_context=context_features.get("market_context", {}),
+    )
     return {
         "platform_mode": "quantitative_research_only",
         "execution_policy": "no_order_submission; probability estimates are not BUY/SELL signals",

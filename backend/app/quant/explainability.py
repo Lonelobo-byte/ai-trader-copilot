@@ -4,17 +4,23 @@ from __future__ import annotations
 from typing import Any
 
 
-def explain_forecast(forecast: dict[str, Any], stats: dict[str, Any], micro: dict[str, Any], regime: dict[str, Any]) -> dict[str, Any]:
-    weights = forecast.get("feature_weights", {})
-    values = {
-        "signed_trade_flow": float(micro.get("signed_trade_flow", 0.0)),
-        "depth_imbalance": float(micro.get("depth_imbalance", 0.0)),
-        "trend_strength_z": float(stats.get("trend_strength_z", 0.0)),
-        "return_autocorrelation_lag1": float(stats.get("return_autocorrelation_lag1", 0.0)),
-        "mean_reversion_z_score": float(stats.get("price_z_score", 0.0)),
-    }
+def explain_forecast(
+    forecast: dict[str, Any], stats: dict[str, Any], micro: dict[str, Any], regime: dict[str, Any],
+    market_context: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    context = market_context or {}
+    components = context.get("components", {}) or {}
     factors = sorted(
-        [{"factor": name, "contribution": round(float(weight) * values.get(name, 0.0), 4), "value": round(values.get(name, 0.0), 4)} for name, weight in weights.items()],
+        [
+            {
+                "factor": name,
+                "contribution": round(float(item.get("weight", 0.0)) * float(item.get("score", 0.0)), 4),
+                "value": item.get("evidence"),
+                "bias": item.get("bias", "NEUTRAL"),
+                "available": bool(item.get("available")),
+            }
+            for name, item in components.items()
+        ],
         key=lambda item: abs(item["contribution"]), reverse=True,
     )
     risks = []
@@ -31,5 +37,5 @@ def explain_forecast(forecast: dict[str, Any], stats: dict[str, Any], micro: dic
         "confidence_score": forecast.get("confidence", 0.0),
         "market_regime": regime.get("primary", "unknown"),
         "risk_factors": risks,
-        "statistical_justification": "Forecast combines trade-flow/depth imbalance with return-distribution, autocorrelation, volatility and regime features; estimates include a confidence interval rather than a command.",
+        "statistical_justification": "Forecast combines regime/structure, liquidity behaviour, positioning, order flow, volatility, and cross-market context. Derived indicators are excluded from directional scoring; estimates remain research evidence, not commands.",
     }

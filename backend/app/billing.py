@@ -31,6 +31,12 @@ def callback_configuration_error() -> str | None:
     parsed = urlparse(settings.public_base_url)
     host = (parsed.hostname or "").lower()
     if parsed.scheme != "https" or not host or host in {"localhost", "127.0.0.1", "::1"}:
+        # A sandbox invoice is useful for exercising the local checkout UI.
+        # It cannot grant access from the redirect: only the signed IPN path
+        # can activate a subscription, and a local server is unreachable to
+        # the provider. Production/live payments always retain the HTTPS gate.
+        if settings.nowpayments_sandbox and settings.app_env.lower() in {"local", "development", "test"}:
+            return None
         return "Crypto checkout needs a public HTTPS PUBLIC_BASE_URL before it can receive verified payment updates."
     return None
 

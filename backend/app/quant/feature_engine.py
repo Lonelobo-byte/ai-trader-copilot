@@ -38,6 +38,14 @@ from app.indicators.liquidation_heatmap import calculate_liquidation_heatmap
 from app.quant.statistics import build_statistical_features
 from app.quant.microstructure import analyze_microstructure
 from app.quant.regimes import classify_market_state
+from app.quant.market_context import (
+    build_liquidity_map,
+    build_volume_profile,
+    build_vwap_context,
+    build_volatility_context,
+    classify_positioning,
+    score_market_context,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -486,6 +494,15 @@ def compute_quant_features(
         "fair_value_gaps": find_fair_value_gaps(candles) if candles else [],
         "limitations": "Structure labels are confluence evidence, not proof of institutional intent.",
     }
+    liquidity_map = build_liquidity_map(candles, atr_val) if candles else {"available": False, "reason": "candles_unavailable", "pools": []}
+    positioning = classify_positioning(candles, {
+        "funding_rate": funding_rate,
+        "oi_history": oi_hist,
+        "taker_volume": taker_vol,
+    }) if candles else {"available": False, "state": "UNKNOWN", "reason": "candles_unavailable"}
+    volatility_context = build_volatility_context(candles) if candles else {"available": False, "reason": "candles_unavailable"}
+    volume_profile = build_volume_profile(candles) if candles else {"available": False, "reason": "candles_unavailable"}
+    vwap_context = build_vwap_context(candles) if candles else {"available": False, "reason": "candles_unavailable"}
 
     # ── Cross-asset features ─────────────────────────────────────────────
     dxy = macro.get("DXY (Dollar Index)", {})
@@ -583,9 +600,14 @@ def compute_quant_features(
             "liquidations": liquidations,
         },
         "liquidity": liquidity,
+        "liquidity_map": liquidity_map,
         "order_book": order_book_analysis,
         "sweep": sweep,
         "market_structure": market_structure,
+        "positioning": positioning,
+        "volatility_context": volatility_context,
+        "volume_profile": volume_profile,
+        "vwap_context": vwap_context,
         "cross_asset": cross_asset,
         "sentiment": {
             "fear_greed_value": fear_greed.get("value", 50),
@@ -598,6 +620,9 @@ def compute_quant_features(
         },
         "data_quality": _data_quality(intelligence, closed, current_price),
     }
+    # This is the sole directional scoring contract.  Derived indicators are
+    # retained above for research/dashboard visibility but never enter it.
+    features["market_context"] = score_market_context(features)
 
     return features
 

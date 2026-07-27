@@ -128,8 +128,6 @@ async def run_full_analysis(
 
             # Quant heuristic fallback (mainly for fast backtests)
             current_price = features["current_price"]
-            trend_status = features.get("trend", {}).get("primary", {}).get("status", "sideways_or_mixed")
-            rsi = features.get("momentum", {}).get("rsi", 50.0)
             atr_val = features.get("volatility", {}).get("atr", current_price * 0.01)
             if not atr_val or atr_val <= 0:
                 atr_val = current_price * 0.01
@@ -142,7 +140,10 @@ async def run_full_analysis(
             confidence = 50.0
             grade = "C"
 
-            if trend_status == "bullish" and rsi > 52:
+            context = features.get("market_context", {}) or {}
+            context_direction = context.get("direction", "WAIT")
+            context_score = float(context.get("score") or 0.0)
+            if context.get("status") == "SETUP_CANDIDATE" and context_direction == "LONG":
                 decision = "BUY_WATCH"
                 suggested_entry = current_price
                 suggested_stop = current_price - 1.5 * atr_val
@@ -152,9 +153,9 @@ async def run_full_analysis(
                     current_price + 4.5 * atr_val,
                     current_price + 7.5 * atr_val,
                 ]
-                confidence = 72.0
+                confidence = max(60.0, min(context_score, 85.0))
                 grade = "A"
-            elif trend_status == "bearish" and rsi < 48:
+            elif context.get("status") == "SETUP_CANDIDATE" and context_direction == "SHORT":
                 decision = "SELL_WATCH"
                 suggested_entry = current_price
                 suggested_stop = current_price + 1.5 * atr_val
@@ -164,14 +165,14 @@ async def run_full_analysis(
                     current_price - 4.5 * atr_val,
                     current_price - 7.5 * atr_val,
                 ]
-                confidence = 72.0
+                confidence = max(60.0, min(context_score, 85.0))
                 grade = "A"
 
             cio_result = {
                 "decision": decision,
                 "confidence_pct": confidence,
                 "trade_grade": grade,
-                "explanation": "Heuristic fallback decision (use_ai=False).",
+                "explanation": "Causal market-context fallback decision (use_ai=False). Derived indicators do not vote.",
                 "report_md": "Heuristic backtest report.",
                 "risk_warnings": [],
                 "suggested_entry": suggested_entry,
