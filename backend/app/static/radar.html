@@ -124,7 +124,7 @@
       background: var(--card-bg);
       border: 1px solid rgba(255, 255, 255, 0.04);
       border-radius: 12px;
-      overflow: hidden;
+      overflow-x: auto;
       box-shadow: var(--shadow-sm);
     }
 
@@ -376,6 +376,24 @@
       box-shadow: 0 0 12px var(--neon-purple-glow);
     }
 
+    .radar-action-group {
+      align-items: center;
+      display: flex;
+      gap: 0.35rem;
+    }
+
+    .action-btn-sm.research-btn {
+      background: rgba(255, 255, 255, 0.025);
+      border-color: rgba(255, 255, 255, 0.14);
+      color: var(--text-secondary);
+    }
+
+    .action-btn-sm.research-btn:hover {
+      background: rgba(62, 151, 255, 0.12);
+      border-color: rgba(62, 151, 255, 0.55);
+      color: #d8eaff;
+    }
+
     .radar-empty-state {
       padding: 4rem 2rem;
       text-align: center;
@@ -579,6 +597,297 @@
       animation: spin 1s infinite linear;
       box-shadow: 0 0 15px rgba(139, 92, 246, 0.1);
     }
+
+    .top-research-btn {
+      align-items: center;
+      display: flex;
+      gap: .5rem;
+      padding: 6px 12px;
+      border: 1px solid rgba(62, 151, 255, .38);
+      border-radius: 8px;
+      background: rgba(62, 151, 255, .12);
+      color: #b9d8ff;
+      font-size: .76rem;
+      font-weight: 800;
+      cursor: pointer;
+      transition: .18s ease;
+      white-space: nowrap;
+    }
+
+    .top-research-btn:hover:not(:disabled) {
+      border-color: var(--neon-blue);
+      background: rgba(62, 151, 255, .2);
+      color: #fff;
+      transform: translateY(-1px);
+    }
+
+    .top-research-btn:disabled {
+      cursor: wait;
+      opacity: .65;
+    }
+
+    .top-research-btn-state,
+    .research-run-status {
+      padding: 2px 6px;
+      border: 1px solid rgba(80, 205, 137, .35);
+      border-radius: 4px;
+      background: rgba(80, 205, 137, .11);
+      color: var(--neon-green);
+      font: 800 .58rem var(--font-mono);
+      letter-spacing: .07em;
+    }
+
+    .radar-research-briefs {
+      margin-top: 1.1rem;
+      padding: 1rem;
+      border: 1px solid rgba(62, 151, 255, .2);
+      border-radius: 12px;
+      background: linear-gradient(140deg, rgba(62, 151, 255, .055), rgba(21, 22, 33, .78) 42%);
+    }
+
+    .radar-research-briefs[hidden] {
+      display: none;
+    }
+
+    .radar-research-heading {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 1rem;
+      padding: .1rem .1rem .9rem;
+      border-bottom: 1px solid rgba(255, 255, 255, .07);
+    }
+
+    .research-kicker {
+      display: block;
+      margin-bottom: .3rem;
+      color: var(--neon-blue);
+      font: 800 .56rem var(--font-mono);
+      letter-spacing: .11em;
+      text-transform: uppercase;
+    }
+
+    .radar-research-heading h2 {
+      margin: 0;
+      color: var(--text-primary);
+      font-size: .95rem;
+    }
+
+    .radar-research-heading p {
+      max-width: 680px;
+      margin: .35rem 0 0;
+      color: var(--text-muted);
+      font-size: .7rem;
+      line-height: 1.45;
+    }
+
+    .research-run-status {
+      flex: 0 0 auto;
+      color: var(--text-muted);
+      border-color: rgba(255, 255, 255, .12);
+      background: rgba(255, 255, 255, .035);
+    }
+
+    .research-brief-list {
+      display: grid;
+      gap: .65rem;
+      margin-top: .8rem;
+    }
+
+    .radar-research-brief {
+      overflow: hidden;
+      border: 1px solid var(--border-color);
+      border-radius: 9px;
+      background: rgba(8, 10, 17, .42);
+    }
+
+    .research-brief-summary {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      align-items: center;
+      gap: .8rem;
+      padding: .8rem;
+      cursor: pointer;
+    }
+
+    .research-rank {
+      display: grid;
+      place-items: center;
+      width: 30px;
+      height: 30px;
+      border: 1px solid rgba(62, 151, 255, .25);
+      border-radius: 7px;
+      background: rgba(62, 151, 255, .08);
+      color: var(--neon-blue);
+      font: 800 .72rem var(--font-mono);
+    }
+
+    .research-brief-title {
+      min-width: 0;
+    }
+
+    .research-brief-title strong {
+      display: block;
+      color: var(--text-primary);
+      font-size: .86rem;
+    }
+
+    .research-brief-title span {
+      display: block;
+      overflow: hidden;
+      margin-top: .18rem;
+      color: var(--text-muted);
+      font-size: .66rem;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .research-brief-state {
+      padding: .3rem .45rem;
+      border: 1px solid rgba(255, 255, 255, .11);
+      border-radius: 5px;
+      color: var(--text-secondary);
+      font: 800 .56rem var(--font-mono);
+      letter-spacing: .04em;
+    }
+
+    .research-brief-state.review {
+      border-color: rgba(80, 205, 137, .26);
+      color: var(--neon-green);
+    }
+
+    .research-brief-state.watch {
+      border-color: rgba(241, 188, 0, .24);
+      color: var(--neon-gold);
+    }
+
+    .research-brief-detail {
+      display: none;
+      padding: 0 .8rem .8rem;
+      border-top: 1px solid rgba(255, 255, 255, .06);
+    }
+
+    .radar-research-brief.expanded .research-brief-detail {
+      display: block;
+    }
+
+    .research-thesis {
+      margin: .8rem 0;
+      color: var(--text-secondary);
+      font-size: .72rem;
+      line-height: 1.55;
+    }
+
+    .research-evidence-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: .45rem;
+    }
+
+    .research-evidence-cell {
+      min-width: 0;
+      padding: .6rem;
+      border: 1px solid rgba(255, 255, 255, .06);
+      border-radius: 7px;
+      background: rgba(255, 255, 255, .02);
+    }
+
+    .research-evidence-cell span {
+      display: block;
+      margin-bottom: .25rem;
+      color: var(--text-muted);
+      font: 800 .53rem var(--font-mono);
+      letter-spacing: .07em;
+      text-transform: uppercase;
+    }
+
+    .research-evidence-cell strong {
+      display: block;
+      overflow-wrap: anywhere;
+      color: var(--text-secondary);
+      font: 700 .65rem var(--font-mono);
+      line-height: 1.35;
+    }
+
+    .research-evidence-cell.risk strong {
+      color: var(--neon-gold);
+    }
+
+    .research-brief-footer {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: .7rem;
+      margin-top: .7rem;
+    }
+
+    .research-note {
+      padding: .65rem .7rem;
+      border-left: 2px solid var(--neon-gold);
+      border-radius: 0 6px 6px 0;
+      background: rgba(241, 188, 0, .045);
+      color: var(--text-secondary);
+      font-size: .66rem;
+      line-height: 1.45;
+    }
+
+    .research-note.risk {
+      border-color: var(--neon-red);
+      background: rgba(241, 65, 108, .045);
+    }
+
+    .research-note b {
+      display: block;
+      margin-bottom: .22rem;
+      color: var(--text-muted);
+      font: 800 .54rem var(--font-mono);
+      letter-spacing: .07em;
+      text-transform: uppercase;
+    }
+
+    .research-expand {
+      padding: 0;
+      border: 0;
+      background: transparent;
+      color: var(--neon-blue);
+      font: 700 .62rem var(--font-mono);
+      cursor: pointer;
+    }
+
+    @media (max-width: 900px) {
+      .research-evidence-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+    }
+
+    @media (max-width: 640px) {
+
+      .radar-research-heading,
+      .research-brief-summary {
+        align-items: flex-start;
+      }
+
+      .radar-research-heading {
+        flex-direction: column;
+      }
+
+      .research-brief-summary {
+        grid-template-columns: auto minmax(0, 1fr);
+      }
+
+      .research-brief-state {
+        grid-column: 2;
+        justify-self: start;
+      }
+
+      .research-evidence-grid,
+      .research-brief-footer {
+        grid-template-columns: 1fr;
+      }
+
+      .top-research-btn {
+        max-width: 100%;
+      }
+    }
   </style>
 </head>
 
@@ -622,15 +931,17 @@
   <div class="main-wrapper">
     <header class="main-header">
       <div class="header-title-sec">
-        <h1>Breakout Radar</h1>
-        <div class="breadcrumbs">Home <span class="bullet">/</span> Breakout Radar <span class="badge">V1.0.0</span>
+        <h1>Market Discovery Radar</h1>
+        <div class="breadcrumbs">Home <span class="bullet">/</span> Causal Market Discovery <span class="badge">CAUSAL
+            V1</span>
         </div>
       </div>
 
       <div class="radar-header-actions">
+        <!-- <a class="open-radar-btn" href="index.html?open=ai-connection" title="Manage your OpenRouter key and model">AI Connection</a> -->
         <div class="connection-status"
           style="border-color: rgba(139, 92, 246, 0.3); background: rgba(139, 92, 246, 0.05); color: var(--neon-purple);">
-          <span style="font-size: 0.85rem;">🛡️ MTF Trap Shield: Active</span>
+          <span style="font-size: 0.85rem;">Causal evidence engine: Active</span>
         </div>
         <div class="connection-status" id="radar-status">
           <span class="dot green"></span>
@@ -643,14 +954,14 @@
       <!-- SUMMARY BANNER CARDS -->
       <div class="radar-summary-cards">
         <div class="card radar-summary-card active-breakouts">
-          <h3>Active Breakouts</h3>
+          <h3>Aligned Contexts</h3>
           <div style="display: flex; justify-content: space-between; align-items: flex-end; margin-top: 0.5rem;">
             <h2 id="summary-breakout-count" style="font-size: 2rem; font-weight: 700; line-height: 1;">0</h2>
-            <span class="label" style="margin-bottom: 2px;">MTF-aligned review candidates</span>
+            <span class="label" style="margin-bottom: 2px;">live-confirmed review candidates</span>
           </div>
         </div>
         <div class="card radar-summary-card hot-zones">
-          <h3>Highest Breakout Score</h3>
+          <h3>Highest Evidence Score</h3>
           <div style="display: flex; justify-content: space-between; align-items: flex-end; margin-top: 0.5rem;">
             <h2 id="summary-top-score"
               style="font-size: 2rem; font-weight: 700; line-height: 1; font-family: var(--font-mono); color: var(--neon-gold);">
@@ -659,11 +970,11 @@
           </div>
         </div>
         <div class="card radar-summary-card">
-          <h3>Market Volatility Pool</h3>
+          <h3>Volatility Regime</h3>
           <div style="display: flex; justify-content: space-between; align-items: flex-end; margin-top: 0.5rem;">
             <h2 id="summary-vol-state"
               style="font-size: 1.5rem; font-weight: 700; line-height: 1; color: var(--neon-blue);">STABLE</h2>
-            <span class="label" style="margin-bottom: 2px;">Average ATR Multiplier</span>
+            <span class="label" style="margin-bottom: 2px;">dominant realized-volatility state</span>
           </div>
         </div>
         <div class="card radar-summary-card"
@@ -685,10 +996,10 @@
       <!-- FILTER BAR -->
       <div class="radar-filters">
         <div class="filter-group">
-          <button class="filter-btn active" data-filter="all">All Breakouts</button>
-          <button class="filter-btn" data-filter="recommended">⭐ Top Picks Only</button>
-          <button class="filter-btn" data-filter="bullish">🟢 Bullish Trends</button>
-          <button class="filter-btn" data-filter="bearish">🔴 Bearish Trends</button>
+          <button class="filter-btn active" data-filter="all">All Contexts</button>
+          <button class="filter-btn" data-filter="recommended">Review Candidates</button>
+          <button class="filter-btn" data-filter="bullish">Bullish Context</button>
+          <button class="filter-btn" data-filter="bearish">Bearish Context</button>
         </div>
 
         <div style="display: flex; align-items: center; gap: 0.75rem;">
@@ -700,11 +1011,9 @@
             <option value="15m,4h" selected>🕒 Intraday Scan (15m / 4h)</option>
             <option value="1h,1d">📅 Swing Scan (1h / 1d)</option>
           </select>
-          <button id="ai-radar-btn" hidden onclick="fetchBreakouts(true)"
-            style="background: linear-gradient(135deg, rgba(62, 151, 255, 0.2), rgba(157, 78, 221, 0.25)); border: 1px solid rgba(157, 78, 221, 0.6); color: #e0aaff; font-size: 0.8rem; font-weight: 700; padding: 6px 14px; border-radius: 8px; cursor: pointer; transition: all 0.2s ease; display: flex; align-items: center; gap: 0.5rem; box-shadow: 0 0 10px rgba(157, 78, 221, 0.2);">
-            <span>🤖 Run AI Scoring on Top 3</span>
-            <span
-              style="background: rgba(80, 205, 137, 0.2); color: #50cd89; border: 1px solid rgba(80, 205, 137, 0.5); font-family: var(--font-mono); font-size: 0.7rem; font-weight: 700; padding: 2px 6px; border-radius: 6px;">READY</span>
+          <button id="ai-radar-btn" class="top-research-btn" type="button" onclick="buildTopResearchBriefs()">
+            <span>Build Top-3 Research Briefs</span>
+            <span class="top-research-btn-state" id="top-research-btn-state">READY</span>
           </button>
         </div>
 
@@ -719,14 +1028,13 @@
         <table class="radar-table">
           <thead>
             <tr>
-              <th>Symbol / Evidence Tag</th>
-              <th>Evidence Score</th>
-              <th>Trend</th>
-              <th>Relative Vol (RVol)</th>
-              <th>Vol Multiplier (ATR)</th>
-              <th>RSI (14)</th>
-              <th>5m Change</th>
-              <th>5m Volume</th>
+              <th>Symbol / Causal Thesis</th>
+              <th>Causal Score</th>
+              <th>Regime &amp; Vol</th>
+              <th>Liquidity Reference</th>
+              <th>Price × OI</th>
+              <th>Order Flow</th>
+              <th>Evidence Coverage</th>
               <th>Review Status</th>
               <th>Action</th>
             </tr>
@@ -734,16 +1042,29 @@
           <tbody id="radar-records-tbody">
             <!-- Populated dynamically via JS -->
             <tr>
-              <td colspan="10">
+              <td colspan="9">
                 <div class="radar-empty-state">
                   <span class="icon">🔍</span>
-                  <p>Initializing breakout scanner. Fetching market data...</p>
+                  <p>Mapping market context. Fetching liquidity, positioning and flow evidence...</p>
                 </div>
               </td>
             </tr>
           </tbody>
         </table>
       </div>
+
+      <section class="radar-research-briefs" id="radar-research-briefs" hidden aria-live="polite">
+        <div class="radar-research-heading">
+          <div>
+            <span class="research-kicker">Deterministic evidence · manual research</span>
+            <h2>Top-3 Research Briefs</h2>
+            <p id="research-briefs-summary">Each brief explains the current context without changing Radar’s ranking or
+              authorizing a trade.</p>
+          </div>
+          <span class="research-run-status" id="research-run-status">READY</span>
+        </div>
+        <div class="research-brief-list" id="research-brief-list"></div>
+      </section>
     </main>
 
     <!-- AI VERIFICATION OVERLAY MODAL -->
@@ -763,8 +1084,25 @@
       // State management
       let activeFilter = 'all';
       let rawBreakouts = [];
+      let isBuildingResearchBriefs = false;
+      let radarScanReady = false;
       let refreshTimer = null;
       let secondsRemaining = 30;
+
+      function setResearchButtonState(state = 'READY') {
+        const button = document.getElementById('ai-radar-btn');
+        const badge = document.getElementById('top-research-btn-state');
+        if (!button || !badge) return;
+        const building = state === 'BUILDING';
+        const empty = state === 'EMPTY';
+        const scanning = state === 'SCANNING';
+        const ready = radarScanReady && rawBreakouts.length > 0 && !building;
+        button.disabled = !ready;
+        button.title = ready ? 'Refresh the top three Radar research briefs' : scanning ? 'Radar is scanning for current market contexts' : empty ? 'No eligible Radar contexts were found in this scan' : 'Wait for Radar to finish its scan';
+        badge.textContent = building ? 'BUILDING' : scanning ? 'SCANNING' : empty ? 'NO SETUPS' : ready ? 'READY' : 'WAITING';
+        badge.style.color = building || scanning ? 'var(--neon-blue)' : empty ? 'var(--text-muted)' : ready ? 'var(--neon-green)' : 'var(--neon-gold)';
+        badge.style.borderColor = building || scanning ? 'rgba(62,151,255,.35)' : empty ? 'rgba(255,255,255,.16)' : ready ? 'rgba(80,205,137,.35)' : 'rgba(241,188,0,.35)';
+      }
 
       // DOM Elements
       const recordsTbody = document.getElementById('radar-records-tbody');
@@ -780,6 +1118,50 @@
       const modalTitleSymbol = document.getElementById('modal-title-symbol');
       const modalBodyContent = document.getElementById('modal-body-content');
       const scanModeSelect = document.getElementById('scan-mode-select');
+
+      // Radar is a separate static surface, so it does not inherit the
+      // dashboard's fetch wrapper. Restore the same short-lived session token
+      // here and retry one premium request after a refresh.
+      const radarOriginalFetch = window.fetch.bind(window);
+      const radarAccessToken = () => sessionStorage.getItem('atc_access_token') || '';
+      function radarTokenExpiresWithin(token, seconds = 60) {
+        try {
+          const payload = JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
+          return !payload.exp || Number(payload.exp) * 1000 - Date.now() <= seconds * 1000;
+        } catch (_) {
+          return true;
+        }
+      }
+      async function refreshRadarToken() {
+        const response = await radarOriginalFetch('/auth/refresh', { method: 'POST', credentials: 'same-origin' });
+        if (!response.ok) {
+          sessionStorage.removeItem('atc_access_token');
+          throw new Error('Your Radar session expired. Please sign in again.');
+        }
+        const data = await response.json();
+        sessionStorage.setItem('atc_access_token', data.access_token);
+        return data.access_token;
+      }
+      async function ensureRadarAccessToken(forceRefresh = false) {
+        const token = radarAccessToken();
+        if (!forceRefresh && token && !radarTokenExpiresWithin(token)) return token;
+        return refreshRadarToken();
+      }
+      async function premiumRadarFetch(url, options = {}, retried = false) {
+        let token = await ensureRadarAccessToken();
+        const headers = new Headers(options.headers || {});
+        headers.set('Authorization', `Bearer ${token}`);
+        const response = await radarOriginalFetch(url, { ...options, headers, credentials: 'same-origin' });
+        if (response.status !== 401 || retried) return response;
+        token = await ensureRadarAccessToken(true);
+        headers.set('Authorization', `Bearer ${token}`);
+        return radarOriginalFetch(url, { ...options, headers, credentials: 'same-origin' });
+      }
+      function showRadarAuthRequired(message) {
+        refreshText.textContent = message;
+        const status = document.getElementById('radar-status');
+        if (status) status.querySelector('.text').textContent = 'Sign in required';
+      }
 
       // AI Radar Cooldown Manager (Hardened 5-minute / 300s limit)
       const AI_COOLDOWN_MS = 5 * 60 * 1000; // 300,000 ms = 5 minutes
@@ -852,7 +1234,7 @@
         const [ltf, htf] = (scanModeSelect.value || '5m,1h').split(',');
 
         try {
-          const response = await fetch(`/quant/breakout-radar?ltf=${ltf}&htf=${htf}&use_ai=${useAi}`);
+          const response = await premiumRadarFetch(`/quant/breakout-radar?ltf=${ltf}&htf=${htf}&use_ai=${useAi}`);
           if (!response.ok) {
             const errData = await response.json().catch(() => ({}));
             if (response.status === 429) {
@@ -875,6 +1257,7 @@
           updateSummary();
         } catch (error) {
           console.error("Error loading breakout data:", error);
+          if (/sign in|unauthorized|401/i.test(error.message || '')) showRadarAuthRequired('Sign in is required before Radar can scan.');
         } finally {
           if (useAi) isFetchingAI = false;
           spinner.style.display = 'none';
@@ -1045,7 +1428,53 @@
         }).join('');
       }
 
-      // Trigger AI verification modal
+      // Causal Radar renderer. This definition intentionally replaces the
+      // retired breakout/indicator table above while preserving the existing
+      // filter and review-modal wiring.
+      function renderTable() {
+        const filtered = rawBreakouts.filter(item => {
+          if (activeFilter === 'recommended') return item.review_status === 'REVIEW_CANDIDATE';
+          if (activeFilter === 'bullish') return item.direction === 'BULLISH';
+          if (activeFilter === 'bearish') return item.direction === 'BEARISH';
+          return true;
+        });
+        if (!filtered.length) {
+          recordsTbody.innerHTML = `<tr><td colspan="9"><div class="radar-empty-state"><span class="icon">⌛</span><p>No aligned causal context matches this filter.</p></div></td></tr>`;
+          return;
+        }
+        const label = value => String(value || 'UNAVAILABLE').replace(/_/g, ' ');
+        const poolText = pool => pool ? `${label(pool.kind)} · ${Number(pool.price).toLocaleString(undefined, { maximumFractionDigits: 6 })}` : 'No mapped pool';
+        recordsTbody.innerHTML = filtered.map(item => {
+          const context = item.market_context || {};
+          const components = context.components || {};
+          const structure = item.market_structure || {};
+          const positioning = item.positioning || {};
+          const volatility = item.volatility_context || {};
+          const coverage = item.coverage || context.coverage || {};
+          const flow = components.order_flow || {};
+          const isLong = item.direction === 'BULLISH';
+          const directionClass = isLong ? 'bullish' : item.direction === 'BEARISH' ? 'bearish' : 'neutral';
+          const scoreClass = item.score >= 70 ? 'score-high' : item.score >= 55 ? 'score-medium' : 'score-low';
+          const scoreFill = item.score >= 70 ? 'score-high-fill' : item.score >= 55 ? 'score-medium-fill' : 'score-low-fill';
+          const thesis = item.direction === 'NEUTRAL' ? 'WAIT — no aligned causal thesis' : `${item.direction} context`;
+          const contradictions = (item.contradictions || []).map(label).join(', ');
+          const state = item.review_status === 'REVIEW_CANDIDATE' ? '<span class="priority-badge high">REVIEW CANDIDATE</span>' : '<span class="priority-badge low">WAIT / WATCH</span>';
+          return `
+            <tr class="${item.review_status === 'REVIEW_CANDIDATE' ? 'row-verified' : ''}">
+              <td class="symbol-cell"><div style="display:flex;flex-direction:column;gap:4px"><strong style="font-size:.95rem">${item.symbol}</strong><span class="top-badge-tag ${item.review_status === 'REVIEW_CANDIDATE' ? 'badge-verified' : 'badge-quant'}">${thesis}</span><span style="font-size:.62rem;color:var(--text-muted)">${contradictions ? `Contradiction: ${contradictions}` : 'Evidence aligned so far'}</span></div></td>
+              <td><div class="score-cell"><span class="score-badge ${scoreClass}">${item.score}</span><div class="score-bar"><div class="score-fill ${scoreFill}" style="width:${item.score}%"></div></div></div></td>
+              <td><span class="direction-badge ${directionClass}">${label(structure.phase)} · ${label(volatility.state)}</span></td>
+              <td class="value-mono">${poolText(item.target_pool)}</td>
+              <td class="value-mono">${label(positioning.state)}${positioning.oi_change_pct !== undefined ? ` · ${Number(positioning.oi_change_pct).toFixed(2)}%` : ''}</td>
+              <td class="value-mono">${label(flow.bias || 'UNAVAILABLE')}</td>
+              <td class="value-mono">${coverage.available_domains || 0}/${coverage.required_domains || 4} domains</td>
+              <td>${state}</td>
+              <td><div class="radar-action-group"><button class="action-btn-sm" type="button" onclick="verifySetupWithAI('${item.symbol}')">Review</button><a class="action-btn-sm research-btn" href="index.html?symbol=${encodeURIComponent(item.symbol)}">Research ↗</a></div></td>
+            </tr>`;
+        }).join('');
+      }
+
+      // Trigger causal review modal
       async function verifySetupWithAI(symbol) {
         modalTitleSymbol.textContent = `AI SMC structure analysis: ${symbol}`;
         modalOverlay.classList.add('active');
@@ -1058,7 +1487,7 @@
       `;
 
         try {
-          const response = await fetch('/quant/verify-setup', {
+          const response = await premiumRadarFetch('/quant/verify-setup', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ symbol })
@@ -1196,6 +1625,224 @@
       `;
       }
 
+      // Causal review overrides the legacy AI/indicator modal copy.
+      async function verifySetupWithAI(symbol) {
+        modalTitleSymbol.textContent = `Causal research brief: ${symbol}`;
+        modalOverlay.classList.add('active');
+        modalBodyContent.innerHTML = `<div class="ai-loading-box"><div class="ai-loader-ring"></div><p style="color:var(--text-secondary);font-size:.9rem">Mapping liquidity, profile, VWAP and the live depth snapshot…</p></div>`;
+        try {
+          const response = await premiumRadarFetch('/quant/verify-setup', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ symbol })
+          });
+          const data = await response.json();
+          if (!response.ok) throw new Error(data.detail || 'Causal review query failed.');
+          renderAIResult(data);
+        } catch (err) {
+          modalBodyContent.innerHTML = `<div class="radar-empty-state" style="color:var(--neon-red);padding:2rem 1rem"><span class="icon">⚠</span><p>Causal review failed</p><span class="text-muted" style="font-size:.8rem">${err.message}</span></div>`;
+        }
+      }
+
+      function renderAIResult(data) {
+        const context = data.market_context || {};
+        const components = context.components || {};
+        const liquidity = data.liquidity_map || {};
+        const positioning = data.positioning || {};
+        const profile = data.volume_profile || {};
+        const vwap = data.vwap_context || {};
+        const label = value => String(value || 'UNAVAILABLE').replace(/_/g, ' ');
+        const pool = data.target_pool ? `${label(data.target_pool.kind)} · ${data.target_pool.price}` : 'No directional pool mapped';
+        const limitations = (data.limitations || []).map(item => `<li>${item}</li>`).join('');
+        const contradictions = (context.contradictions || []).map(label).join(', ') || 'None reported';
+        modalBodyContent.innerHTML = `
+          <div class="ai-verdict-banner ${data.verdict === 'REVIEW_CANDIDATE' ? 'verdict-continuation' : 'verdict-reversal'}"><span>${label(data.verdict)}</span><span>Evidence score: ${data.evidence_score ?? 0}/100</span></div>
+          <div class="ai-levels-grid"><div class="ai-level-item"><span>Regime</span><strong>${label(data.market_structure?.phase)}</strong></div><div class="ai-level-item"><span>Liquidity target</span><strong>${pool}</strong></div><div class="ai-level-item invalid"><span>Contradictions</span><strong>${contradictions}</strong></div></div>
+          <div class="ai-reasoning-section"><h4>Causal evidence</h4><ul class="ai-reasoning-list"><li>Positioning: ${label(positioning.state)}</li><li>Volume profile: ${label(profile.location)}</li><li>VWAP: ${label(vwap.price_relation)}</li><li>Coverage: ${(context.coverage || {}).available_domains || 0}/${(context.coverage || {}).required_domains || 4} required domains</li></ul></div>
+          <div class="ai-reasoning-section"><h4>Known limitations</h4><ul class="ai-reasoning-list">${limitations}</ul></div>
+          <p style="font-size:.78rem;color:var(--text-muted);margin:1rem 0 0">${data.trade_instruction || 'Radar does not authorize execution.'}</p>`;
+      }
+
+      function researchLabel(value, fallback = 'UNAVAILABLE') {
+        const text = String(value ?? '').trim();
+        return text ? text.replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').toUpperCase() : fallback;
+      }
+
+      function escapeResearch(value) {
+        return String(value ?? '').replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[char]);
+      }
+
+      function formatResearchPrice(value) {
+        const numeric = Number(value);
+        return Number.isFinite(numeric) ? numeric.toLocaleString(undefined, { maximumFractionDigits: 6 }) : 'UNAVAILABLE';
+      }
+
+      function clearResearchBriefs() {
+        const panel = document.getElementById('radar-research-briefs');
+        const list = document.getElementById('research-brief-list');
+        if (panel) panel.hidden = true;
+        if (list) list.innerHTML = '';
+      }
+
+      function showResearchBriefNotice(title, message, status = 'WAITING') {
+        const panel = document.getElementById('radar-research-briefs');
+        const list = document.getElementById('research-brief-list');
+        const runStatus = document.getElementById('research-run-status');
+        const summary = document.getElementById('research-briefs-summary');
+        if (panel) panel.hidden = false;
+        if (runStatus) runStatus.textContent = status;
+        if (summary) summary.textContent = 'Research briefs appear here after Radar has a current, usable market context.';
+        if (list) list.innerHTML = `<div class="research-note"><b>${escapeResearch(title)}</b>${escapeResearch(message)}</div>`;
+      }
+
+      function toggleResearchBrief(index) {
+        const brief = document.getElementById(`research-brief-${index}`);
+        if (brief) brief.classList.toggle('expanded');
+      }
+
+      function renderTopResearchBriefs(briefs) {
+        const list = document.getElementById('research-brief-list');
+        const runStatus = document.getElementById('research-run-status');
+        const summary = document.getElementById('research-briefs-summary');
+        if (!list) return;
+        const successful = briefs.filter(brief => !brief.error).length;
+        if (runStatus) runStatus.textContent = `${successful} / ${briefs.length} READY`;
+        if (summary) summary.textContent = 'The rank above remains deterministic. These refreshed briefs explain context, controls, and evidence gaps for manual research.';
+        list.innerHTML = briefs.map((brief, index) => {
+          if (brief.error) {
+            return `<article class="radar-research-brief"><div class="research-brief-summary"><span class="research-rank">${index + 1}</span><div class="research-brief-title"><strong>${escapeResearch(brief.candidate.symbol)}</strong><span>Research refresh unavailable</span></div><span class="research-brief-state watch">RETRY LATER</span></div><div class="research-brief-detail"><p class="research-thesis">${escapeResearch(brief.error)}</p></div></article>`;
+          }
+          const detail = brief.detail;
+          const candidate = brief.candidate;
+          const context = detail.market_context || {};
+          const structure = detail.market_structure || candidate.market_structure || {};
+          const scanContext = candidate.market_context || {};
+          const scanComponents = scanContext.components || {};
+          const positioning = candidate.positioning || detail.positioning || {};
+          const liveDepth = detail.liquidity || {};
+          const target = detail.target_pool || candidate.target_pool || null;
+          const levels = detail.levels || {};
+          const contradictions = context.contradictions || candidate.contradictions || [];
+          const limitations = detail.limitations || [];
+          const review = detail.verdict === 'REVIEW_CANDIDATE';
+          const direction = detail.direction || candidate.direction || 'WAIT';
+          const thesis = `${researchLabel(structure.phase)} on the primary timeframe within ${researchLabel(structure.higher_timeframe_phase)} higher-timeframe context. ${researchLabel(direction)} context requires the listed liquidity and execution controls to remain intact.`;
+          const controlText = contradictions.length ? contradictions.map(researchLabel).join(' · ') : 'No contradiction reported in this brief';
+          const limitationsText = limitations.length ? limitations[0] : 'No additional limitation was reported.';
+          const cells = [
+            ['Liquidity target', target ? `${researchLabel(target.kind)} · ${formatResearchPrice(target.price)}` : 'No directional pool mapped', ''],
+            ['Invalidation reference', formatResearchPrice(levels.invalidation_level), 'risk'],
+            ['Positioning', `${researchLabel(positioning.state)}${positioning.oi_change_pct !== undefined ? ` · ${Number(positioning.oi_change_pct).toFixed(2)}% OI` : ''}`, ''],
+            ['Order flow', researchLabel(scanComponents.order_flow?.bias || 'UNAVAILABLE'), ''],
+            ['Live depth', liveDepth.available ? `${Number(liveDepth.depth_imbalance || 0).toFixed(2)} imbalance` : 'Depth unavailable', ''],
+            ['Execution spread', liveDepth.spread_pct !== null && liveDepth.spread_pct !== undefined ? `${Number(liveDepth.spread_pct).toFixed(4)}%` : 'Spread unavailable', ''],
+          ];
+          return `<article class="radar-research-brief" id="research-brief-${index}">
+            <div class="research-brief-summary" role="button" tabindex="0" onclick="toggleResearchBrief(${index})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleResearchBrief(${index})}">
+              <span class="research-rank">${index + 1}</span>
+              <div class="research-brief-title"><strong>${escapeResearch(candidate.symbol)}</strong><span>${escapeResearch(thesis)}</span></div>
+              <span class="research-brief-state ${review ? 'review' : 'watch'}">${review ? 'RESEARCH READY' : 'WATCH CONTEXT'}</span>
+            </div>
+            <div class="research-brief-detail">
+              <p class="research-thesis">${escapeResearch(thesis)}</p>
+              <div class="research-evidence-grid">${cells.map(([label, value, tone]) => `<div class="research-evidence-cell ${tone}"><span>${escapeResearch(label)}</span><strong>${escapeResearch(value)}</strong></div>`).join('')}</div>
+              <div class="research-brief-footer"><div class="research-note risk"><b>Contradictory evidence</b>${escapeResearch(controlText)}</div><div class="research-note"><b>Known limitation</b>${escapeResearch(limitationsText)}</div></div>
+              <button class="research-expand" type="button" onclick="toggleResearchBrief(${index})">Collapse brief</button>
+            </div>
+          </article>`;
+        }).join('');
+      }
+
+      async function buildTopResearchBriefs() {
+        if (isBuildingResearchBriefs) return;
+        const panel = document.getElementById('radar-research-briefs');
+        const list = document.getElementById('research-brief-list');
+        const runStatus = document.getElementById('research-run-status');
+        if (!radarScanReady || !rawBreakouts.length) {
+          const message = radarScanReady
+            ? 'This scan did not produce an eligible Radar context. Change the timeframe or wait for the next completed scan.'
+            : 'Radar is still collecting the current market context. The button will activate when the scan is ready.';
+          showResearchBriefNotice('Research briefs are not ready yet', message, radarScanReady ? 'NO SETUPS' : 'SCANNING');
+          return;
+        }
+        const ranked = [...rawBreakouts].sort((left, right) => {
+          const candidateGap = Number(right.review_status === 'REVIEW_CANDIDATE') - Number(left.review_status === 'REVIEW_CANDIDATE');
+          return candidateGap || Number(right.score || 0) - Number(left.score || 0);
+        }).slice(0, 3);
+        const [ltf, htf] = (scanModeSelect.value || '5m,1h').split(',');
+        isBuildingResearchBriefs = true;
+        setResearchButtonState('BUILDING');
+        if (panel) panel.hidden = false;
+        if (runStatus) runStatus.textContent = 'REFRESHING EVIDENCE';
+        if (list) list.innerHTML = `<div class="research-note"><b>Research queue</b>Refreshing structure, liquidity, VWAP, profile, and depth evidence for ${ranked.length} Radar contexts…</div>`;
+        try {
+          const briefs = await Promise.all(ranked.map(async candidate => {
+            const controller = new AbortController();
+            const timeoutId = window.setTimeout(() => controller.abort(), 15_000);
+            try {
+              const response = await premiumRadarFetch('/quant/verify-setup', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ symbol: candidate.symbol, ltf, htf }),
+                signal: controller.signal,
+              });
+              const detail = await response.json();
+              if (!response.ok) throw new Error(detail.detail || 'The current research snapshot could not be refreshed.');
+              return { candidate, detail };
+            } catch (error) {
+              const message = error?.name === 'AbortError'
+                ? 'Research refresh timed out after 15 seconds. Please retry when market data is available.'
+                : error.message || 'The current research snapshot could not be refreshed.';
+              return { candidate, error: message };
+            } finally {
+              window.clearTimeout(timeoutId);
+            }
+          }));
+          renderTopResearchBriefs(briefs);
+          panel?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        } catch (error) {
+          showResearchBriefNotice('Research refresh failed', error.message || 'Radar could not build the selected research briefs. Please retry.', 'RETRY LATER');
+          panel?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        } finally {
+          isBuildingResearchBriefs = false;
+          setResearchButtonState();
+        }
+      }
+
+      // This final definition keeps automatic scans deterministic; research is an explicit, separate action.
+      async function fetchBreakouts() {
+        radarScanReady = false;
+        setResearchButtonState('SCANNING');
+        spinner.style.display = 'block';
+        refreshText.textContent = 'Scanning causal market evidence...';
+        const [ltf, htf] = (scanModeSelect.value || '5m,1h').split(',');
+        try {
+          const response = await premiumRadarFetch(`/quant/breakout-radar?ltf=${ltf}&htf=${htf}`);
+          if (!response.ok) {
+            const errData = await response.json().catch(() => ({}));
+            throw new Error(errData.detail || 'API query failed.');
+          }
+          rawBreakouts = await response.json();
+          radarScanReady = true;
+          clearResearchBriefs();
+          renderTable();
+          updateSummary();
+          if (rawBreakouts.length) {
+            setResearchButtonState();
+          } else {
+            setResearchButtonState('EMPTY');
+            showResearchBriefNotice('No eligible Radar contexts', 'The scan completed, but current structure, liquidity, and volatility conditions did not produce a researchable setup. Radar will check again automatically.', 'NO SETUPS');
+          }
+        } catch (error) {
+          rawBreakouts = [];
+          radarScanReady = false;
+          console.error('Error loading Radar data:', error);
+          setResearchButtonState();
+          showResearchBriefNotice('Radar scan unavailable', 'Research briefs cannot be built until a live Radar scan succeeds. Check your session or market-data connection, then let Radar retry.', 'SCAN FAILED');
+          if (/sign in|unauthorized|401/i.test(error.message || '')) showRadarAuthRequired('Sign in is required before Radar can scan.');
+        } finally {
+          spinner.style.display = 'none';
+          secondsRemaining = 30;
+        }
+      }
+
       // Modal close controls
       modalCloseBtn.addEventListener('click', () => {
         modalOverlay.classList.remove('active');
@@ -1236,6 +1883,20 @@
         }
       }
 
+      function updateSummary() {
+        const activeCount = rawBreakouts.filter(item => item.review_status === 'REVIEW_CANDIDATE').length;
+        breakoutCountEl.textContent = activeCount;
+        const topItem = rawBreakouts[0];
+        topScoreEl.textContent = topItem ? topItem.score : '-';
+        topSymbolEl.textContent = topItem ? topItem.symbol : '-';
+        const states = rawBreakouts.map(item => item.volatility_context?.state).filter(Boolean);
+        const expansionCount = states.filter(state => state === 'EXPANSION').length;
+        const compressionCount = states.filter(state => state === 'COMPRESSION').length;
+        const dominant = expansionCount > compressionCount ? 'EXPANSION' : compressionCount > expansionCount ? 'COMPRESSION' : 'NORMAL';
+        volStateEl.textContent = dominant;
+        volStateEl.style.color = dominant === 'EXPANSION' ? 'var(--neon-gold)' : dominant === 'COMPRESSION' ? 'var(--neon-purple)' : 'var(--neon-blue)';
+      }
+
       // Setup filter listeners
       document.querySelectorAll('.filter-btn').forEach(btn => {
         btn.addEventListener('click', () => {
@@ -1263,11 +1924,26 @@
         }, 1000);
       }
 
-      // Load on start
-      fetchBreakouts();
-      startTimer();
-      updateAICooldownUI();
-      setInterval(updateAICooldownUI, 1000);
+      // Load only after the token is present or safely refreshed. This avoids
+      // the misleading initial 401 that a standalone Radar page used to log.
+      async function startRadar() {
+        try {
+          // A standalone Radar tab can inherit a valid-looking but stale
+          // sessionStorage token from a restarted backend. Refresh before the
+          // initial protected call so the browser never emits a spurious 401.
+          await ensureRadarAccessToken(true);
+          await fetchBreakouts();
+          startTimer();
+        } catch (error) {
+          rawBreakouts = [];
+          radarScanReady = false;
+          setResearchButtonState();
+          showResearchBriefNotice('Radar session required', 'Research briefs need a successful live Radar scan. Sign in again, then return here and Radar will load the current contexts.', 'SIGN IN REQUIRED');
+          showRadarAuthRequired(error.message || 'Please sign in to use Radar.');
+        }
+      }
+      startRadar();
+      setResearchButtonState();
     </script>
     <script>
       // Sci-Fi neural constellation background

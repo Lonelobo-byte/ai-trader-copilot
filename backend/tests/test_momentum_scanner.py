@@ -59,13 +59,12 @@ async def test_get_breakout_candidates():
         assert "status" in candidate
         assert "htf_direction" in candidate
         assert "review_status" in candidate
-        assert candidate["evaluation_mode"] == "structure_then_live_execution_evidence"
+        assert candidate["evaluation_mode"] == "causal_market_discovery_then_live_confirmation"
         assert "advanced_confirmation" in candidate
-        assert "smc_confluence" in candidate
-        if candidate["status"].startswith("CONFIRMED_"):
-            assert candidate["structure"]["confirmed"] is True
-            assert candidate["mtf_aligned"] is True
-            assert candidate["rvol"] >= 1.5
+        assert "market_context" in candidate
+        assert "liquidity_map" in candidate
+        assert "positioning" in candidate
+        assert "rsi" in candidate and candidate["rsi"] is None
 
 
 def test_live_confirmation_rejects_opposing_order_flow():
@@ -163,13 +162,14 @@ def test_verify_setup_endpoint_uses_deterministic_evidence():
             "bids": [[110.0, 500.0]], "asks": [[110.01, 500.0]],
         })
 
-        response = client.post("/quant/verify-setup", json={"symbol": "BTCUSDT"})
+        response = client.post("/quant/verify-setup", json={"symbol": "BTCUSDT", "ltf": "15m", "htf": "4h"})
         assert response.status_code == 200
+        assert [call.args[1] for call in mock_instance.klines.await_args_list] == ["15m", "4h"]
         data = response.json()
         assert data["verdict"] in {"REVIEW_CANDIDATE", "WATCH_ONLY"}
-        assert data["evaluation_mode"] == "deterministic_manual_review"
+        assert data["evaluation_mode"] == "causal_manual_review"
         assert "not a probability" in data["confidence_label"].lower()
         assert "liquidity" in data
         assert "spread_pct" in data["liquidity"]
-        assert "depth_bids_1pct" in data["liquidity"]
+        assert "bid_depth_notional" in data["liquidity"]
         assert "token_health" not in data

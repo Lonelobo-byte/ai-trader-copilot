@@ -98,6 +98,15 @@ async def test_run_full_analysis_deterministic_flow() -> None:
     assert "quantitative" in payload
     assert payload["decision"] == "SCANNING"
     assert "probability_engine" in payload["quantitative"]
+    snapshot = payload["analysis_snapshot"]
+    assert snapshot["schema_version"] == "analysis_snapshot.v1"
+    assert snapshot["symbol"] == payload["symbol"]
+    assert snapshot["timeframe"] == payload["timeframe"]
+    assert snapshot["market"] == payload["market"]
+    assert snapshot["causal"]["market_context"] == payload["market_context"]
+    assert snapshot["execution"]["trade_setup"] == payload["trade_setup"]
+    assert snapshot["execution"]["signal_monitor"] == payload["signal_monitor"]
+    assert snapshot["execution"]["derivatives"] == payload["derivatives"]
 
 
 @pytest.mark.asyncio

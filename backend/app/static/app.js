@@ -84,17 +84,168 @@ const wsStatus = document.getElementById('ws-status');
 const controlsCard = document.querySelector('.controls-card');
 const councilProcessingTicker = document.getElementById('council-processing-ticker');
 
+// Per-user OpenRouter connection. The browser only ever receives a masked key
+// hint; the actual key is posted on save and is never rendered back.
+let activeAiConnection = null;
+
+function aiConnectionElements() {
+  return {
+    modal: document.getElementById('ai-connection-modal'),
+    headerButton: document.getElementById('open-ai-connection-btn'),
+    modelBadge: document.getElementById('ai-connection-model'),
+    statusCopy: document.getElementById('ai-connection-status-copy'),
+    saved: document.getElementById('ai-connection-saved'),
+    keyHint: document.getElementById('ai-connection-key-hint'),
+    savedModel: document.getElementById('ai-connection-saved-model'),
+    keyInput: document.getElementById('ai-connection-api-key'),
+    modelInput: document.getElementById('ai-connection-model-input'),
+    message: document.getElementById('ai-connection-form-message'),
+    saveButton: document.getElementById('save-ai-connection-btn'),
+    removeButton: document.getElementById('remove-ai-connection-btn'),
+  };
+}
+
+async function aiConnectionResponseError(response) {
+  try {
+    const data = await response.json();
+    return data.detail || 'Could not update the AI connection.';
+  } catch (_) {
+    return 'Could not update the AI connection.';
+  }
+}
+
+function renderAiConnection(connection) {
+  activeAiConnection = connection || { connected: false };
+  const elements = aiConnectionElements();
+  const connected = Boolean(activeAiConnection.connected);
+  elements.headerButton?.classList.toggle('is-connected', connected);
+  if (elements.modelBadge) elements.modelBadge.textContent = connected ? (activeAiConnection.model || 'Connected') : 'Set key';
+  if (elements.statusCopy) elements.statusCopy.textContent = connected
+    ? `Connected with ${activeAiConnection.model}. You can rotate the key or change the model below.`
+    : 'Connect your own key and choose the model you want to use for AI synthesis.';
+  if (elements.saved) elements.saved.hidden = !connected;
+  if (elements.keyHint) elements.keyHint.textContent = activeAiConnection.key_hint || '••••';
+  if (elements.savedModel) elements.savedModel.textContent = activeAiConnection.model || '—';
+  if (elements.modelInput && (connected || !elements.modelInput.value)) elements.modelInput.value = activeAiConnection.model || 'openrouter/free';
+  if (elements.removeButton) elements.removeButton.hidden = !connected;
+}
+
+async function loadAiConnection({ quiet = false } = {}) {
+  const response = await fetch('/ai-connection');
+  if (!response.ok) {
+    if (!quiet) throw new Error(await aiConnectionResponseError(response));
+    return null;
+  }
+  const connection = await response.json();
+  renderAiConnection(connection);
+  return connection;
+}
+
+window.openAiConnectionModal = async function openAiConnectionModal() {
+  const elements = aiConnectionElements();
+  if (!elements.modal) return;
+  elements.modal.style.display = 'flex';
+  if (elements.message) elements.message.textContent = '';
+  if (elements.keyInput) elements.keyInput.value = '';
+  try {
+    await loadAiConnection();
+  } catch (error) {
+    if (elements.statusCopy) elements.statusCopy.textContent = error.message || 'Sign in to manage your AI connection.';
+    if (elements.message) elements.message.textContent = error.message || 'Could not load your connection.';
+  }
+};
+
+window.closeAiConnectionModal = function closeAiConnectionModal() {
+  const modal = document.getElementById('ai-connection-modal');
+  if (modal) modal.style.display = 'none';
+};
+
+window.saveAiConnection = async function saveAiConnection(event) {
+  event.preventDefault();
+  const elements = aiConnectionElements();
+  const model = elements.modelInput?.value.trim() || '';
+  const apiKey = elements.keyInput?.value || '';
+  if (!model) {
+    if (elements.message) elements.message.textContent = 'Enter the OpenRouter model ID you want to use.';
+    return;
+  }
+  if (elements.message) { elements.message.textContent = ''; elements.message.classList.remove('is-success'); }
+  if (elements.saveButton) { elements.saveButton.disabled = true; elements.saveButton.textContent = 'Saving…'; }
+  try {
+    const response = await fetch('/ai-connection/openrouter', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ api_key: apiKey, model }),
+    });
+    if (!response.ok) throw new Error(await aiConnectionResponseError(response));
+    const connection = await response.json();
+    renderAiConnection(connection);
+    if (elements.keyInput) elements.keyInput.value = '';
+    if (elements.message) { elements.message.textContent = 'Connection saved. Your next AI analysis will use this model.'; elements.message.classList.add('is-success'); }
+  } catch (error) {
+    if (elements.message) elements.message.textContent = error.message || 'Could not save the AI connection.';
+  } finally {
+    if (elements.saveButton) { elements.saveButton.disabled = false; elements.saveButton.textContent = 'Save connection'; }
+  }
+};
+
+window.removeAiConnection = async function removeAiConnection() {
+  if (!activeAiConnection?.connected || !window.confirm('Remove this saved OpenRouter key? AI synthesis will pause until you add another key.')) return;
+  const elements = aiConnectionElements();
+  if (elements.removeButton) { elements.removeButton.disabled = true; elements.removeButton.textContent = 'Removing…'; }
+  try {
+    const response = await fetch('/ai-connection/openrouter', { method: 'DELETE' });
+    if (!response.ok) throw new Error(await aiConnectionResponseError(response));
+    renderAiConnection({ connected: false });
+    if (elements.keyInput) elements.keyInput.value = '';
+    if (elements.message) { elements.message.textContent = 'Saved key removed.'; elements.message.classList.add('is-success'); }
+  } catch (error) {
+    if (elements.message) elements.message.textContent = error.message || 'Could not remove the AI connection.';
+  } finally {
+    if (elements.removeButton) { elements.removeButton.disabled = false; elements.removeButton.textContent = 'Remove key'; }
+  }
+};
+
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape') window.closeAiConnectionModal?.();
+});
+
+function startAiConnectionControls() {
+  loadAiConnection({ quiet: true }).catch(() => {});
+  if (new URLSearchParams(window.location.search).get('open') === 'ai-connection') {
+    window.openAiConnectionModal?.();
+  }
+}
+if (window.atcAuthenticated) startAiConnectionControls();
+window.addEventListener('atc:authenticated', startAiConnectionControls);
+
 // Macro Alert & RAG Stats Elements
 const macroAlertBanner = document.getElementById('macro-alert-banner');
 const macroAlertText = document.getElementById('macro-alert-text');
 const closeMacroAlertBtn = document.getElementById('close-macro-alert');
 const historicalStatsDisplay = document.getElementById('historical-stats-display');
 const historicalStatsText = document.getElementById('historical-stats-text');
+let macroAlertDismissTimer = null;
+
+function dismissMacroAlert() {
+  window.clearTimeout(macroAlertDismissTimer);
+  macroAlertDismissTimer = null;
+  isMacroAlertDismissed = true;
+  macroAlertBanner?.classList.add('hidden');
+}
+
+function showMacroAlert(message) {
+  if (!macroAlertBanner || isMacroAlertDismissed) return;
+  const wasHidden = macroAlertBanner.classList.contains('hidden');
+  macroAlertText.textContent = message;
+  macroAlertBanner.classList.remove('hidden');
+  if (wasHidden) {
+    window.clearTimeout(macroAlertDismissTimer);
+    macroAlertDismissTimer = window.setTimeout(dismissMacroAlert, 10_000);
+  }
+}
 
 if (closeMacroAlertBtn) {
   closeMacroAlertBtn.addEventListener('click', () => {
-    isMacroAlertDismissed = true;
-    macroAlertBanner.classList.add('hidden');
+    dismissMacroAlert();
   });
 }
 
@@ -159,6 +310,22 @@ const monitorPriceVal = document.getElementById('monitor-price-val');
 const monitorEntryVal = document.getElementById('monitor-entry-val');
 const monitorEntryPriceVal = document.getElementById('monitor-entry-price-val');
 const monitorStopVal = document.getElementById('monitor-stop-val');
+const monitorEvidenceHero = document.getElementById('monitor-evidence-hero');
+const monitorEvidenceState = document.getElementById('monitor-evidence-state');
+const monitorEvidenceTitle = document.getElementById('monitor-evidence-title');
+const monitorEvidenceDetail = document.getElementById('monitor-evidence-detail');
+const monitorEvidenceMark = document.getElementById('monitor-evidence-mark');
+const monitorMissingEvidence = document.getElementById('monitor-missing-evidence');
+const monitorMissingTitle = document.getElementById('monitor-missing-title');
+const monitorMissingDetail = document.getElementById('monitor-missing-detail');
+const monitorConfirmationScenarios = document.getElementById('monitor-confirmation-scenarios');
+const monitorGateStrip = document.getElementById('monitor-gate-strip');
+const monitorTradeLifecycle = document.getElementById('monitor-trade-lifecycle');
+const monitorWatchPlan = document.getElementById('monitor-watch-plan');
+const monitorWatchStepOneTitle = document.getElementById('monitor-watch-step-one-title');
+const monitorWatchStepOneDetail = document.getElementById('monitor-watch-step-one-detail');
+const monitorWatchStepTwoTitle = document.getElementById('monitor-watch-step-two-title');
+const monitorWatchStepTwoDetail = document.getElementById('monitor-watch-step-two-detail');
 const monitorTargetMilestones = document.getElementById('monitor-target-milestones');
 const monitorJourneyProgressVal = document.getElementById('monitor-journey-progress-val');
 const monitorJourneyProgressFill = document.getElementById('monitor-journey-progress-fill');
@@ -188,6 +355,24 @@ const setupRunnerVal = document.getElementById('setup-runner-val');
 const setupLeverageVal = document.getElementById('setup-leverage-val');
 const leverageTableContainer = document.getElementById('leverage-table-container');
 
+// Causal market-context panel. This is deliberately separate from the
+// legacy indicator telemetry so the dashboard explains evidence hierarchy.
+const marketContextCard = document.getElementById('market-context-card');
+const marketContextStatus = document.getElementById('market-context-status');
+const marketContextScore = document.getElementById('market-context-score');
+const marketContextSummary = document.getElementById('market-context-summary');
+const contextRegime = document.getElementById('context-regime');
+const contextPositioning = document.getElementById('context-positioning');
+const contextOrderFlow = document.getElementById('context-order-flow');
+const contextFunding = document.getElementById('context-funding');
+const contextLiquidityAbove = document.getElementById('context-liquidity-above');
+const contextLiquidityBelow = document.getElementById('context-liquidity-below');
+const contextProfile = document.getElementById('context-profile');
+const contextVwap = document.getElementById('context-vwap');
+const marketContextContradictions = document.getElementById('market-context-contradictions');
+const contextCoverage = document.getElementById('context-coverage');
+const contextLimitations = document.getElementById('context-limitations');
+
 // economic data values
 const regimeVal = document.getElementById('regime-val');
 const fundingVal = document.getElementById('funding-val');
@@ -204,6 +389,93 @@ const aiReportBody = document.getElementById('ai-report-body');
 const aiSentimentBadge = document.getElementById('ai-sentiment-badge');
 const aiConfidenceVal = document.getElementById('ai-confidence-val');
 const reportMdRender = document.getElementById('report-md-render');
+const cioDecisionHero = document.getElementById('cio-decision-hero');
+const cioTradeGrade = document.getElementById('cio-trade-grade');
+const cioThesis = document.getElementById('cio-thesis');
+const cioControlStrip = document.getElementById('cio-control-strip');
+const cioMemoStatus = document.getElementById('cio-memo-status');
+
+function cioSafeText(value) {
+  return String(value ?? '').replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[char]);
+}
+
+function cioLabel(value, fallback = '—') {
+  const text = String(value ?? '').trim();
+  return text ? text.replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').toUpperCase() : fallback;
+}
+
+function setCioMemorandumPending(status = 'AWAITING EVIDENCE', thesis = 'The memorandum will summarize the committee’s measured evidence once a snapshot is available.') {
+  if (cioDecisionHero) cioDecisionHero.className = 'cio-decision-hero neutral';
+  if (aiSentimentBadge) {
+    aiSentimentBadge.className = 'cio-decision-badge neutral';
+    aiSentimentBadge.textContent = status;
+  }
+  if (cioTradeGrade) {
+    cioTradeGrade.className = 'cio-grade-badge';
+    cioTradeGrade.textContent = 'GRADE —';
+  }
+  if (aiConfidenceVal) aiConfidenceVal.textContent = '—';
+  if (cioThesis) cioThesis.textContent = thesis;
+  if (cioMemoStatus) {
+    cioMemoStatus.className = 'cio-memo-status';
+    cioMemoStatus.textContent = status;
+  }
+  if (cioControlStrip) {
+    cioControlStrip.innerHTML = [
+      ['Live confirmation', 'Awaiting snapshot'],
+      ['Macro control', 'Awaiting snapshot'],
+      ['Committee control', 'Awaiting evidence'],
+    ].map(([label, value]) => `<div class="cio-control-chip"><span>${label}</span><strong>${value}</strong></div>`).join('');
+  }
+}
+
+function renderCioMemorandum(data, ai, decision, confidence) {
+  const normalizedDecision = String(decision || 'HOLD').toUpperCase();
+  const decisionTone = normalizedDecision.includes('BUY') ? 'buy'
+    : normalizedDecision.includes('SELL') ? 'sell'
+      : normalizedDecision.includes('AVOID') || normalizedDecision.includes('OFFLINE') ? 'risk' : 'neutral';
+  const liveConfirmation = data.gates?.live_confirmation || data.live_confirmation || ai.live_confirmation || {};
+  const macro = data.macro_blockout || {};
+  const riskWarnings = Array.isArray(ai.risk_warnings) ? ai.risk_warnings : [];
+  const failedGate = data.failed_gate || liveConfirmation.reason || riskWarnings[0] || '';
+  const livePassed = liveConfirmation.passed === true;
+  const grade = data.trade_grade || ai.trade_grade || '—';
+  const thesis = ai.explanation || ai.summary || (normalizedDecision === 'HOLD'
+    ? 'The committee has not established a tradeable imbalance with sufficient evidence.'
+    : 'The committee decision is based on the current synchronized market snapshot.');
+
+  if (cioDecisionHero) cioDecisionHero.className = `cio-decision-hero ${decisionTone}`;
+  if (aiSentimentBadge) {
+    aiSentimentBadge.className = `cio-decision-badge ${decisionTone}`;
+    aiSentimentBadge.textContent = cioLabel(normalizedDecision, 'AWAITING EVIDENCE');
+  }
+  if (cioTradeGrade) {
+    cioTradeGrade.textContent = `GRADE ${cioLabel(grade)}`;
+    cioTradeGrade.className = `cio-grade-badge grade-${String(grade).toLowerCase().replace('+', 'plus').replace(/[^a-z0-9]/g, '')}`;
+  }
+  if (aiConfidenceVal) aiConfidenceVal.textContent = Number.isFinite(Number(confidence)) ? Math.round(Number(confidence)) : '—';
+  if (cioThesis) cioThesis.textContent = thesis;
+  if (cioMemoStatus) {
+    cioMemoStatus.textContent = macro.active ? 'MACRO RESTRICTED' : (livePassed ? 'LIVE CHECK PASSED' : 'RESEARCH / MANUAL CHECK');
+    cioMemoStatus.className = `cio-memo-status ${macro.active || !livePassed ? 'caution' : 'verified'}`;
+  }
+
+  if (cioControlStrip) {
+    const controls = [
+      { label: 'Live confirmation', value: livePassed ? 'Confirmed' : (liveConfirmation.quality_badge || 'Manual review'), tone: livePassed ? 'ok' : 'caution' },
+      { label: 'Macro control', value: macro.active ? (macro.reason || 'Block active') : 'No active block', tone: macro.active ? 'risk' : 'ok' },
+      { label: 'Committee control', value: failedGate || 'No hard blocker reported', tone: failedGate ? 'caution' : 'ok' },
+    ];
+    cioControlStrip.innerHTML = controls.map(control => `
+      <div class="cio-control-chip ${control.tone}">
+        <span>${cioSafeText(control.label)}</span>
+        <strong>${cioSafeText(control.value)}</strong>
+      </div>`).join('');
+  }
+
+  // CIO text is model output. Render it as text, never executable HTML.
+  if (reportMdRender) reportMdRender.textContent = ai.report_md || 'No memorandum narrative was generated for this snapshot.';
+}
 
 // Scanner Controls elements
 const scannerLoopStatus = document.getElementById('scanner-loop-status');
@@ -455,10 +727,14 @@ scannerEnableToggle.addEventListener('change', async () => {
   }
 });
 
-// Setup periodic scanning loop monitor
-activeScannerInterval = setInterval(fetchScannerStatus, 10000);
-// Run initial fetch
-fetchScannerStatus();
+// Do not probe premium scanner routes while the subscription gate is still
+// restoring a session. The gate emits this event only after it has a valid
+// access token and has verified entitlement.
+activeScannerInterval = setInterval(() => {
+  if (window.atcAuthenticated) fetchScannerStatus();
+}, 10000);
+window.addEventListener('atc:authenticated', fetchScannerStatus);
+if (window.atcAuthenticated) fetchScannerStatus();
 
 // ── Rendering dashboard logic ──────────────────────────────────────────────
 
@@ -674,6 +950,7 @@ function updateConnectionUI(connected) {
     // Show report box and place loader inside
     aiEmptyState.classList.add('hidden');
     aiReportBody.classList.remove('hidden');
+    setCioMemorandumPending('SYNCING EVIDENCE', 'A fresh, synchronized evidence snapshot is being assembled for CIO review.');
     reportMdRender.innerHTML = `
       <div class="scifi-loading-console" style="width: 100%; margin: 0.5rem 0;">
         <div class="loader-line blinking">[ ESTABLISHING SECURE INTEL STREAM ]</div>
@@ -740,6 +1017,7 @@ function updateConnectionUI(connected) {
     // Reset AI Reports
     aiEmptyState.classList.remove('hidden');
     aiReportBody.classList.add('hidden');
+    setCioMemorandumPending();
     reportMdRender.innerHTML = `
       <div class="empty-state" id="ai-empty-state">
         <span class="icon">🤖</span>
@@ -748,6 +1026,7 @@ function updateConnectionUI(connected) {
     `;
     councilConsensusBadge.textContent = "NO CONSENSUS";
     councilConsensusBadge.className = "consensus-badge";
+    councilAgentsGrid.classList.add('is-empty');
     councilAgentsGrid.innerHTML = `
       <div class="empty-council-state">
         <span class="icon">💬</span>
@@ -883,7 +1162,119 @@ async function startStream(symbol, timeframe, useAi) {
   };
 }
 
+function useAnalysisSnapshot(payload) {
+  const snapshot = payload?.analysis_snapshot;
+  if (!snapshot || snapshot.schema_version !== 'analysis_snapshot.v1') return payload;
+  const causal = snapshot.causal || {};
+  const execution = snapshot.execution || {};
+  const telemetry = snapshot.telemetry || {};
+  const research = snapshot.research || {};
+  return {
+    ...payload,
+    symbol: snapshot.symbol || payload.symbol,
+    timeframe: snapshot.timeframe || payload.timeframe,
+    market: snapshot.market || payload.market,
+    data_quality: snapshot.source_coverage || payload.data_quality,
+    quantitative: snapshot.quantitative || payload.quantitative,
+    market_context: causal.market_context || {},
+    market_structure: causal.market_structure || {},
+    liquidity_map: causal.liquidity_map || {},
+    liquidity_sweep: causal.liquidity_sweep || {},
+    positioning: causal.positioning || {},
+    volatility_context: causal.volatility_context || {},
+    volume_profile: causal.volume_profile || {},
+    vwap_context: causal.vwap_context || {},
+    order_book_pressure: execution.order_book_pressure || {},
+    derivatives: execution.derivatives || {},
+    funding_rate: execution.derivatives?.funding_rate,
+    open_interest: execution.derivatives?.open_interest,
+    liquidations: execution.derivatives?.liquidations || {},
+    trade_setup: execution.trade_setup || {},
+    signal_monitor: execution.signal_monitor || {},
+    live_confirmation: execution.live_confirmation || {},
+    gates: {
+      ...(payload.gates || {}),
+      data_freshness: execution.data_freshness || {},
+      liquidity: execution.liquidity || {},
+      live_confirmation: execution.live_confirmation || {},
+    },
+    regime: telemetry.regime || payload.regime,
+    risk_appetite_proxy: telemetry.risk_appetite_proxy || {},
+    sentiment: telemetry.sentiment || {},
+    news_sentiment: research.news_sentiment || { token: [], global: [] },
+    calendar_events: research.calendar_events || [],
+    macro_blockout: research.macro_blockout || { active: false, reason: '' },
+  };
+}
+
+function renderMarketContext(data) {
+  if (!marketContextCard) return;
+  const context = data.market_context || {};
+  const components = context.components || {};
+  const positioning = data.positioning || {};
+  const liquidity = data.liquidity_map || {};
+  const profile = data.volume_profile || {};
+  const vwap = data.vwap_context || {};
+  const volatility = data.volatility_context || {};
+  const structure = data.market_structure || {};
+  const direction = context.direction || 'WAIT';
+  const coverage = context.coverage || {};
+  const state = direction === 'LONG' ? 'long' : direction === 'SHORT' ? 'short' : 'wait';
+  const directionalText = direction === 'WAIT' ? 'WAIT' : `${direction} CANDIDATE`;
+  const score = Number(context.score);
+  const componentTone = (component) => component?.bias === 'BULLISH' ? 'positive' : component?.bias === 'BEARISH' ? 'negative' : '';
+  const setMetric = (element, text, component) => {
+    if (!element) return;
+    element.textContent = text || 'UNAVAILABLE';
+    element.className = componentTone(component);
+  };
+  const poolText = (pool) => {
+    if (!pool) return 'No mapped pool';
+    const label = String(pool.kind || 'liquidity level').replace(/_/g, ' ');
+    return `${label} · ${formatCurrency(pool.price)}`;
+  };
+
+  marketContextStatus.textContent = directionalText;
+  marketContextStatus.className = `market-context-status ${state}`;
+  marketContextScore.innerHTML = `${Number.isFinite(score) && direction !== 'WAIT' ? Math.round(score) : '--'}<small>/100</small>`;
+
+  const phase = structure.phase || components.regime_structure?.evidence || 'UNKNOWN';
+  const volatilityState = volatility.state || 'UNKNOWN';
+  const positioningState = positioning.state || components.positioning?.evidence || 'UNKNOWN';
+  const fundingRate = Number(positioning.funding_rate ?? data.funding_rate);
+  const fundingText = [
+    positioning.crowding && positioning.crowding !== 'NEUTRAL' ? positioning.crowding.replace(/_/g, ' ') : 'FUNDING NEUTRAL',
+    positioning.delta_divergence && positioning.delta_divergence !== 'NONE' ? positioning.delta_divergence.replace(/_/g, ' ') : 'DELTA ALIGNED',
+  ].join(' · ');
+  const flowBias = components.order_flow?.bias || 'NEUTRAL';
+
+  setMetric(contextRegime, `${String(phase).replace(/_/g, ' ')} · ${String(volatilityState).replace(/_/g, ' ')}`, components.regime_structure);
+  setMetric(contextPositioning, `${String(positioningState).replace(/_/g, ' ')}${positioning.oi_change_pct !== undefined ? ` · ${Number(positioning.oi_change_pct).toFixed(2)}% OI` : ''}`, components.positioning);
+  setMetric(contextOrderFlow, `${String(flowBias).replace(/_/g, ' ')} FLOW`, components.order_flow);
+  setMetric(contextFunding, `${fundingText}${Number.isFinite(fundingRate) ? ` · ${(fundingRate * 100).toFixed(3)}%` : ''}`, components.positioning);
+  contextLiquidityAbove.textContent = poolText(liquidity.nearest_above);
+  contextLiquidityBelow.textContent = poolText(liquidity.nearest_below);
+  contextProfile.textContent = profile.available ? `${String(profile.location || 'UNKNOWN').replace(/_/g, ' ')} · POC ${formatCurrency(profile.poc)}` : 'Profile unavailable';
+  contextVwap.textContent = vwap.available ? String(vwap.price_relation || 'UNKNOWN').replace(/_/g, ' ') : 'VWAP unavailable';
+  contextCoverage.textContent = `${coverage.available_domains || 0} / ${coverage.required_domains || 8} required domains`;
+
+  const contradictions = Array.isArray(context.contradictions) ? context.contradictions : [];
+  marketContextContradictions.hidden = contradictions.length === 0;
+  marketContextContradictions.textContent = contradictions.length ? `Contradictory evidence: ${contradictions.join(', ').replace(/_/g, ' ')}.` : '';
+  const limitations = context.limitations || liquidity.limitations || [];
+  contextLimitations.textContent = Array.isArray(limitations) && limitations.length ? limitations[0] : 'Evidence coverage updates with every completed snapshot.';
+
+  const reasons = [];
+  if (positioningState !== 'UNKNOWN') reasons.push(String(positioningState).replace(/_/g, ' ').toLowerCase());
+  if (components.order_flow?.bias && components.order_flow.bias !== 'NEUTRAL') reasons.push(`${String(components.order_flow.bias).toLowerCase()} order flow`);
+  if (data.liquidity_sweep?.detected) reasons.push('a completed liquidity sweep');
+  marketContextSummary.textContent = direction === 'WAIT'
+    ? 'No aligned causal setup yet. The system is waiting for regime, liquidity, positioning, and flow to agree.'
+    : `The ${direction.toLowerCase()} context is supported by ${reasons.join(', ') || 'available market-context evidence'}.`;
+}
+
 function renderDashboard(data) {
+  data = useAnalysisSnapshot(data);
   stopLoaderAnimation();
   activeHistoricalStats = data.historical_stats || null;
   if (data.report_md) {
@@ -891,15 +1282,15 @@ function renderDashboard(data) {
   } else if (data.cio_result && data.cio_result.report_md) {
     window.lastReportMd = data.cio_result.report_md;
   }
+  renderMarketContext(data);
 
   // Macro Alert Banner
   if (data.macro_blockout && data.macro_blockout.active) {
-    if (!isMacroAlertDismissed) {
-      macroAlertBanner.classList.remove('hidden');
-    }
-    macroAlertText.textContent = `High Impact Macro Alert: ${data.macro_blockout.reason} Trading disabled.`;
+    showMacroAlert(`High Impact Macro Alert: ${data.macro_blockout.reason} Restricted sizing active.`);
   } else {
-    macroAlertBanner.classList.remove('hidden');
+    window.clearTimeout(macroAlertDismissTimer);
+    macroAlertDismissTimer = null;
+    macroAlertBanner?.classList.add('hidden');
     isMacroAlertDismissed = false; // Reset dismissal state when macro clears
   }
 
@@ -1026,13 +1417,11 @@ function renderDashboard(data) {
     sentimentIndexVal.textContent = `${val} ${fng.value_classification || "NEUTRAL"}`;
   }
 
-  // Spread
-  if (data.quant_features && data.quant_features.volatility) {
-    const rawSpread = parseFloat(data.quant_features.volatility.bollinger?.bandwidth || 0.0);
-    spreadVal.textContent = rawSpread.toFixed(2) + '% (BBW)';
-  } else {
-    spreadVal.textContent = '-';
-  }
+  // Actual bid/ask spread from this same snapshot's order book.  BBW is a
+  // volatility transform, not an execution spread.
+  const orderBookPressure = data.order_book_pressure || {};
+  const snapshotSpread = Number(orderBookPressure.spread_pct);
+  spreadVal.textContent = Number.isFinite(snapshotSpread) ? `${snapshotSpread.toFixed(3)}%` : '-';
 
   // Decision room
   const decision = data.market_decision || data.decision || 'HOLD';
@@ -1241,9 +1630,7 @@ function renderDashboard(data) {
       councilConsensusBadge.className = "consensus-badge neutral";
     }
 
-    // Render MD CIO report
-    // CIO text is model output. Render it as text, not executable HTML.
-    reportMdRender.textContent = ai.report_md || "No report generated.";
+    renderCioMemorandum(data, ai, decision, confidence);
 
 // Helper to format agent narrative into clean, structured short-form blocks for popup dossier
 function formatAgentNarrative(rawText) {
@@ -1291,6 +1678,17 @@ function formatAgentNarrative(rawText) {
   return `<div style="background: rgba(0, 0, 0, 0.25); border-radius: 6px; padding: 10px 12px; font-size: 0.78rem; color: var(--text-secondary); line-height: 1.55;">${rawText}</div>`;
 }
 
+function escapeDossierText(value) {
+  return String(value ?? '').replace(/[&<>'"]/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[character]);
+}
+
+function dossierList(items, emptyCopy) {
+  const rows = Array.isArray(items) ? items.filter(Boolean) : [];
+  return rows.length
+    ? `<ul class="dossier-list">${rows.map(item => `<li>${escapeDossierText(item)}</li>`).join('')}</ul>`
+    : `<p class="dossier-narrative">${escapeDossierText(emptyCopy)}</p>`;
+}
+
 // Global Agent Dossier Modal Controller
 window.openAgentDossierModal = function(title, dataJsonStr) {
   const modal = document.getElementById('agent-dossier-modal');
@@ -1318,7 +1716,10 @@ window.openAgentDossierModal = function(title, dataJsonStr) {
   const badgeEl = document.getElementById('dossier-modal-badge');
   const bodyEl = document.getElementById('dossier-modal-body');
 
-  if (iconEl) iconEl.textContent = details.icon;
+  if (iconEl) {
+    iconEl.textContent = details.icon;
+    iconEl.classList.add('dossier-modal-icon-shell');
+  }
   if (titleEl) titleEl.textContent = title;
   if (subtitleEl) subtitleEl.textContent = details.desc;
 
@@ -1334,9 +1735,8 @@ window.openAgentDossierModal = function(title, dataJsonStr) {
 
   if (badgeEl) {
     badgeEl.innerHTML = `
-      <span style="font-size: 0.75rem; padding: 4px 10px; border-radius: 6px; ${badgeStyle}">
-        ${bias || 'NEUTRAL'} (${convictionVal}% Evidence Confidence)
-      </span>
+      <span class="dossier-status-badge" style="${badgeStyle}">${escapeDossierText(bias || 'NEUTRAL')}</span>
+      <span class="dossier-status-badge" style="background: rgba(255,255,255,.05); color: var(--text-primary); border: 1px solid rgba(255,255,255,.1);">${escapeDossierText(convictionVal)}% CONFIDENCE</span>
     `;
   }
 
@@ -1449,6 +1849,28 @@ window.openAgentDossierModal = function(title, dataJsonStr) {
     `;
   }
 
+  if (bodyEl) {
+    const evidence = Array.isArray(data.evidence) ? data.evidence : [];
+    const evidenceRows = evidence.length ? evidence.map(item => `
+      <div class="dossier-evidence-row">
+        <div><span class="dossier-metric">${escapeDossierText(item.metric || 'Measured evidence')}</span><span class="dossier-value">${escapeDossierText(typeof item.value === 'object' ? JSON.stringify(item.value) : item.value)}</span></div>
+        <div class="dossier-source">${escapeDossierText(item.source || 'Source unavailable')}</div>
+      </div>`).join('') : '<p class="dossier-narrative">No measured evidence was returned by this engine.</p>';
+    bodyEl.innerHTML = `
+      <div class="dossier-brief">
+        <div class="dossier-summary">
+          <section><h4 class="dossier-section-label">Executive summary</h4><p class="dossier-narrative">${escapeDossierText(narrativeText || 'This engine returned structured evidence without a narrative summary.')}</p></section>
+          <section class="dossier-thesis"><h4 class="dossier-section-label">Current stance</h4><p class="dossier-narrative">${escapeDossierText(bias || 'NEUTRAL')} bias with ${escapeDossierText(convictionVal)}% evidence confidence. This is a research input, not execution authority.</p></section>
+        </div>
+        <div class="dossier-evidence-grid">
+          <section class="dossier-panel"><h4 class="dossier-section-label">Measured evidence</h4>${evidenceRows}</section>
+          <section class="dossier-panel is-risk"><h4 class="dossier-section-label">Contradictory evidence</h4>${dossierList(data.contradictory_evidence, 'No contradictory evidence was reported.')}</section>
+          <section class="dossier-panel is-unknown"><h4 class="dossier-section-label">Current unknowns</h4>${dossierList(data.unknowns, 'No additional unknowns were reported.')}</section>
+          <section class="dossier-panel"><h4 class="dossier-section-label">Engine limitations</h4>${dossierList(data.limitations, 'No engine limitations were supplied.')}</section>
+        </div>
+      </div>`;
+    bodyEl.scrollTop = 0;
+  }
   modal.style.display = 'flex';
 };
 
@@ -1457,9 +1879,17 @@ window.closeAgentDossierModal = function() {
   if (modal) modal.style.display = 'none';
 };
 
+if (!window.agentDossierEscapeBound) {
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape') window.closeAgentDossierModal?.();
+  });
+  window.agentDossierEscapeBound = true;
+}
+
     // Render independent evidence engines and control committees.
-    if (ai.agent_reports) {
+    if (ai.agent_reports && Object.values(ai.agent_reports).some(report => report && !report.error)) {
       councilAgentsGrid.innerHTML = '';
+      councilAgentsGrid.classList.remove('is-empty');
       const agents = ai.agent_reports;
 
       const createAgentCardHtml = (title, data, cssClass) => {
@@ -1542,12 +1972,21 @@ window.closeAgentDossierModal = function() {
       councilAgentsGrid.innerHTML += createAgentCardHtml('Macro Intelligence Engine', agents.macro_intelligence_engine, 'macro');
       councilAgentsGrid.innerHTML += createAgentCardHtml('Risk Committee', agents.risk_committee, 'risk');
       councilAgentsGrid.innerHTML += createAgentCardHtml('Adversarial Review Engine', agents.adversarial_review_engine, 'devil');
+    } else {
+      councilAgentsGrid.classList.add('is-empty');
+      councilAgentsGrid.innerHTML = `
+        <div class="empty-council-state">
+          <span class="icon">💬</span>
+          <p>Apex network link active. Waiting for the evidence committee dossier.</p>
+        </div>
+      `;
     }
   } else {
     aiEmptyState.classList.remove('hidden');
     aiReportBody.classList.add('hidden');
     councilConsensusBadge.textContent = "NO CONSENSUS";
     councilConsensusBadge.className = "consensus-badge";
+    councilAgentsGrid.classList.add('is-empty');
     councilAgentsGrid.innerHTML = `
       <div class="empty-council-state">
         <span class="icon">💬</span>
@@ -1606,6 +2045,104 @@ async function dismissActiveSignal() {
 
 if (dismissSignalBtn) dismissSignalBtn.addEventListener('click', dismissActiveSignal);
 
+function monitorControlState(reason, terms, fallback = 'OBSERVED') {
+  const text = String(reason || '').toLowerCase();
+  return terms.some(term => text.includes(term)) ? 'AWAITED' : fallback;
+}
+
+function renderMonitorConfirmationScenario(data) {
+  if (!monitorConfirmationScenarios) return { institutional: false, tactical: false };
+  const scenarios = data.confirmation_scenarios || {};
+  const institutional = scenarios.institutional || {};
+  const tactical = scenarios.tactical || {};
+  const selected = institutional.passed ? institutional : (tactical.passed ? tactical : null);
+  const isInstitutional = selected === institutional;
+  if (!selected) {
+    monitorConfirmationScenarios.hidden = true;
+    monitorConfirmationScenarios.innerHTML = '';
+    return { institutional: false, tactical: false };
+  }
+  const setup = data.candidate_setup || {};
+  const entry = setup.entry || {};
+  const stop = setup.stop || {};
+  const levelClass = isInstitutional ? 'institutional' : 'tactical';
+  const headline = isInstitutional
+    ? 'Higher-timeframe and primary-timeframe evidence are aligned.'
+    : 'Primary-timeframe evidence is valid; higher timeframe is not aligned.';
+  const label = isInstitutional ? 'INSTITUTIONAL CONFIRMATION' : 'TACTICAL CONFIRMATION · LOWER CONFIDENCE';
+  const htfLabel = selected.higher_timeframe_aligned ? 'ALIGNED' : 'NOT ALIGNED';
+  monitorConfirmationScenarios.hidden = false;
+  monitorConfirmationScenarios.innerHTML = `
+    <div class="monitor-confirmation-panel ${levelClass}">
+      <div>
+        <span class="monitor-confirmation-kicker">${label}</span>
+        <strong>${headline}</strong>
+        <p>${cioSafeText(selected.reason || 'Measured evidence is aligned for this scenario.')}</p>
+      </div>
+      <div class="monitor-confirmation-levels" aria-label="Scenario setup levels">
+        <span>SIDE<b>${cioSafeText(setup.side || data.side || '—')}</b></span>
+        <span>ENTRY<b>${cioSafeText(formatCurrency(entry.reference))}</b></span>
+        <span>STOP<b>${cioSafeText(formatCurrency(stop.selected || stop.current))}</b></span>
+        <span>HTF<b>${htfLabel}</b></span>
+      </div>
+    </div>`;
+  return { institutional: Boolean(institutional.passed), tactical: Boolean(tactical.passed) };
+}
+
+function renderMonitorEvidenceState(data, status, isPublished, isTerminalFailure) {
+  const reason = data.reason || data.approval?.blockers?.[0] || 'Waiting for qualified setup.';
+  const reasonLower = reason.toLowerCase();
+  const waitingForBreak = /has not closed through|structure level|completed.*break|breakout/.test(reasonLower);
+  const tacticalReady = Boolean(data.confirmation_scenarios?.tactical?.passed) && !Boolean(data.confirmation_scenarios?.institutional?.passed);
+  const blocked = isTerminalFailure;
+  const state = blocked ? 'blocked' : isPublished ? 'published' : tacticalReady ? 'tactical' : waitingForBreak ? 'waiting' : 'scanning';
+  const stateCopy = blocked ? 'TRADE CLOSED / INVALIDATED' : isPublished ? 'SIGNAL PUBLISHED' : tacticalReady ? 'TACTICAL WATCH' : waitingForBreak ? 'WAITING FOR CONFIRMATION' : 'EVIDENCE WATCH';
+  const title = blocked ? 'Published lifecycle has reached a terminal state'
+    : isPublished ? 'Published signal is under lifecycle control'
+      : tacticalReady ? 'Primary-timeframe setup is ready for tactical review'
+      : waitingForBreak ? 'Completed structure break awaited'
+        : 'Monitoring for a qualified causal alignment';
+  const detail = blocked ? reason
+    : isPublished ? 'Entry, stop, targets, and outcome controls are now active for this published signal.'
+      : tacticalReady ? 'The setup is visible above, but only higher-timeframe alignment can upgrade it to institutional confirmation.'
+      : waitingForBreak ? 'The system will not publish early. It needs a completed candle through the relevant 20-candle structure level.'
+        : reason;
+
+  if (monitorEvidenceHero) monitorEvidenceHero.className = `monitor-evidence-hero ${state}`;
+  if (monitorEvidenceState) monitorEvidenceState.textContent = `EVIDENCE STATE · ${stateCopy}`;
+  if (monitorEvidenceTitle) monitorEvidenceTitle.textContent = title;
+  if (monitorEvidenceDetail) monitorEvidenceDetail.textContent = detail;
+  if (monitorEvidenceMark) monitorEvidenceMark.textContent = blocked ? '!' : isPublished ? '✓' : waitingForBreak ? '↗' : '…';
+  if (monitorMissingEvidence) monitorMissingEvidence.classList.toggle('hidden', isPublished || blocked);
+  if (monitorMissingTitle) monitorMissingTitle.textContent = tacticalReady ? 'Higher-timeframe alignment' : waitingForBreak ? 'Completed 20-candle structure break' : 'Next required evidence';
+  if (monitorMissingDetail) monitorMissingDetail.textContent = tacticalReady
+    ? 'This remains a tactical watch. It does not publish a trade signal until the higher timeframe confirms the same direction.'
+    : waitingForBreak
+    ? 'Wait for the current candle to close through the relevant structure level; an intrabar move is not confirmation.'
+    : reason;
+
+  if (monitorTradeLifecycle) monitorTradeLifecycle.classList.toggle('hidden', !isPublished);
+  if (monitorWatchPlan) monitorWatchPlan.classList.toggle('hidden', isPublished);
+  if (monitorWatchStepOneTitle) monitorWatchStepOneTitle.textContent = 'Causal context mapped';
+  if (monitorWatchStepOneDetail) monitorWatchStepOneDetail.textContent = 'Regime, liquidity, positioning, and order flow are assessed from the same snapshot.';
+  if (monitorWatchStepTwoTitle) monitorWatchStepTwoTitle.textContent = waitingForBreak ? 'Completed structure break awaited' : 'Evidence control awaited';
+  if (monitorWatchStepTwoDetail) monitorWatchStepTwoDetail.textContent = waitingForBreak
+    ? 'A completed close through the relevant 20-candle structure level is required before any signal can be published.'
+    : reason;
+
+  if (monitorGateStrip) {
+    const controls = [
+      ['Structure', waitingForBreak ? 'AWAITED' : monitorControlState(reason, ['structure', 'break'], isPublished ? 'CONFIRMED' : 'MONITORING')],
+      ['Liquidity', monitorControlState(reason, ['liquid', 'spread', 'depth'], isPublished ? 'CONFIRMED' : 'OBSERVED')],
+      ['Order flow', monitorControlState(reason, ['flow', 'taker', 'order book'], isPublished ? 'CONFIRMED' : 'OBSERVED')],
+      ['Positioning', monitorControlState(reason, ['open interest', 'funding', 'position'], isPublished ? 'CONFIRMED' : 'OBSERVED')],
+      ['Macro', monitorControlState(reason, ['macro', 'calendar'], isPublished ? 'CONFIRMED' : 'CLEAR')],
+    ];
+    monitorGateStrip.innerHTML = controls.map(([label, value]) => `<span class="monitor-gate-chip ${value === 'CONFIRMED' || value === 'CLEAR' ? 'verified' : value === 'AWAITED' ? 'awaited' : ''}"><b>${label}</b><strong>${value}</strong></span>`).join('');
+  }
+  return { state, stateCopy };
+}
+
 function renderSignalMonitor(monitor) {
   const data = monitor || { status: 'SCANNING', action: 'SCANNING', reason: 'Waiting for qualified setup.', events: [] };
 
@@ -1619,10 +2156,17 @@ function renderSignalMonitor(monitor) {
   const action = data.action || 'SCANNING';
   const isOpen = ['PENDING_ENTRY', 'ACTIVE', 'TP1_SECURED', 'TP2_SECURED'].includes(status);
   const isExit = ['STOPPED_OUT', 'INVALIDATED'].includes(status);
+  const isPublished = Boolean(data.id) || isOpen || isExit;
+  renderMonitorConfirmationScenario(data);
+  const evidence = renderMonitorEvidenceState(data, status, isPublished, isExit || ['CANCELLED', 'EXPIRED'].includes(status));
 
-  if (monitorCard) monitorCard.className = `card signal-monitor-card ${status.toLowerCase()}`;
+  if (monitorCard) monitorCard.className = `card signal-monitor-card ${status.toLowerCase()} monitor-${evidence.state}`;
   if (monitorStatusVal) {
-    if (status === 'SCANNING') {
+    if (!isPublished && evidence.state === 'tactical') {
+      monitorStatusVal.textContent = 'TACTICAL WATCH';
+    } else if (!isPublished && evidence.state === 'waiting') {
+      monitorStatusVal.textContent = 'WAITING FOR PROOF';
+    } else if (status === 'SCANNING') {
       monitorStatusVal.innerHTML = `
         <span class="scanner-status-pulse-dot" style="display: inline-block; width: 5px; height: 5px; background-color: var(--neon-blue); border-radius: 50%; margin-right: 4px; box-shadow: 0 0 6px var(--neon-blue); animation: processing-ticker-glow 1s infinite alternate ease-in-out; flex-shrink: 0;"></span>
         SCANNING
@@ -1632,7 +2176,7 @@ function renderSignalMonitor(monitor) {
     }
     monitorStatusVal.className = `monitor-status ${status.toLowerCase()}`;
   }
-  if (monitorActionVal) monitorActionVal.textContent = action.replace(/_/g, ' ');
+  if (monitorActionVal) monitorActionVal.textContent = !isPublished && (evidence.state === 'waiting' || evidence.state === 'tactical') ? 'WATCH' : action.replace(/_/g, ' ');
   if (monitorReasonVal) {
     const reasonText = data.reason || 'Scanning for opportunities.';
     if (status === 'SCANNING') {

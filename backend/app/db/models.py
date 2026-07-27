@@ -106,6 +106,23 @@ class User(Base):
     subscriptions = relationship("Subscription", back_populates="user", cascade="all, delete-orphan")
 
 
+class UserAIConnection(Base):
+    """A user's encrypted, provider-scoped AI connection.
+
+    The plaintext key never belongs in this model or in a response payload.
+    """
+    __tablename__ = "user_ai_connections"
+
+    id = Column(String(36), primary_key=True)
+    user_id = Column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, unique=True, index=True)
+    provider = Column(String(32), nullable=False, default="openrouter")
+    encrypted_api_key = Column(String(4096), nullable=False)
+    key_suffix = Column(String(12), nullable=False)
+    model = Column(String(200), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+
 class Subscription(Base):
     __tablename__ = "subscriptions"
 

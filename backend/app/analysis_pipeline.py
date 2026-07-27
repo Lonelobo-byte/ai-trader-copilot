@@ -7,9 +7,12 @@ routes and backtests.
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
+from hashlib import sha256
 from typing import Any
 
 from app.brains.council import run_ai_council
+from app.ai_client import AIRequestConfig
 from app.brains.signal_builder import build_ai_driven_trade_setup, evaluate_ai_driven_approval
 from app.quant.feature_engine import compute_quant_features
 from app.quant.live_confirmation import verify_main_signal_snapshot
@@ -21,6 +24,89 @@ logger = logging.getLogger(__name__)
 # Module-level cache persists a deliberation only for intra-candle dashboard
 # updates. A completed candle always receives a fresh committee review.
 _ai_council_cache: dict[str, dict[str, Any]] = {}
+
+
+def _build_analysis_snapshot(
+    *, symbol: str, timeframe: str, candles: list[Any], ticker: dict[str, Any],
+    intelligence: dict[str, Any], features: dict[str, Any], quantitative: dict[str, Any],
+    cio_result: dict[str, Any], trade_setup: dict[str, Any], signal_monitor: dict[str, Any],
+    approval: dict[str, Any], data_freshness: dict[str, Any], liquidity: dict[str, Any],
+) -> dict[str, Any]:
+    """Create the one authoritative data contract for an analysis render.
+
+    All dashboard cards are projections of this object.  It deliberately
+    contains the exact objects used by the council, risk plan, live gate and
+    market-context score, rather than independently re-fetching or
+    recomputing a value for a specific widget.
+    """
+    captured_at = datetime.now(timezone.utc).isoformat()
+    latest_candle = candles[-1] if candles else None
+    primary_candle = {
+        "open_time": getattr(latest_candle, "open_time", None),
+        "close_time": getattr(latest_candle, "close_time", None),
+        "close": getattr(latest_candle, "close", None),
+    }
+    fingerprint = "|".join(str(value) for value in (
+        symbol, timeframe, primary_candle["open_time"], primary_candle["close_time"],
+        primary_candle["close"], ticker.get("lastPrice"), captured_at,
+    ))
+    snapshot_id = sha256(fingerprint.encode("utf-8")).hexdigest()[:16]
+    derivatives = features.get("derivatives", {}) or {}
+    return {
+        "id": snapshot_id,
+        "schema_version": "analysis_snapshot.v1",
+        "captured_at": captured_at,
+        "symbol": symbol,
+        "timeframe": timeframe,
+        "primary_candle": primary_candle,
+        "source_coverage": features.get("data_quality", {}),
+        "source_meta": intelligence.get("meta", {}),
+        "market": {
+            "last_price": ticker.get("lastPrice"),
+            "price_change_pct_24h": ticker.get("priceChangePercent"),
+            "quote_volume_24h": ticker.get("quoteVolume"),
+            "bid": ticker.get("bidPrice"),
+            "ask": ticker.get("askPrice"),
+        },
+        "causal": {
+            "market_context": features.get("market_context", {}),
+            "market_structure": features.get("market_structure", {}),
+            "liquidity_map": features.get("liquidity_map", {}),
+            "liquidity_sweep": features.get("sweep", {}),
+            "positioning": features.get("positioning", {}),
+            "volatility_context": features.get("volatility_context", {}),
+            "volume_profile": features.get("volume_profile", {}),
+            "vwap_context": features.get("vwap_context", {}),
+        },
+        "execution": {
+            "order_book_pressure": features.get("order_book", {}),
+            "derivatives": {
+                "taker_buy_sell_volume": derivatives.get("taker_volume", {}),
+                "oi_history": derivatives.get("oi_history", {}),
+                "oi_delta": derivatives.get("oi_delta", {}),
+                "funding_rate": derivatives.get("funding_rate"),
+                "open_interest": derivatives.get("open_interest"),
+                "liquidations": derivatives.get("liquidations", {}),
+            },
+            "trade_setup": trade_setup,
+            "signal_monitor": signal_monitor,
+            "approval": approval,
+            "live_confirmation": cio_result.get("live_confirmation"),
+            "data_freshness": data_freshness,
+            "liquidity": liquidity,
+        },
+        "telemetry": {
+            "regime": (features.get("volatility", {}) or {}).get("regime", "UNKNOWN"),
+            "risk_appetite_proxy": intelligence.get("global_liquidity", {}),
+            "sentiment": features.get("sentiment", {}),
+        },
+        "research": {
+            "news_sentiment": {"token": intelligence.get("news", []), "global": intelligence.get("global_news", [])},
+            "calendar_events": (cio_result.get("agent_reports", {}) or {}).get("calendar_events", []),
+            "macro_blockout": cio_result.get("macro_blockout", {"active": False, "reason": ""}),
+        },
+        "quantitative": quantitative,
+    }
 
 async def run_full_analysis(
     *,
@@ -37,6 +123,8 @@ async def run_full_analysis(
     last_ai_open_time: int = 0,
     market_intelligence: dict[str, Any] | None = None,
     reconcile_signals: bool = True,
+    ai_override: AIRequestConfig | None = None,
+    ai_cache_key: str = "platform",
 ) -> tuple[dict[str, Any], int]:
     """Run the analysis pipeline and return (payload, updated_last_ai_open_time).
 
@@ -95,7 +183,8 @@ async def run_full_analysis(
         atr = features.get("volatility", {}).get("atr", 0.0)
         range_ratio = current_range / atr if atr > 0 else 1.0
 
-        cache_key = f"{symbol}_{timeframe}"
+        # Never share a cached paid deliberation across user connections.
+        cache_key = f"{symbol}_{timeframe}_{ai_cache_key}"
         should_run_ai = use_ai and (
             is_init_event
             or is_new_candle
@@ -108,7 +197,7 @@ async def run_full_analysis(
             # WebSocket candle/ticker/order-book snapshot. Passing the original
             # optional argument here caused the WebSocket path to fetch a second
             # snapshot and let the committee decide on different data.
-            cio_result = await run_ai_council(symbol, timeframe, settings, intelligence=intel)
+            cio_result = await run_ai_council(symbol, timeframe, settings, intelligence=intel, ai_override=ai_override)
             features = cio_result.get("full_quant_features") or features
             # Cache the deliberation report
             _ai_council_cache[cache_key] = cio_result
@@ -117,11 +206,13 @@ async def run_full_analysis(
         elif use_ai and cache_key in _ai_council_cache:
             logger.info(f"Reusing cached AI Council deliberation for {symbol}/{timeframe} (cooldown tick)")
             cio_result = _ai_council_cache[cache_key].copy()
+            # The narrative may be cached intra-candle, but every numerical
+            # field exposed to the dashboard must use this exact snapshot.
+            cio_result["quant_features"] = features
+            cio_result["full_quant_features"] = features
+            cio_result["data_quality"] = features.get("data_quality", {})
             macro_blockout = cio_result.get("macro_blockout", {"active": False, "reason": ""})
             historical_stats = cio_result.get("historical_stats", {"similar_setups_count": 0, "historical_win_rate": 50.0})
-            # Override with fresh features
-            cio_result["quant_features"] = features
-            cio_result["data_quality"] = features.get("data_quality", {})
         else:
             macro_blockout = {"active": False, "reason": ""}
             historical_stats = {"similar_setups_count": 0, "historical_win_rate": 50.0}
@@ -258,25 +349,44 @@ async def run_full_analysis(
             "reason": "Historical replay; no live signal was read or written.",
         }
 
+    # The institutional scenario remains the only publication authority. A
+    # primary-timeframe-only confirmation is attached for the monitor as a
+    # lower-confidence research watch; it cannot create or alter a signal.
+    signal_monitor["confirmation_scenarios"] = (cio_result.get("live_confirmation") or {}).get("scenarios", {})
+    signal_monitor["candidate_setup"] = {
+        "side": trade_setup.get("side", "NEUTRAL"),
+        "entry": trade_setup.get("entry", {}),
+        "stop": trade_setup.get("stop", {}),
+        "targets": trade_setup.get("targets", {}),
+    }
+
     # ── Step 4: Reuse the exact quantitative snapshot reviewed by the
     # committee. Non-AI/backtest paths still construct it locally.
-    quantitative = cio_result.get("quantitative_assessment")
-    if not quantitative:
-        from app.quant.engine import build_quantitative_assessment
-        quantitative = build_quantitative_assessment(
-            candles,
-            order_book_raw,
-            account_value=settings.default_account_size_usd,
-            max_drawdown_pct=settings.max_drawdown_pct,
-            max_gross_exposure_pct=settings.max_gross_exposure_pct,
-            symbol=symbol,
-            timeframe=timeframe,
-            context_features=features,
-        )
+    # Rebuild this deterministic assessment each render.  A cached council
+    # memo must never leave an earlier order-book/candle state in one card.
+    from app.quant.engine import build_quantitative_assessment
+    quantitative = build_quantitative_assessment(
+        candles,
+        order_book_raw,
+        account_value=settings.default_account_size_usd,
+        max_drawdown_pct=settings.max_drawdown_pct,
+        max_gross_exposure_pct=settings.max_gross_exposure_pct,
+        symbol=symbol,
+        timeframe=timeframe,
+        context_features=features,
+    )
+    analysis_snapshot = _build_analysis_snapshot(
+        symbol=symbol, timeframe=timeframe, candles=candles, ticker=ticker,
+        intelligence=intel, features=features, quantitative=quantitative,
+        cio_result=cio_result, trade_setup=trade_setup, signal_monitor=signal_monitor,
+        approval=approval, data_freshness=data_freshness, liquidity=liquidity,
+    )
+    cio_result["analysis_snapshot_id"] = analysis_snapshot["id"]
 
     # ── Step 5: Map back to the expected REST/WebSocket response payload ──
     # Adapter mapping
     payload = {
+        "analysis_snapshot": analysis_snapshot,
         "symbol": symbol,
         "timeframe": timeframe,
         "decision": signal_monitor["action"],
@@ -287,20 +397,14 @@ async def run_full_analysis(
         "ai_calls": 1 if use_ai else 0,
         "ai_allowed": use_ai,
         "ai_provider": settings.ai_provider,
-        "market": {
-            "last_price": ticker.get("lastPrice"),
-            "price_change_pct_24h": ticker.get("priceChangePercent"),
-            "quote_volume_24h": ticker.get("quoteVolume"),
-            "bid": ticker.get("bidPrice"),
-            "ask": ticker.get("askPrice"),
-        },
+        "market": analysis_snapshot["market"],
         "gates": {
-            "data_freshness": data_freshness,
-            "liquidity": liquidity,
-            "live_confirmation": cio_result.get("live_confirmation"),
+            "data_freshness": analysis_snapshot["execution"]["data_freshness"],
+            "liquidity": analysis_snapshot["execution"]["liquidity"],
+            "live_confirmation": analysis_snapshot["execution"]["live_confirmation"],
         },
-        "data_quality": features.get("data_quality", {}),
-        "quantitative": quantitative,
+        "data_quality": analysis_snapshot["source_coverage"],
+        "quantitative": analysis_snapshot["quantitative"],
         "institutional_committee": cio_result.get("institutional_dossier"),
         "investment_memo": cio_result.get("investment_memo"),
         "committee_controls": cio_result.get("committee_controls"),
@@ -329,10 +433,10 @@ async def run_full_analysis(
                 "smart": trade_setup.get("targets", {}).get("tp3_3r"),
             },
         },
-        "signal_monitor": signal_monitor,
-        "trade_setup": trade_setup,
-        "order_book_pressure": features.get("order_book", {}),
-        "liquidity_sweep": features.get("sweep", {}),
+        "signal_monitor": analysis_snapshot["execution"]["signal_monitor"],
+        "trade_setup": analysis_snapshot["execution"]["trade_setup"],
+        "order_book_pressure": analysis_snapshot["execution"]["order_book_pressure"],
+        "liquidity_sweep": analysis_snapshot["causal"]["liquidity_sweep"],
         "risk_idea": cio_result,
         "position_sizing_example": trade_setup.get("position"),
         "kelly_sizing": {
@@ -342,30 +446,29 @@ async def run_full_analysis(
             "status": "no_history",
         },
         "ai_analysis": cio_result,
-        "news_sentiment": {
-            "token": intel.get("news", []),
-            "global": intel.get("global_news", [])
-        },
+        "news_sentiment": analysis_snapshot["research"]["news_sentiment"],
         "historical_stats": historical_stats,
-        "calendar_events": cio_result.get("agent_reports", {}).get("calendar_events", []),
-        "macro_blockout": macro_blockout,
-        "regime": features.get("volatility", {}).get("regime", "UNKNOWN"),
-        "funding_rate": features.get("derivatives", {}).get("funding_rate"),
-        "open_interest": features.get("derivatives", {}).get("open_interest"),
-        "liquidations": features.get("derivatives", {}).get("liquidations"),
+        "calendar_events": analysis_snapshot["research"]["calendar_events"],
+        "macro_blockout": analysis_snapshot["research"]["macro_blockout"],
+        "regime": analysis_snapshot["telemetry"]["regime"],
+        "funding_rate": analysis_snapshot["execution"]["derivatives"]["funding_rate"],
+        "open_interest": analysis_snapshot["execution"]["derivatives"]["open_interest"],
+        "liquidations": analysis_snapshot["execution"]["derivatives"]["liquidations"],
         # Dashboard telemetry contract. Keep the raw source labels explicit so
         # widgets never silently fall back to invented neutral values.
-        "derivatives": {
-            "taker_buy_sell_volume": features.get("derivatives", {}).get("taker_volume", {}),
-            "oi_history": features.get("derivatives", {}).get("oi_history", {}),
-            "oi_delta": features.get("derivatives", {}).get("oi_delta", {}),
-            "funding_rate": features.get("derivatives", {}).get("funding_rate"),
-            "open_interest": features.get("derivatives", {}).get("open_interest"),
-        },
-        "risk_appetite_proxy": intel.get("global_liquidity", {}),
-        "sentiment": features.get("sentiment", {}),
-        "market_structure": features.get("market_structure", {}),
-        "live_confirmation": cio_result.get("live_confirmation"),
+        "derivatives": analysis_snapshot["execution"]["derivatives"],
+        "risk_appetite_proxy": analysis_snapshot["telemetry"]["risk_appetite_proxy"],
+        "sentiment": analysis_snapshot["telemetry"]["sentiment"],
+        "market_structure": analysis_snapshot["causal"]["market_structure"],
+        # Primary causal-decision contract for the dashboard. These fields are
+        # intentionally separate from legacy indicator telemetry.
+        "market_context": analysis_snapshot["causal"]["market_context"],
+        "liquidity_map": analysis_snapshot["causal"]["liquidity_map"],
+        "positioning": analysis_snapshot["causal"]["positioning"],
+        "volatility_context": analysis_snapshot["causal"]["volatility_context"],
+        "volume_profile": analysis_snapshot["causal"]["volume_profile"],
+        "vwap_context": analysis_snapshot["causal"]["vwap_context"],
+        "live_confirmation": analysis_snapshot["execution"]["live_confirmation"],
         "notes": [
             "Signal monitoring only. This app does not place trades.",
             "AI is run when deterministic gates pass and use_ai is enabled.",

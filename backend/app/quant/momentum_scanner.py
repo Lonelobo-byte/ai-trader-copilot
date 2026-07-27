@@ -10,10 +10,19 @@ from app.indicators.structure import (
     classify_market_phase,
     detect_bos,
     detect_choch,
+    find_swing_points,
     find_fair_value_gaps,
     find_order_blocks,
 )
 from app.quant.live_confirmation import apply_live_confirmation as _apply_live_confirmation
+from app.quant.market_context import (
+    build_liquidity_map,
+    build_volume_profile,
+    build_volatility_context,
+    build_vwap_context,
+    classify_positioning,
+    score_market_context,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -205,6 +214,12 @@ async def _enrich_live_confirmations(
     async def enrich(candidate: Dict[str, Any]) -> None:
         async with semaphore:
             live = await _fetch_live_confirmation(client, candidate["symbol"])
+            _refresh_causal_context_from_live(candidate, live)
+            if candidate.get("direction") == "NEUTRAL":
+                candidate["review_status"] = "WATCH_ONLY"
+                candidate["status"] = "CAUSAL_CONTEXT_WAIT"
+                candidate.setdefault("risk_flags", []).append("Live evidence removed directional alignment; waiting for a new causal context.")
+                return
             _apply_live_confirmation(candidate, live)
 
     await asyncio.gather(*(enrich(candidate) for candidate in eligible))
@@ -367,7 +382,7 @@ async def fetch_crypto_perpetual_metadata(client: httpx.AsyncClient) -> Dict[str
         logger.warning("Could not load Futures contract metadata for Radar: %s", exc)
     return {}
 
-async def get_breakout_candidates(ltf: str = "5m", htf: str = "1h", use_ai: bool = False) -> List[Dict[str, Any]]:
+async def _legacy_get_breakout_candidates(ltf: str = "5m", htf: str = "1h", use_ai: bool = False) -> List[Dict[str, Any]]:
     """Deterministically triage liquid perpetual contracts for manual review.
 
     Radar candidates are not trade signals. They are ranked from completed
@@ -829,6 +844,258 @@ async def get_breakout_candidates(ltf: str = "5m", htf: str = "1h", use_ai: bool
         # "AI VERIFIED" or "trap" were not evidence-backed.
 
         return breakouts
+
+
+def _phase_bias(phase: str) -> str:
+    if phase in {"MARKUP", "ACCUMULATION"}:
+        return "BULLISH"
+    if phase in {"MARKDOWN", "DISTRIBUTION"}:
+        return "BEARISH"
+    return "NEUTRAL"
+
+
+def _candle_range_reference(candles: list[Candle]) -> float:
+    """A sizing reference for liquidity clustering, never a trade signal."""
+    rows = candles[-14:]
+    return sum(max(0.0, candle.high - candle.low) for candle in rows) / len(rows) if rows else 0.0
+
+
+def _observable_structure_events(candles: list[Candle]) -> dict[str, dict[str, Any]]:
+    """Direct completed-candle swing breaks; no moving-average trend filter."""
+    highs, lows = find_swing_points(candles, N=3)
+    if not highs or not lows:
+        unavailable = {"detected": False, "direction": "none", "reason": "insufficient_confirmed_swing_points"}
+        return {"bos": unavailable, "choch": unavailable.copy()}
+    close = candles[-1].close
+    last_high, last_low = highs[-1]["price"], lows[-1]["price"]
+    if close > last_high:
+        bos = {"detected": True, "direction": "bullish", "broken_level": last_high, "current_close": close, "type": "BOS"}
+    elif close < last_low:
+        bos = {"detected": True, "direction": "bearish", "broken_level": last_low, "current_close": close, "type": "BOS"}
+    else:
+        bos = {"detected": False, "direction": "none", "reason": "no_completed_swing_break"}
+    # A CHoCH needs prior structure sequencing beyond a single snapshot. Do
+    # not invent it from EMA direction or a one-candle heuristic.
+    return {"bos": bos, "choch": {"detected": False, "direction": "none", "reason": "requires_historical_structure_sequence"}}
+
+
+def _candidate_from_causal_context(
+    *, symbol: str, candles: list[Candle], higher_candles: list[Candle], quote_volume_24h: float,
+) -> dict[str, Any] | None:
+    """Build a Radar discovery row without derived-indicator directional rules."""
+    if len(candles) < 55 or len(higher_candles) < 55:
+        return None
+
+    phase = classify_market_phase(candles)
+    higher_phase = classify_market_phase(higher_candles)
+    higher_bias = _phase_bias(higher_phase)
+    sweep = detect_liquidity_sweep(candles)
+    events = _observable_structure_events(candles)
+    structure = {
+        "phase": phase,
+        "higher_timeframe_phase": higher_phase,
+        "bos": events["bos"],
+        "choch": events["choch"],
+    }
+    liquidity_map = build_liquidity_map(candles, _candle_range_reference(candles))
+    features: dict[str, Any] = {
+        "market_structure": structure,
+        "liquidity_map": liquidity_map,
+        "sweep": sweep,
+        "positioning": {"available": False, "state": "UNKNOWN"},
+        # No depth history has been captured at this stage.  A candle's
+        # taker volume is not mislabeled as an order-book imbalance.
+        "microstructure": {"available": False},
+        "trade_flow": {"buy_ratio": 0.5, "bias": "UNAVAILABLE"},
+        "volatility_context": build_volatility_context(candles),
+        "volume_profile": build_volume_profile(candles),
+        "vwap_context": build_vwap_context(candles),
+    }
+    context = score_market_context(features)
+    direction = {"LONG": "BULLISH", "SHORT": "BEARISH"}.get(context["direction"], "NEUTRAL")
+    risk_flags = list(context.get("contradictions", []))
+    if direction != "NEUTRAL" and higher_bias not in {"NEUTRAL", direction}:
+        risk_flags.append("higher_timeframe_regime_conflicts")
+
+    completed = candles[-1]
+    reference = candles[-6].close
+    price_change_pct = ((completed.close - reference) / reference * 100.0) if reference else 0.0
+    target_pool = liquidity_map.get("nearest_above" if direction == "BULLISH" else "nearest_below") if direction != "NEUTRAL" else None
+    coverage = context.get("coverage", {})
+    eligible = (
+        direction != "NEUTRAL"
+        and coverage.get("complete", False)
+        and not risk_flags
+    )
+    components = context.get("components", {})
+    evidence_tags = [
+        name.replace("_", " ")
+        for name, component in components.items()
+        if component.get("available") and component.get("bias") in {direction, "NEUTRAL"}
+    ]
+    return {
+        "symbol": symbol,
+        "score": int(round(context.get("score", 0))),
+        "direction": direction,
+        "status": "CAUSAL_CONTEXT_PENDING_LIVE_CONFIRMATION" if eligible else "WAIT_FOR_ALIGNED_EVIDENCE",
+        "quality_badge": "CAUSAL_CONTEXT" if eligible else "EVIDENCE_INCOMPLETE",
+        "review_status": "WATCH_ONLY",
+        "risk_flags": risk_flags,
+        "contradictions": risk_flags,
+        "market_context": context,
+        "liquidity_map": liquidity_map,
+        "positioning": features["positioning"],
+        "volatility_context": features["volatility_context"],
+        "volume_profile": features["volume_profile"],
+        "vwap_context": features["vwap_context"],
+        "market_structure": structure,
+        "target_pool": target_pool,
+        "evidence_tags": evidence_tags,
+        "coverage": coverage,
+        "close_price": completed.close,
+        "price_change_pct": round(price_change_pct, 2),
+        "volume_usdt": round(quote_volume_24h, 2),
+        # Compatibility telemetry only. These values are never scored or
+        # rendered by the causal Radar surface.
+        "rvol": None,
+        "atr_ratio": None,
+        "rsi": None,
+        "htf_direction": higher_bias,
+        "mtf_aligned": higher_bias in {"NEUTRAL", direction},
+        "advanced_confirmation": {
+            "state": "PENDING" if eligible else "NOT_ELIGIBLE",
+            "reason": "Causal context awaits live depth, price×OI, funding and taker-flow confirmation." if eligible else "Waiting for aligned regime, liquidity and causal evidence.",
+        },
+        "causal_radar": True,
+        "_causal_features": features,
+        "_candles": candles,
+        "evaluation_mode": "causal_market_discovery_then_live_confirmation",
+    }
+
+
+def _refresh_causal_context_from_live(candidate: dict[str, Any], live: dict[str, Any]) -> None:
+    """Fold the bounded live snapshot into an already-ranked Radar context."""
+    features = candidate.get("_causal_features")
+    candles = candidate.get("_candles")
+    if not isinstance(features, dict) or not isinstance(candles, list):
+        return
+    ratio = _float(live.get("taker_buy_sell_ratio"), 1.0)
+    buy_ratio = ratio / (1.0 + ratio) if ratio > 0 else 0.5
+    price_change = _float(candidate.get("price_change_pct"))
+    derivatives = {
+        "funding_rate": live.get("funding_rate"),
+        "oi_history": {
+            "available": live.get("oi_change_pct") is not None,
+            "oi_change_pct": live.get("oi_change_pct"),
+        },
+        "taker_volume": {
+            "cvd_trend": "CVD_BULLISH" if ratio >= 1.02 else "CVD_BEARISH" if ratio <= 0.98 else "CVD_NEUTRAL",
+            "aggression": "BUYER_AGGRESSIVE" if ratio >= 1.02 else "SELLER_AGGRESSIVE" if ratio <= 0.98 else "NEUTRAL",
+        },
+    }
+    features["positioning"] = classify_positioning(candles, derivatives)
+    features["microstructure"] = {
+        "available": bool(live.get("data_complete")),
+        "depth_imbalance": live.get("depth_imbalance"),
+        "spread_bps": live.get("spread_bps"),
+    }
+    features["trade_flow"] = {
+        "buy_ratio": buy_ratio,
+        "bias": "BUYING" if buy_ratio > 0.55 else "SELLING" if buy_ratio < 0.45 else "NEUTRAL",
+    }
+    context = score_market_context(features)
+    direction = {"LONG": "BULLISH", "SHORT": "BEARISH"}.get(context["direction"], "NEUTRAL")
+    higher_bias = candidate.get("htf_direction", "NEUTRAL")
+    contradictions = list(context.get("contradictions", []))
+    if direction != "NEUTRAL" and higher_bias not in {"NEUTRAL", direction}:
+        contradictions.append("higher_timeframe_regime_conflicts")
+    candidate.update({
+        "score": int(round(context.get("score", 0))),
+        "direction": direction,
+        "market_context": context,
+        "positioning": features["positioning"],
+        "contradictions": contradictions,
+        "risk_flags": list(dict.fromkeys(candidate.get("risk_flags", []) + contradictions)),
+        "coverage": context.get("coverage", {}),
+        "evidence_tags": [
+            name.replace("_", " ")
+            for name, component in context.get("components", {}).items()
+            if component.get("available") and component.get("bias") in {direction, "NEUTRAL"}
+        ],
+    })
+    live["price_change_pct"] = price_change
+
+
+async def get_breakout_candidates(ltf: str = "5m", htf: str = "1h", use_ai: bool = False) -> List[Dict[str, Any]]:
+    """Rank liquid perpetuals for causal manual review, never trade execution."""
+    if ltf not in _RADAR_INTERVALS or htf not in _RADAR_INTERVALS or ltf == htf:
+        raise ValueError("Radar requires two different supported timeframes: 5m, 15m, 1h, 4h, or 1d.")
+    if use_ai:
+        logger.info("Radar AI scoring is disabled; causal evidence ranking is used instead.")
+
+    async with httpx.AsyncClient() as client:
+        try:
+            ticker_response, book_response, monitoring_set, futures_metadata = await asyncio.gather(
+                client.get("https://fapi.binance.com/fapi/v1/ticker/24hr", timeout=5.0),
+                client.get("https://fapi.binance.com/fapi/v1/ticker/bookTicker", timeout=5.0),
+                fetch_monitoring_symbols(client),
+                fetch_crypto_perpetual_metadata(client),
+            )
+            if ticker_response.status_code != 200 or book_response.status_code != 200:
+                return []
+        except Exception as exc:
+            logger.warning("Radar universe fetch failed: %s", exc)
+            return []
+
+        books = {row.get("symbol"): row for row in book_response.json() if row.get("symbol")}
+        universe: list[tuple[str, float]] = []
+        for ticker in ticker_response.json():
+            symbol = str(ticker.get("symbol", ""))
+            contract = futures_metadata.get(symbol) if futures_metadata else None
+            book = books.get(symbol, {})
+            try:
+                volume = _float(ticker.get("quoteVolume"))
+                bid, ask = _float(book.get("bidPrice")), _float(book.get("askPrice"))
+                spread_pct = ((ask - bid) / bid * 100.0) if bid else 999.0
+            except (TypeError, ValueError):
+                continue
+            if (
+                not symbol.endswith("USDT") or symbol in monitoring_set or volume < 8_000_000 or spread_pct > 0.15
+                or (contract and (contract.get("contractType") != "PERPETUAL" or contract.get("status") != "TRADING"))
+            ):
+                continue
+            universe.append((symbol, volume))
+
+        universe.sort(key=lambda item: item[1], reverse=True)
+        universe = universe[:40]
+        semaphore = asyncio.Semaphore(_KLINE_CONCURRENCY)
+
+        async def bounded(symbol: str, interval: str) -> list[list[Any]]:
+            async with semaphore:
+                return await fetch_klines(client, symbol, interval)
+
+        ltf_rows, htf_rows = await asyncio.gather(
+            asyncio.gather(*(bounded(symbol, ltf) for symbol, _ in universe)),
+            asyncio.gather(*(bounded(symbol, htf) for symbol, _ in universe)),
+        )
+        now_ms = int(time.time() * 1000)
+        candidates: list[dict[str, Any]] = []
+        for (symbol, volume), raw_ltf, raw_htf in zip(universe, ltf_rows, htf_rows):
+            candles = [candle for candle in _candles_from_klines(raw_ltf) if candle.close_time <= now_ms]
+            higher = [candle for candle in _candles_from_klines(raw_htf) if candle.close_time <= now_ms]
+            candidate = _candidate_from_causal_context(
+                symbol=symbol, candles=candles, higher_candles=higher, quote_volume_24h=volume,
+            )
+            if candidate:
+                candidates.append(candidate)
+
+        candidates.sort(key=lambda item: (item["score"], item["coverage"].get("available_domains", 0), item["volume_usdt"]), reverse=True)
+        await _enrich_live_confirmations(client, candidates)
+        for candidate in candidates:
+            candidate.pop("_causal_features", None)
+            candidate.pop("_candles", None)
+        candidates.sort(key=lambda item: (item["review_status"] == "REVIEW_CANDIDATE", item["score"], item["coverage"].get("available_domains", 0)), reverse=True)
+        return candidates
 
 
 async def _ai_score_candidates(

@@ -30,22 +30,29 @@
         <div class="access-copy-wrap">
           <span class="eyebrow">Private analyst workspace</span>
           <h2>Institutional access.<br><em>Built for conviction.</em></h2>
-          <p>Real-time market evidence, autonomous scans, and disciplined risk context in one private command center.</p>
+          <p>Real-time market evidence, autonomous scans, and disciplined risk context in one private command center.
+          </p>
           <ul class="access-proof-list">
             <li><span>✓</span> Multi-agent evidence synthesis</li>
             <li><span>✓</span> Live order-flow telemetry</li>
             <li><span>✓</span> Server-enforced subscription access</li>
           </ul>
         </div>
-        <div class="access-security"><span class="security-dot"></span> Encrypted session · Verified payment activation</div>
+        <div class="access-security"><span class="security-dot"></span> Encrypted session · Verified payment activation
+        </div>
       </section>
       <section class="access-form-zone">
         <form id="auth-form" class="access-form">
-          <div class="access-form-heading"><span class="eyebrow">Member access</span><h1>Welcome back</h1><p id="auth-copy">Sign in to access your subscription.</p></div>
+          <div class="access-form-heading"><span class="eyebrow">Member access</span>
+            <h1>Welcome back</h1>
+            <p id="auth-copy">Sign in to access your subscription.</p>
+          </div>
           <label class="field-label" for="auth-email">Email address</label>
-          <input id="auth-email" class="access-input" type="email" required autocomplete="email" placeholder="analyst@company.com">
+          <input id="auth-email" class="access-input" type="email" required autocomplete="email"
+            placeholder="analyst@company.com">
           <label class="field-label" for="auth-password">Password</label>
-          <input id="auth-password" class="access-input" type="password" required minlength="12" autocomplete="current-password" placeholder="Enter your password">
+          <input id="auth-password" class="access-input" type="password" required minlength="12"
+            autocomplete="current-password" placeholder="Enter your password">
           <div id="auth-error" class="access-error" aria-live="polite"></div>
           <button type="submit" id="auth-submit" class="access-primary">Sign in securely <span>→</span></button>
           <button type="button" id="auth-toggle" class="access-secondary">Create an account</button>
@@ -54,7 +61,8 @@
       </section>
     </div>
     <div id="plan-picker" class="membership-picker" hidden>
-      <div class="membership-topline"><span class="eyebrow">Membership</span><span class="secure-chip"><span></span> Secure checkout</span></div>
+      <div class="membership-topline"><span class="eyebrow">Membership</span><span class="secure-chip"><span></span>
+          Secure checkout</span></div>
       <h2>Choose your research edge.</h2>
       <p>Unlock the full analyst workstation. Payment activation occurs only after verified provider confirmation.</p>
       <div id="plan-options" class="plan-options"></div>
@@ -96,7 +104,8 @@
       <div class="header-title-sec">
         <div class="header-kicker">APEX / MARKET INTELLIGENCE</div>
         <h1>Command Center</h1>
-        <div class="breadcrumbs">Private analyst workspace <span class="bullet">/</span> Co-Pilot <span class="badge">LIVE</span></div>
+        <div class="breadcrumbs">Private analyst workspace <span class="bullet">/</span> Co-Pilot <span
+            class="badge">LIVE</span></div>
       </div>
 
       <div class="header-market-context" aria-label="Current workspace context">
@@ -115,6 +124,17 @@
       </div>
 
       <div class="header-live-state">
+        <button type="button" class="ai-connection-btn" id="open-ai-connection-btn" onclick="openAiConnectionModal()"
+          title="Manage your OpenRouter key and model">
+          <span class="ai-connection-dot" id="ai-connection-dot"></span>
+          <span class="ai-connection-label">AI Connection</span>
+          <span class="ai-connection-model" id="ai-connection-model">Set key</span>
+        </button>
+        <!-- <a class="open-radar-btn" href="radar.html" title="Open Market Discovery Radar">
+          <span class="open-radar-btn-label">Open Market Discovery Radar</span>
+          <span class="open-radar-btn-short">Radar</span>
+          <span aria-hidden="true">→</span>
+        </a> -->
         <div class="header-scanner-status" id="header-scanner-info">
           <span class="scanner-dot pulse green"></span>
           <span class="scanner-text" id="header-scanner-status-text">Scanner: Active</span>
@@ -306,6 +326,165 @@
 
       <section class="panel ai-report-panel">
 
+        <!-- CAUSAL MARKET CONTEXT: the evidence hierarchy behind every setup -->
+        <section class="card market-context-card" id="market-context-card" aria-labelledby="market-context-title">
+          <header class="market-context-heading">
+            <div>
+              <span class="eyebrow">Causal market context</span>
+              <h3 id="market-context-title">Why Price Is Moving</h3>
+            </div>
+            <span class="market-context-status wait" id="market-context-status">WAIT</span>
+          </header>
+          <div class="market-context-score-row">
+            <div class="market-context-score"><span>Setup score</span><strong
+                id="market-context-score">--<small>/100</small></strong></div>
+            <p id="market-context-summary">Waiting for regime, liquidity, positioning, and order-flow evidence.</p>
+          </div>
+          <div class="market-context-grid">
+            <div class="market-context-metric"><span>Regime · volatility</span><strong
+                id="context-regime">UNAVAILABLE</strong></div>
+            <div class="market-context-metric"><span>Price × OI</span><strong
+                id="context-positioning">UNAVAILABLE</strong></div>
+            <div class="market-context-metric"><span>Order flow</span><strong
+                id="context-order-flow">UNAVAILABLE</strong></div>
+            <div class="market-context-metric"><span>Funding · delta</span><strong
+                id="context-funding">UNAVAILABLE</strong></div>
+          </div>
+          <div class="market-context-detail-grid">
+            <div class="market-context-detail">
+              <span class="market-context-label">Liquidity map</span>
+              <div><span>Above</span><strong id="context-liquidity-above">--</strong></div>
+              <div><span>Below</span><strong id="context-liquidity-below">--</strong></div>
+            </div>
+            <div class="market-context-detail">
+              <span class="market-context-label">Volume · VWAP</span>
+              <div><span>Profile</span><strong id="context-profile">--</strong></div>
+              <div><span>VWAP</span><strong id="context-vwap">--</strong></div>
+            </div>
+          </div>
+          <div class="market-context-contradictions" id="market-context-contradictions" hidden></div>
+          <footer class="market-context-footer">
+            <span id="context-coverage">0 / 8 required domains</span>
+            <span id="context-limitations">Evidence unavailable until the stream is active.</span>
+          </footer>
+        </section>
+
+        <!-- SIGNAL MONITOR CARD (ACTIVE SIGNAL LIFECYCLE) -->
+        <div class="card signal-monitor-card" id="signal-monitor-card">
+          <div class="monitor-heading">
+            <div>
+              <h3>Autonomous Signal Monitor</h3>
+              <p id="monitor-reason-val">The system is evaluating evidence against committee controls.</p>
+            </div>
+            <span class="monitor-status scanning" id="monitor-status-val">SCANNING</span>
+          </div>
+          <section class="monitor-confirmation-scenarios" id="monitor-confirmation-scenarios" aria-label="Confirmation scenario" hidden></section>
+          <section class="monitor-evidence-hero scanning" id="monitor-evidence-hero" aria-label="Evidence state">
+            <div>
+              <span class="monitor-eyebrow" id="monitor-evidence-state">EVIDENCE STATE · SCANNING</span>
+              <strong id="monitor-evidence-title">Mapping causal market evidence</strong>
+              <p id="monitor-evidence-detail">The monitor will state the next required condition before it can publish a
+                signal.</p>
+            </div>
+            <span class="monitor-evidence-mark" id="monitor-evidence-mark">…</span>
+          </section>
+          <section class="monitor-missing-evidence" id="monitor-missing-evidence" aria-label="Missing evidence">
+            <span>AWAITING</span>
+            <div><strong id="monitor-missing-title">Qualified evidence</strong>
+              <p id="monitor-missing-detail">No specific control is currently blocking the watch plan.</p>
+            </div>
+          </section>
+          <div class="monitor-gate-strip" id="monitor-gate-strip" aria-label="Evidence controls">
+            <span class="monitor-gate-chip"><b>Structure</b><strong>SCANNING</strong></span>
+            <span class="monitor-gate-chip"><b>Liquidity</b><strong>SCANNING</strong></span>
+            <span class="monitor-gate-chip"><b>Order flow</b><strong>SCANNING</strong></span>
+            <span class="monitor-gate-chip"><b>Positioning</b><strong>SCANNING</strong></span>
+            <span class="monitor-gate-chip"><b>Macro</b><strong>SCANNING</strong></span>
+          </div>
+          <div class="monitor-command-row">
+            <span class="label">Command Output</span>
+            <strong id="monitor-action-val">SCANNING</strong>
+            <span class="monitor-id" id="monitor-id-val">No active signal</span>
+          </div>
+          <div class="monitor-grid">
+            <div class="monitor-metric"><span>Side</span><strong id="monitor-side-val">-</strong></div>
+            <div class="monitor-metric"><span>Live Price</span><strong id="monitor-price-val"
+                class="font-mono">-</strong>
+            </div>
+            <div class="monitor-metric"><span>Entry Zone</span><strong id="monitor-entry-val"
+                class="font-mono">-</strong>
+            </div>
+            <div class="monitor-metric"><span>Active Stop</span><strong id="monitor-stop-val"
+                class="font-mono">-</strong>
+            </div>
+          </div>
+
+          <div class="monitor-trade-lifecycle" id="monitor-trade-lifecycle">
+            <div class="target-progress target-journey-progress">
+              <div class="target-progress-label"><span>Overall Trade Journey</span><strong
+                  id="monitor-journey-progress-val">0%</strong></div>
+              <div class="target-progress-track">
+                <div id="monitor-journey-progress-fill"></div>
+              </div>
+            </div>
+
+            <div class="target-milestones" id="monitor-target-milestones" aria-label="Trade target milestones">
+              <div class="target-milestone" data-stage="0">
+                <span class="milestone-node">E</span>
+                <div><span>ENTRY ZONE</span><strong id="monitor-entry-price-val" class="font-mono">-</strong><small>WAIT
+                    FOR ENTRY</small></div>
+              </div>
+              <div class="target-milestone" data-stage="1">
+                <span class="milestone-node">1</span>
+                <div><span>TP1</span><strong id="monitor-tp1-val" class="font-mono">-</strong><small>WAITING</small>
+                </div>
+              </div>
+              <div class="target-milestone" data-stage="2">
+                <span class="milestone-node">2</span>
+                <div><span>TP2</span><strong id="monitor-tp2-val" class="font-mono">-</strong><small>WAITING</small>
+                </div>
+              </div>
+              <div class="target-milestone" data-stage="3">
+                <span class="milestone-node">3</span>
+                <div><span>TP3</span><strong id="monitor-tp3-val" class="font-mono">-</strong><small>WAITING</small>
+                </div>
+              </div>
+              <div class="target-milestone" data-stage="4">
+                <span class="milestone-node">4</span>
+                <div><span>RUNNER</span><strong id="monitor-runner-val"
+                    class="font-mono">-</strong><small>WAITING</small>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <section class="monitor-watch-plan" id="monitor-watch-plan" aria-label="Watch plan">
+            <span class="monitor-plan-label">Watch-plan timeline</span>
+            <div class="monitor-watch-step done"><i></i>
+              <div><strong id="monitor-watch-step-one-title">Causal context mapped</strong>
+                <p id="monitor-watch-step-one-detail">Regime, liquidity, positioning, and flow are being checked
+                  together.</p>
+              </div>
+            </div>
+            <div class="monitor-watch-step current"><i></i>
+              <div><strong id="monitor-watch-step-two-title">Evidence control awaited</strong>
+                <p id="monitor-watch-step-two-detail">The exact missing condition will appear here.</p>
+              </div>
+            </div>
+            <div class="monitor-watch-step"><i></i>
+              <div><strong>Publish only after alignment</strong>
+                <p>Targets and lifecycle monitoring appear only after a qualified signal is released.</p>
+              </div>
+            </div>
+          </section>
+
+          <div class="monitor-events" id="monitor-events-list">
+            <div class="monitor-empty">No active signal tracking events.</div>
+          </div>
+          <button type="button" class="btn dismiss-signal-btn hidden" id="dismiss-signal-btn">Dismiss Signal</button>
+        </div>
+
+
         <!-- EXACT TRADE SETUP DETAILS -->
         <div class="card exact-setup-card">
           <h3>Trade Setup Plan</h3>
@@ -347,71 +526,7 @@
           </div>
         </div>
 
-        <!-- SIGNAL MONITOR CARD (ACTIVE SIGNAL LIFECYCLE) -->
-        <div class="card signal-monitor-card" id="signal-monitor-card">
-          <div class="monitor-heading">
-            <div>
-              <h3>Autonomous Signal Monitor</h3>
-              <p id="monitor-reason-val">The system is evaluating evidence against committee controls.</p>
-            </div>
-            <span class="monitor-status scanning" id="monitor-status-val">SCANNING</span>
-          </div>
-          <div class="monitor-command-row">
-            <span class="label">Command Output</span>
-            <strong id="monitor-action-val">SCANNING</strong>
-            <span class="monitor-id" id="monitor-id-val">No active signal</span>
-          </div>
-          <div class="monitor-grid">
-            <div class="monitor-metric"><span>Side</span><strong id="monitor-side-val">-</strong></div>
-            <div class="monitor-metric"><span>Live Price</span><strong id="monitor-price-val"
-                class="font-mono">-</strong>
-            </div>
-            <div class="monitor-metric"><span>Entry Zone</span><strong id="monitor-entry-val"
-                class="font-mono">-</strong>
-            </div>
-            <div class="monitor-metric"><span>Active Stop</span><strong id="monitor-stop-val"
-                class="font-mono">-</strong>
-            </div>
-          </div>
 
-          <div class="target-progress target-journey-progress">
-            <div class="target-progress-label"><span>Overall Trade Journey</span><strong
-                id="monitor-journey-progress-val">0%</strong></div>
-            <div class="target-progress-track">
-              <div id="monitor-journey-progress-fill"></div>
-            </div>
-          </div>
-
-          <div class="target-milestones" id="monitor-target-milestones" aria-label="Trade target milestones">
-            <div class="target-milestone" data-stage="0">
-              <span class="milestone-node">E</span>
-              <div><span>ENTRY ZONE</span><strong id="monitor-entry-price-val" class="font-mono">-</strong><small>WAIT
-                  FOR ENTRY</small></div>
-            </div>
-            <div class="target-milestone" data-stage="1">
-              <span class="milestone-node">1</span>
-              <div><span>TP1</span><strong id="monitor-tp1-val" class="font-mono">-</strong><small>WAITING</small></div>
-            </div>
-            <div class="target-milestone" data-stage="2">
-              <span class="milestone-node">2</span>
-              <div><span>TP2</span><strong id="monitor-tp2-val" class="font-mono">-</strong><small>WAITING</small></div>
-            </div>
-            <div class="target-milestone" data-stage="3">
-              <span class="milestone-node">3</span>
-              <div><span>TP3</span><strong id="monitor-tp3-val" class="font-mono">-</strong><small>WAITING</small></div>
-            </div>
-            <div class="target-milestone" data-stage="4">
-              <span class="milestone-node">4</span>
-              <div><span>RUNNER</span><strong id="monitor-runner-val" class="font-mono">-</strong><small>WAITING</small>
-              </div>
-            </div>
-          </div>
-
-          <div class="monitor-events" id="monitor-events-list">
-            <div class="monitor-empty">No active signal tracking events.</div>
-          </div>
-          <button type="button" class="btn dismiss-signal-btn hidden" id="dismiss-signal-btn">Dismiss Signal</button>
-        </div>
 
 
         <!-- RISK CALCULATOR CARD -->
@@ -619,7 +734,7 @@
             </div>
             <p class="council-desc" style="font-size: 0.72rem; color: var(--text-muted); margin-bottom: 0.75rem;">
               Independent engines publish measured evidence; Risk and Adversarial Review have hard veto authority.</p>
-            <div class="council-grid" id="council-agents-grid">
+            <div class="council-grid is-empty" id="council-agents-grid">
               <div class="empty-council-state">
                 <span class="icon">💬</span>
                 <p>Activate the live stream or trigger a scan to build the evidence dossier.</p>
@@ -629,22 +744,35 @@
 
           <!-- CIO Report Content -->
           <div class="card-tab-content hidden" data-card-tab="report">
-            <div class="ai-report-view" id="ai-report-body">
-              <div class="ai-meta-summary"
-                style="margin-bottom: 0.75rem; display: flex; justify-content: space-between; align-items: center;">
-                <div class="meta-badge" id="ai-sentiment-badge"
-                  style="background: rgba(139, 92, 246, 0.08); color: var(--neon-purple); border: 1px solid rgba(139, 92, 246, 0.15); padding: 2px 8px; border-radius: 4px; font-size: 0.7rem; font-weight: 600;">
-                  CIO DECISION</div>
-                <div class="meta-confidence" style="font-size: 0.75rem; color: var(--text-muted);">Confidence: <span
-                    id="ai-confidence-val" class="font-mono">-</span>%</div>
-              </div>
-              <div class="markdown-content" id="report-md-render"
-                style="max-height: 380px; overflow-y: auto; padding-right: 0.25rem;">
-                <div class="empty-state" id="ai-empty-state">
-                  <span class="icon">🤖</span>
-                  <p>Build the evidence dossier to render the Chief Investment Officer's memorandum.</p>
+            <div class="ai-report-view cio-report-view" id="ai-report-body">
+              <section class="cio-decision-hero neutral" id="cio-decision-hero" aria-label="CIO decision summary">
+                <div class="cio-decision-copy">
+                  <span class="cio-eyebrow">CIO decision · research only</span>
+                  <div class="cio-decision-line">
+                    <strong class="cio-decision-badge neutral" id="ai-sentiment-badge">AWAITING EVIDENCE</strong>
+                    <span class="cio-grade-badge" id="cio-trade-grade">—</span>
+                  </div>
+                  <p class="cio-thesis" id="cio-thesis">The memorandum will summarize the committee's measured evidence
+                    once a snapshot is available.</p>
                 </div>
-              </div>
+                <div class="cio-confidence" aria-label="Evidence confidence">
+                  <span>Evidence confidence</span>
+                  <div><strong id="ai-confidence-val" class="font-mono">—</strong><small>%</small></div>
+                </div>
+              </section>
+              <div class="cio-control-strip" id="cio-control-strip" aria-label="Decision controls"></div>
+              <section class="cio-memo-reader" aria-label="CIO memorandum">
+                <div class="cio-memo-heading">
+                  <span>CIO Memorandum</span>
+                  <span class="cio-memo-status" id="cio-memo-status">AWAITING EVIDENCE</span>
+                </div>
+                <div class="markdown-content cio-memo-content" id="report-md-render">
+                  <div class="empty-state" id="ai-empty-state">
+                    <span class="icon">🤖</span>
+                    <p>Build the evidence dossier to render the Chief Investment Officer's memorandum.</p>
+                  </div>
+                </div>
+              </section>
             </div>
           </div>
         </div>
@@ -756,15 +884,16 @@
               options.querySelectorAll('.plan-card').forEach(card => card.classList.remove('is-selected'));
               button.classList.add('is-selected', 'is-loading');
               button.disabled = true; planError.textContent = ''; try {
-              const checkout = await fetch('/billing/checkout', {method:'POST',headers:{'Content-Type':'application/json','Authorization':`Bearer ${token}`},body:JSON.stringify({plan_code:plan.code})});
-              const raw = await checkout.text();
-              let invoice = {};
-              try { invoice = raw ? JSON.parse(raw) : {}; }
-              catch { invoice = {detail: raw || `Checkout failed with HTTP ${checkout.status}.`}; }
-              if (!checkout.ok) throw new Error(invoice.detail || 'Checkout is unavailable.');
-              if (!invoice.invoice_url) throw new Error('Checkout did not return an invoice URL.');
-              window.location.assign(invoice.invoice_url);
-            } catch (err) { planError.textContent = err.message; button.disabled = false; button.classList.remove('is-loading'); } };
+                const checkout = await fetch('/billing/checkout', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` }, body: JSON.stringify({ plan_code: plan.code }) });
+                const raw = await checkout.text();
+                let invoice = {};
+                try { invoice = raw ? JSON.parse(raw) : {}; }
+                catch { invoice = { detail: raw || `Checkout failed with HTTP ${checkout.status}.` }; }
+                if (!checkout.ok) throw new Error(invoice.detail || 'Checkout is unavailable.');
+                if (!invoice.invoice_url) throw new Error('Checkout did not return an invoice URL.');
+                window.location.assign(invoice.invoice_url);
+              } catch (err) { planError.textContent = err.message; button.disabled = false; button.classList.remove('is-loading'); }
+            };
             return button;
           }));
         } catch (err) { planError.textContent = 'Plans are temporarily unavailable.'; }
@@ -772,7 +901,7 @@
       const waitForPayment = async (token, attempts = 0) => {
         const planError = document.getElementById('plan-error');
         try {
-          const r = await fetch('/billing/payment-status', {headers:{'Authorization':`Bearer ${token}`}});
+          const r = await fetch('/billing/payment-status', { headers: { 'Authorization': `Bearer ${token}` } });
           if (r.status === 401) return restore(true);
           const d = await r.json();
           if (!r.ok) throw new Error(d.detail || 'Could not verify the payment.');
@@ -796,7 +925,7 @@
       };
       const routeAfterAuth = async (token, wasRefreshed = false) => {
         try {
-          const r = await fetch('/billing/me', {headers:{'Authorization':`Bearer ${token}`}});
+          const r = await fetch('/billing/me', { headers: { 'Authorization': `Bearer ${token}` } });
           if (r.status === 401) {
             sessionStorage.removeItem('atc_access_token');
             return wasRefreshed ? showLogin('Your session expired. Please sign in again.') : restore(true);
@@ -828,7 +957,7 @@
       form.onsubmit = async (event) => {
         event.preventDefault(); error.textContent = ''; submit.disabled = true;
         try {
-          const r = await fetch(register ? '/auth/register' : '/auth/login', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({email:document.getElementById('auth-email').value,password:document.getElementById('auth-password').value}) });
+          const r = await fetch(register ? '/auth/register' : '/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: document.getElementById('auth-email').value, password: document.getElementById('auth-password').value }) });
           const d = await r.json(); if (!r.ok) throw new Error(d.detail || 'Could not authenticate.');
           sessionStorage.setItem('atc_access_token', d.access_token); routeAfterAuth(d.access_token);
         } catch (e) { error.textContent = e.message; } finally { submit.disabled = false; }
@@ -906,21 +1035,21 @@
     }
   </script>
   <!-- AGENT DOSSIER MODAL OVERLAY -->
-  <div class="modal-overlay" id="agent-dossier-modal"
-    style="display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(8, 10, 18, 0.85); backdrop-filter: blur(10px); z-index: 99999; align-items: center; justify-content: center;"
+  <div class="modal-overlay dossier-modal-overlay" id="agent-dossier-modal"
+    style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100vh; background: rgba(8, 10, 18, 0.85); backdrop-filter: blur(10px); z-index: 99999; align-items: center; justify-content: center;"
     onclick="if(event.target===this) closeAgentDossierModal()">
-    <div class="modal-card"
-      style="background: #141625; border: 1px solid rgba(62, 151, 255, 0.3); border-radius: 12px; width: 90%; max-width: 680px; max-height: 85vh; display: flex; flex-direction: column; box-shadow: 0 0 35px rgba(0, 0, 0, 0.8), 0 0 15px rgba(62, 151, 255, 0.25); overflow: hidden; position: relative;">
-      <div
+    <div class="modal-card dossier-modal-card" role="dialog" aria-modal="true" aria-labelledby="dossier-modal-title"
+      style="background: #141625; border: 1px solid rgba(62, 151, 255, 0.3); border-radius: 12px; width: 90%; max-width: 90%; max-height: 85vh; display: flex; flex-direction: column; box-shadow: 0 0 35px rgba(0, 0, 0, 0.8), 0 0 15px rgba(62, 151, 255, 0.25); overflow: hidden; position: relative;">
+      <div class="dossier-modal-accent"
         style="position: absolute; top: 0; left: 0; right: 0; height: 3px; background: linear-gradient(90deg, var(--neon-blue), var(--neon-purple));">
       </div>
 
       <!-- Modal Header -->
-      <div
+      <div class="dossier-modal-header"
         style="padding: 1.25rem 1.5rem; border-bottom: 1px solid rgba(255, 255, 255, 0.08); display: flex; align-items: center; justify-content: space-between; background: rgba(0, 0, 0, 0.25);">
-        <div style="display: flex; align-items: center; gap: 0.75rem;">
+        <div class="dossier-modal-identity" style="display: flex; align-items: center; gap: 0.75rem;">
           <span id="dossier-modal-icon" style="font-size: 1.6rem;">📐</span>
-          <div>
+          <div class="dossier-modal-title-block">
             <h3 id="dossier-modal-title" style="font-size: 1.05rem; font-weight: 800; color: #ffffff; margin: 0;">Market
               Structure Analyst</h3>
             <span id="dossier-modal-subtitle"
@@ -928,19 +1057,61 @@
               Shifts</span>
           </div>
         </div>
-        <div style="display: flex; align-items: center; gap: 0.75rem;">
-          <div id="dossier-modal-badge"></div>
-          <button id="close-dossier-modal-btn" onclick="closeAgentDossierModal()"
+        <div class="dossier-modal-actions" style="display: flex; align-items: center; gap: 0.75rem;">
+          <div id="dossier-modal-badge" class="dossier-modal-badges"></div>
+          <button id="close-dossier-modal-btn" class="dossier-close-btn" onclick="closeAgentDossierModal()"
             style="background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.15); color: #fff; border-radius: 6px; width: 32px; height: 32px; font-size: 1.2rem; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.2s;">&times;</button>
         </div>
       </div>
 
       <!-- Modal Body -->
-      <div id="dossier-modal-body"
+      <div id="dossier-modal-body" class="dossier-modal-body"
         style="padding: 1.5rem; overflow-y: auto; flex-grow: 1; font-size: 0.8rem; line-height: 1.6; color: var(--text-secondary);">
         <!-- Agent Dossier content rendered dynamically -->
       </div>
     </div>
+  </div>
+  <!-- USER AI CONNECTION MODAL -->
+  <div class="modal-overlay ai-connection-modal-overlay" id="ai-connection-modal" style="display: none;"
+    onclick="if(event.target===this) closeAiConnectionModal()">
+    <section class="ai-connection-modal-card" role="dialog" aria-modal="true"
+      aria-labelledby="ai-connection-modal-title">
+      <div class="ai-connection-modal-accent"></div>
+      <header class="ai-connection-modal-header">
+        <div class="ai-connection-modal-title-wrap">
+          <span class="ai-connection-modal-icon" aria-hidden="true">AI</span>
+          <div>
+            <span class="ai-connection-eyebrow">PRIVATE AI CONNECTION</span>
+            <h2 id="ai-connection-modal-title">OpenRouter workspace</h2>
+            <p id="ai-connection-status-copy">Checking your saved connection…</p>
+          </div>
+        </div>
+        <button type="button" class="ai-connection-close" onclick="closeAiConnectionModal()"
+          aria-label="Close AI connection">&times;</button>
+      </header>
+      <form id="ai-connection-form" class="ai-connection-form" onsubmit="saveAiConnection(event)">
+        <div class="ai-connection-saved" id="ai-connection-saved" hidden>
+          <span>Saved key</span><strong id="ai-connection-key-hint">••••</strong>
+          <span class="ai-connection-saved-divider"></span>
+          <span>Active model</span><strong id="ai-connection-saved-model">—</strong>
+        </div>
+        <label for="ai-connection-api-key">OpenRouter API key <small>Leave blank to keep the saved key.</small></label>
+        <input id="ai-connection-api-key" name="api_key" type="password" autocomplete="new-password"
+          placeholder="sk-or-v1-…" spellcheck="false">
+        <label for="ai-connection-model-input">Model ID <small>Use any model enabled in your OpenRouter
+            account.</small></label>
+        <input id="ai-connection-model-input" name="model" type="text" required maxlength="200" autocomplete="off"
+          placeholder="openai/gpt-4.1-mini" spellcheck="false">
+        <p class="ai-connection-note">Your key is encrypted on the server, never shown here again, and used only for
+          your signed-in analysis sessions. Autonomous scans do not use it.</p>
+        <p id="ai-connection-form-message" class="ai-connection-form-message" role="status"></p>
+        <div class="ai-connection-actions">
+          <button type="button" class="ai-connection-remove" id="remove-ai-connection-btn"
+            onclick="removeAiConnection()" hidden>Remove key</button>
+          <button type="submit" class="ai-connection-save" id="save-ai-connection-btn">Save connection</button>
+        </div>
+      </form>
+    </section>
   </div>
 </body>
 

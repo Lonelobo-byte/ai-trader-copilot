@@ -9,7 +9,9 @@ from time import time
 from typing import Any
 
 from app.data_sources.binance_public import Candle, completed_candles
-from app.indicators.structure import classify_market_phase, detect_bos, detect_choch
+from app.indicators.liquidity import detect_liquidity_sweep
+from app.indicators.structure import classify_market_phase, find_swing_points
+from app.quant.market_context import build_volume_profile, build_vwap_context
 
 
 def _number(value: Any, default: float = 0.0) -> float:
@@ -45,6 +47,24 @@ def _rsi(prices: list[float], period: int = 14) -> float:
     return 100.0 - 100.0 / (1.0 + average_gain / average_loss)
 
 
+def _observable_structure_events(candles: list[Candle]) -> dict[str, dict[str, Any]]:
+    """Read completed swing breaks without an indicator-derived trend gate."""
+    highs, lows = find_swing_points(candles, N=3)
+    if not highs or not lows:
+        unavailable = {"detected": False, "direction": "none", "reason": "insufficient_confirmed_swing_points"}
+        return {"bos": unavailable, "choch": unavailable.copy()}
+    close = _number(candles[-1].close)
+    if close > _number(highs[-1]["price"]):
+        bos = {"detected": True, "direction": "bullish", "broken_level": highs[-1]["price"], "current_close": close, "type": "BOS"}
+    elif close < _number(lows[-1]["price"]):
+        bos = {"detected": True, "direction": "bearish", "broken_level": lows[-1]["price"], "current_close": close, "type": "BOS"}
+    else:
+        bos = {"detected": False, "direction": "none", "reason": "no_completed_swing_break"}
+    # A CHoCH needs a confirmed historical swing sequence.  Do not invent one
+    # from a moving-average trend label; an explicit opposite BOS is the veto.
+    return {"bos": bos, "choch": {"detected": False, "direction": "none", "reason": "requires_historical_structure_sequence"}}
+
+
 def apply_live_confirmation(candidate: dict[str, Any], live: dict[str, Any]) -> None:
     """Apply the exact direction-aware Radar execution checks to a candidate."""
     direction = candidate["direction"]
@@ -77,7 +97,11 @@ def apply_live_confirmation(candidate: dict[str, Any], live: dict[str, Any]) -> 
     crowded = (direction == "BULLISH" and funding > 0.0005) or (direction == "BEARISH" and funding < -0.0005)
 
     live_points = sum((8 if liquid else 0, 10 if depth_aligned else 0, 10 if flow_aligned else 0, 7 if positioning_aligned else 0, 5 if not crowded else 0))
-    candidate["score"] = min(100, int(candidate["score"]) + live_points)
+    # Causal Radar rows already contain the complete market-context score.
+    # Live checks qualify that score; they never inflate it with a second,
+    # incompatible point system. Legacy callers retain their prior behavior.
+    if not candidate.get("causal_radar"):
+        candidate["score"] = min(100, int(candidate["score"]) + live_points)
     checks = {
         "data_complete": bool(live.get("data_complete")),
         "spread_within_limit": liquid,
@@ -97,7 +121,7 @@ def apply_live_confirmation(candidate: dict[str, Any], live: dict[str, Any]) -> 
     }
     risk_flags.extend(message for key, message in messages.items() if not checks[key])
     candidate["advanced_confirmation"] = {**live, "checks": checks, "live_points": live_points}
-    accepted = all(checks.values()) and candidate["score"] >= 75
+    accepted = all(checks.values()) and candidate["score"] >= (65 if candidate.get("causal_radar") else 75)
     candidate["review_status"] = "REVIEW_CANDIDATE" if accepted else "WATCH_ONLY"
     candidate["status"] = "LIVE_CONFIRMED_REVIEW" if accepted else "LIVE_CONFIRMATION_REJECTED"
     candidate["quality_badge"] = "LIVE CHECK PASSED" if accepted else "LIVE CHECK FAILED"
@@ -123,20 +147,27 @@ def verify_main_signal_snapshot(
         "completed_higher_candles": len(higher) >= 55,
     }
     risk_flags: list[str] = []
-    if not all(structure_checks.values()):
+    # Tactical observation is allowed to evaluate a valid primary-timeframe
+    # setup without demanding a higher-timeframe confirmation. It still fails
+    # closed if there is no direction or no completed primary structure.
+    if not structure_checks["directional_plan"] or not structure_checks["completed_primary_candles"]:
         if not structure_checks["directional_plan"]:
             risk_flags.append("No directional trade plan is available for live confirmation.")
-        if not structure_checks["completed_primary_candles"] or not structure_checks["completed_higher_candles"]:
-            risk_flags.append("Insufficient completed primary or higher-timeframe candles for structure confirmation.")
+        if not structure_checks["completed_primary_candles"]:
+            risk_flags.append("Insufficient completed primary-timeframe candles for structure confirmation.")
         return {
             "symbol": symbol, "timeframe": timeframe, "direction": direction,
             "passed": False, "status": "STRUCTURE_REJECTED", "quality_badge": "STRUCTURE CHECK FAILED",
             "structure_checks": structure_checks, "live_checks": {}, "risk_flags": risk_flags,
-            "reason": risk_flags[0], "evaluation_mode": "shared_radar_live_confirmation",
+            "reason": risk_flags[0], "evaluation_mode": "causal_regime_aware_live_confirmation",
+            "scenarios": {
+                "institutional": {"passed": False, "status": "UNAVAILABLE", "reason": risk_flags[0]},
+                "tactical": {"passed": False, "status": "UNAVAILABLE", "reason": risk_flags[0]},
+            },
         }
 
     primary_phase = classify_market_phase(primary)
-    higher_phase = classify_market_phase(higher)
+    higher_phase = classify_market_phase(higher) if structure_checks["completed_higher_candles"] else "UNAVAILABLE"
     phase_direction = {"MARKUP": "BULLISH", "ACCUMULATION": "BULLISH", "MARKDOWN": "BEARISH", "DISTRIBUTION": "BEARISH"}
     primary_direction = phase_direction.get(primary_phase, "NEUTRAL")
     higher_direction = phase_direction.get(higher_phase, "NEUTRAL")
@@ -149,31 +180,125 @@ def verify_main_signal_snapshot(
                       else (_number(latest.high) - _number(latest.close)) / candle_range)
     average_volume = sum(_number(c.quote_volume) for c in primary[-21:-1]) / 20.0
     rvol = _number(latest.quote_volume) / average_volume if average_volume > 0 else 0.0
-    bos = detect_bos(primary)
-    choch = detect_choch(primary)
-    phase = primary_phase
-    phase_aligned = phase in ({"MARKUP", "ACCUMULATION"} if direction == "BULLISH" else {"MARKDOWN", "DISTRIBUTION"})
+    events = _observable_structure_events(primary)
+    bos, choch = events["bos"], events["choch"]
     choch_opposes = bool(choch.get("detected")) and choch.get("direction") != direction.lower()
     breakout = _number(latest.close) > prior_high if direction == "BULLISH" else _number(latest.close) < prior_low
-    structure_checks.update({
-        "multi_timeframe_aligned": primary_direction == direction and higher_direction == direction,
-        "confirmed_completed_breakout": breakout,
-        "relative_volume_confirmed": rvol >= 1.5,
-        "decisive_candle": body_ratio >= 0.55 and close_location >= 0.60,
-        # Do not demand every SMC label: absence is unknown, while explicit
-        # opposing structure is a veto. This avoids starving the system.
+    trend_playbook = primary_direction == direction and higher_direction == direction
+    # A lower-timeframe accumulation/distribution phase can be the internal
+    # auction of a higher-timeframe range.  It is not trend alignment, but it
+    # is a valid reversal context when it agrees with the proposed side and a
+    # completed liquidity sweep proves acceptance.  Treating it as a generic
+    # regime mismatch discarded the exact causal setup we want to observe.
+    range_playbook = (
+        higher_phase == "RANGING"
+        and primary_phase in {"RANGING", "ACCUMULATION", "DISTRIBUTION"}
+        and primary_direction in {"NEUTRAL", direction}
+    )
+    sweep = detect_liquidity_sweep(primary)
+    vwap = build_vwap_context(primary)
+    profile = build_volume_profile(primary)
+    sweep_aligned = bool(sweep.get("detected")) and str(sweep.get("direction", "")).startswith(direction.lower())
+    expected_vwap = "ABOVE_ALL" if direction == "BULLISH" else "BELOW_ALL"
+    expected_profile = "ABOVE_POC_ACCEPTANCE" if direction == "BULLISH" else "BELOW_POC_ACCEPTANCE"
+    vwap_aligned = bool(vwap.get("available")) and vwap.get("price_relation") == expected_vwap
+    profile_aligned = bool(profile.get("available")) and profile.get("location") == expected_profile
+
+    # This is the primary-timeframe scenario. It is intentionally strict on
+    # measured structure and live execution, but it does not turn an HTF
+    # mismatch into an invisible setup. It never authorizes a trade signal.
+    tactical_structure_checks: dict[str, bool] = {
+        "directional_plan": structure_checks["directional_plan"],
+        "completed_primary_candles": structure_checks["completed_primary_candles"],
         "structure_not_opposed": not choch_opposes,
-    })
-    if not structure_checks["multi_timeframe_aligned"]:
-        risk_flags.append(f"Primary/Higher trend mismatch: {primary_direction}/{higher_direction}; expected {direction}.")
-    if not structure_checks["confirmed_completed_breakout"]:
-        risk_flags.append("Latest completed candle has not closed through the relevant 20-candle structure level.")
-    if not structure_checks["relative_volume_confirmed"]:
-        risk_flags.append(f"Relative volume {rvol:.2f}x is below the 1.50x confirmation threshold.")
-    if not structure_checks["decisive_candle"]:
-        risk_flags.append("Latest completed breakout candle lacks decisive body/close location.")
-    if not structure_checks["structure_not_opposed"]:
-        risk_flags.append("A completed-candle change-of-character opposes the proposed direction.")
+    }
+    tactical_risk_flags: list[str] = []
+    if primary_direction == direction:
+        tactical_playbook = "PRIMARY_TREND_CONTINUATION"
+        tactical_structure_checks.update({
+            "primary_trend_aligned": True,
+            "confirmed_completed_breakout": breakout,
+            "relative_volume_confirmed": rvol >= 1.5,
+            "decisive_candle": body_ratio >= 0.55 and close_location >= 0.60,
+        })
+        if not breakout:
+            tactical_risk_flags.append("Primary timeframe has not closed through the relevant 20-candle structure level.")
+        if rvol < 1.5:
+            tactical_risk_flags.append(f"Primary relative volume {rvol:.2f}x is below the 1.50x tactical threshold.")
+        if body_ratio < 0.55 or close_location < 0.60:
+            tactical_risk_flags.append("Primary continuation candle lacks decisive body or close location.")
+    elif primary_phase in {"RANGING", "ACCUMULATION", "DISTRIBUTION"} and primary_direction in {"NEUTRAL", direction}:
+        tactical_playbook = "PRIMARY_RANGE_SWEEP_REVERSAL"
+        tactical_structure_checks.update({
+            "primary_range_auction_aligned": True,
+            "liquidity_sweep_aligned": sweep_aligned,
+            "vwap_acceptance_aligned": vwap_aligned,
+            "profile_acceptance_aligned": profile_aligned,
+        })
+        if not sweep_aligned:
+            tactical_risk_flags.append(f"No completed {direction.lower()} primary-timeframe liquidity-sweep reversal is present.")
+        if not vwap_aligned:
+            tactical_risk_flags.append(f"Primary reversal has not accepted {expected_vwap.replace('_', ' ').lower()}.")
+        if not profile_aligned:
+            tactical_risk_flags.append(f"Primary reversal has not accepted {expected_profile.replace('_', ' ').lower()}.")
+    else:
+        tactical_playbook = "NONE"
+        tactical_structure_checks["approved_primary_playbook"] = False
+        tactical_risk_flags.append(f"No approved primary-timeframe playbook: primary={primary_phase}; expected trend continuation or a confirmed range sweep.")
+    if not tactical_structure_checks["structure_not_opposed"]:
+        tactical_risk_flags.append("A completed-candle structural break opposes the proposed direction.")
+
+    if trend_playbook:
+        playbook = "TREND_CONTINUATION"
+        structure_checks.update({
+            "trend_regime_aligned": True,
+            "confirmed_completed_breakout": breakout,
+            "relative_volume_confirmed": rvol >= 1.5,
+            "decisive_candle": body_ratio >= 0.55 and close_location >= 0.60,
+            "structure_not_opposed": not choch_opposes,
+        })
+        if not structure_checks["confirmed_completed_breakout"]:
+            risk_flags.append("Latest completed candle has not closed through the relevant 20-candle structure level.")
+        if not structure_checks["relative_volume_confirmed"]:
+            risk_flags.append(f"Relative volume {rvol:.2f}x is below the 1.50x continuation threshold.")
+        if not structure_checks["decisive_candle"]:
+            risk_flags.append("Latest completed continuation candle lacks decisive body/close location.")
+    elif range_playbook:
+        # A range is not a failed trend.  It gets its own strict, causal
+        # playbook: a completed sweep back inside the range, then acceptance
+        # above/below VWAP and the profile POC in the proposed direction.
+        # The primary timeframe may be neutral, accumulating, or distributing
+        # within that higher-timeframe auction; it must never oppose the side.
+        playbook = (
+            "RANGE_SWEEP_REVERSAL"
+            if primary_phase == "RANGING"
+            else "RANGE_AUCTION_SWEEP_REVERSAL"
+        )
+        structure_checks.update({
+            "range_regime_confirmed": True,
+            "primary_range_auction_aligned": primary_direction in {"NEUTRAL", direction},
+            "liquidity_sweep_aligned": sweep_aligned,
+            "vwap_acceptance_aligned": vwap_aligned,
+            "profile_acceptance_aligned": profile_aligned,
+            "structure_not_opposed": not choch_opposes,
+        })
+        if not sweep_aligned:
+            risk_flags.append(
+                f"Higher-timeframe range detected but no completed {direction.lower()} liquidity-sweep reversal is present."
+            )
+        if not vwap_aligned:
+            risk_flags.append(f"Range reversal has not accepted {expected_vwap.replace('_', ' ').lower()}.")
+        if not profile_aligned:
+            risk_flags.append(f"Range reversal has not accepted {expected_profile.replace('_', ' ').lower()}.")
+    else:
+        playbook = "NONE"
+        structure_checks.update({"approved_regime_playbook": False})
+        risk_flags.append(
+            f"No approved regime playbook: primary={primary_phase}, higher={higher_phase}; expected aligned trend or a confirmed range sweep."
+        )
+
+    if not structure_checks.get("structure_not_opposed", True):
+        risk_flags.append("A completed-candle structural break opposes the proposed direction.")
 
     bids, asks = order_book.get("bids", []) or [], order_book.get("asks", []) or []
     bid_notional = sum(_number(row[0]) * _number(row[1]) for row in bids[:20])
@@ -197,12 +322,57 @@ def verify_main_signal_snapshot(
     live_checks = candidate["advanced_confirmation"]["checks"]
     passed = all(structure_checks.values()) and candidate["status"] == "LIVE_CONFIRMED_REVIEW"
     status = "LIVE_CONFIRMED_REVIEW" if passed else ("STRUCTURE_REJECTED" if not all(structure_checks.values()) else "LIVE_CONFIRMATION_REJECTED")
-    return {
+    tactical_candidate = {
+        "symbol": symbol, "direction": direction,
+        "score": 75 if all(tactical_structure_checks.values()) else 0,
+        "risk_flags": tactical_risk_flags,
+    }
+    apply_live_confirmation(tactical_candidate, live)
+    tactical_live_checks = tactical_candidate["advanced_confirmation"]["checks"]
+    tactical_passed = all(tactical_structure_checks.values()) and tactical_candidate["status"] == "LIVE_CONFIRMED_REVIEW"
+    tactical_reason = tactical_candidate["risk_flags"][0] if tactical_candidate["risk_flags"] else "Primary-timeframe structure and execution evidence are aligned."
+    result = {
         "symbol": symbol, "timeframe": timeframe, "direction": direction, "passed": passed,
         "status": status, "quality_badge": "LIVE CHECK PASSED" if passed else "LIVE CHECK FAILED",
         "structure_checks": structure_checks, "live_checks": live_checks,
         "risk_flags": candidate["risk_flags"], "reason": candidate["risk_flags"][0] if candidate["risk_flags"] else "All shared Radar checks passed.",
-        "metrics": {"primary_direction": primary_direction, "higher_direction": higher_direction, "rvol": round(rvol, 2), "body_ratio": round(body_ratio, 3), "phase": phase, "bos": bos, "choch": choch},
+        "metrics": {
+            "playbook": playbook,
+            "primary_phase": primary_phase,
+            "higher_phase": higher_phase,
+            "primary_direction": primary_direction,
+            "higher_direction": higher_direction,
+            "rvol": round(rvol, 2),
+            "body_ratio": round(body_ratio, 3),
+            "sweep": sweep,
+            "vwap": vwap,
+            "volume_profile": profile,
+            "bos": bos,
+            "choch": choch,
+        },
         "live_evidence": candidate["advanced_confirmation"],
-        "evaluation_mode": "shared_radar_live_confirmation",
+        "evaluation_mode": "causal_regime_aware_live_confirmation",
     }
+    result["scenarios"] = {
+        "institutional": {
+            "passed": passed,
+            "status": status,
+            "label": "INSTITUTIONAL CONFIRMATION",
+            "reason": result["reason"],
+            "structure_checks": structure_checks,
+            "live_checks": live_checks,
+            "playbook": playbook,
+            "higher_timeframe_aligned": higher_direction == direction,
+        },
+        "tactical": {
+            "passed": tactical_passed,
+            "status": "TACTICAL_CONFIRMED_WATCH" if tactical_passed else "TACTICAL_REJECTED",
+            "label": "TACTICAL CONFIRMATION",
+            "reason": tactical_reason,
+            "structure_checks": tactical_structure_checks,
+            "live_checks": tactical_live_checks,
+            "playbook": tactical_playbook,
+            "higher_timeframe_aligned": higher_direction == direction,
+        },
+    }
+    return result

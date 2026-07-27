@@ -21,7 +21,7 @@ from typing import Any
 from app.data_sources.data_aggregator import fetch_market_intelligence
 from app.quant.feature_engine import compute_quant_features
 from app.brains.prompts.loader import load_prompt
-from app.ai_client import build_async_ai_client, get_model_for_task, safe_async_chat_completion
+from app.ai_client import AIRequestConfig, build_async_ai_client, get_model_for_task, safe_async_chat_completion
 from app.settings import Settings, get_settings
 from app.quant.engine import build_quantitative_assessment
 from app.institutional.committee import (
@@ -47,13 +47,14 @@ async def _call_agent(
     settings: Settings,
     task: str = "scanner",
     agent_name: str = "unknown",
+    ai_override: AIRequestConfig | None = None,
 ) -> dict[str, Any]:
     """Call a single AI agent and return parsed JSON. Gracefully handles 429 rate limits."""
-    client = build_async_ai_client(settings)
+    client = build_async_ai_client(settings, ai_override)
     if not client:
         return {"error": "AI client not configured.", "bias": "NEUTRAL", "conviction": 0}
 
-    model = get_model_for_task(settings, task)
+    model = get_model_for_task(settings, task, ai_override)
     max_attempts = 4
     for attempt in range(1, max_attempts + 1):
         try:
@@ -108,9 +109,10 @@ async def _run_institutional_cio(
     timeframe: str,
     dossier: dict,
     settings: Settings,
+    ai_override: AIRequestConfig | None = None,
 ) -> dict:
     """Ask one CIO to synthesize measured engine reports; it has no veto power."""
-    model = get_model_for_task(settings, "judge")
+    model = get_model_for_task(settings, "judge", ai_override)
     if model in _PERMANENT_CIO_MODEL_FAILURES:
         return {"error": _PERMANENT_CIO_MODEL_FAILURES[model]}
     prompt = load_prompt("institutional_cio")
@@ -118,7 +120,7 @@ async def _run_institutional_cio(
         f"Symbol: {symbol} ({timeframe})\n"
         f"Institutional Dossier: {_truncate_for_prompt(dossier, 14000)}\n"
     )
-    result = await _call_agent(prompt, user, settings, task="judge", agent_name="institutional_cio")
+    result = await _call_agent(prompt, user, settings, task="judge", agent_name="institutional_cio", ai_override=ai_override)
     error = str(result.get("error", ""))
     if error and ("404" in error or "unavailable" in error.lower() or "not found" in error.lower()):
         _PERMANENT_CIO_MODEL_FAILURES[model] = error
@@ -133,6 +135,7 @@ async def run_ai_council(
     timeframe: str = "15m",
     settings: Settings | None = None,
     intelligence: dict[str, Any] | None = None,
+    ai_override: AIRequestConfig | None = None,
 ) -> dict[str, Any]:
     """Run the institutional committee analysis.
 
@@ -190,7 +193,7 @@ async def run_ai_council(
     dossier["historical_stats"] = historical_stats
     dossier["calendar_events"] = calendar_events
 
-    raw_cio_result = await _run_institutional_cio(symbol, timeframe, dossier, settings)
+    raw_cio_result = await _run_institutional_cio(symbol, timeframe, dossier, settings, ai_override)
     if raw_cio_result.get("error"):
         raw_cio_result = build_deterministic_cio_decision(
             dossier,
@@ -276,7 +279,7 @@ async def run_ai_council(
             "analysis_time_seconds": round(elapsed, 2),
             "data_sources": intelligence.get("meta", {}),
             "timestamp": start_time.isoformat() + "Z",
-            "model": get_model_for_task(settings, "judge"),
+            "model": get_model_for_task(settings, "judge", ai_override),
             "engine": "institutional_committee_v1",
         },
     }

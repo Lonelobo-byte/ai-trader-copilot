@@ -24,11 +24,10 @@ class Base(AsyncAttrs, DeclarativeBase):
 
 async def init_db():
     # Import models to guarantee registration with Base.metadata before creation
-    from .models import AnalysisSession, User, Subscription, Payment, RefreshToken, AuditEvent
+    from .models import AnalysisSession, User, UserAIConnection, Subscription, Payment, RefreshToken, AuditEvent
     try:
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         logger.info("Database initialized successfully.")
     except Exception as e:
         logger.error(f"Failed to initialize database: {e}", exc_info=True)
-

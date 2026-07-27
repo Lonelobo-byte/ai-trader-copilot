@@ -16,6 +16,8 @@ from ..data_sources.binance_ws import BinanceWSSubscriber
 from ..settings import get_settings
 from ..quant.research import list_hypotheses, validate_series
 from ..auth import require_active_subscription, websocket_subscription
+from ..db.models import User
+from ..user_ai import UserAIConnectionError, ai_cache_identity, resolve_user_ai_config
 
 logger = logging.getLogger(__name__)
 
@@ -47,8 +49,8 @@ async def validate_alpha(request: AlphaValidationRequest):
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-@router.post("/analyze", dependencies=[Depends(require_active_subscription)])
-async def analyze(request: AnalyzeRequest):
+@router.post("/analyze")
+async def analyze(request: AnalyzeRequest, user: User = Depends(require_active_subscription)):
     settings = get_settings()
     symbol = request.symbol.upper().strip()
     client = BinancePublicClient(settings.binance_public_base_url)
@@ -72,6 +74,11 @@ async def analyze(request: AnalyzeRequest):
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=502, detail=f"Market data request failed: {exc}") from exc
 
+    try:
+        ai_override = await resolve_user_ai_config(user.id)
+    except UserAIConnectionError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    use_ai = request.use_ai and (ai_override is not None or settings.allow_platform_ai_fallback)
     payload, _ = await run_full_analysis(
         symbol=symbol,
         timeframe=request.timeframe,
@@ -79,15 +86,18 @@ async def analyze(request: AnalyzeRequest):
         ticker=ticker,
         order_book_raw=order_book_raw,
         settings=settings,
-        use_ai=request.use_ai,
+        use_ai=use_ai,
         market_intelligence=intelligence,
+        ai_override=ai_override,
+        ai_cache_key=ai_cache_identity(user.id, ai_override),
     )
     return payload
 
 
 @router.websocket("/ws/analyze")
 async def websocket_analyze(websocket: WebSocket):
-    if await websocket_subscription(websocket) is None:
+    user = await websocket_subscription(websocket)
+    if user is None:
         return
     # Echo the non-secret protocol identifier selected by the browser.  The
     # JWT is the second requested subprotocol and is never reflected/logged.
@@ -101,6 +111,13 @@ async def websocket_analyze(websocket: WebSocket):
         use_ai = config.get("use_ai", True)
 
         settings = get_settings()
+        try:
+            ai_override = await resolve_user_ai_config(user.id)
+        except UserAIConnectionError as exc:
+            await websocket.send_json({"error": str(exc), "code": "ai_connection_invalid"})
+            await websocket.close(code=4400)
+            return
+        use_ai = bool(use_ai) and (ai_override is not None or settings.allow_platform_ai_fallback)
         subscriber = BinanceWSSubscriber(symbol, timeframe, settings)
 
         last_ai_open_time = 0
@@ -137,6 +154,8 @@ async def websocket_analyze(websocket: WebSocket):
                 is_new_candle=bool(event.get("new_candle_closed")),
                 is_init_event=event["type"] == "init",
                 last_ai_open_time=last_ai_open_time,
+                ai_override=ai_override,
+                ai_cache_key=ai_cache_identity(user.id, ai_override),
             )
             payload["type"] = event["type"]
             await websocket.send_json(payload)

@@ -25,6 +25,7 @@ from .routes.radar import router as radar_router
 from .routes.performance import router as performance_router
 from .routes.auth import router as auth_router
 from .routes.billing import router as billing_router
+from .routes.ai_connections import router as ai_connections_router
 from .auth import require_active_subscription
 from .settings import get_settings
 
@@ -115,6 +116,7 @@ premium_dependencies = [Depends(require_active_subscription)]
 # against a WebSocket scope, so its REST routes declare the HTTP entitlement
 # dependency individually while the WebSocket performs websocket_subscription.
 app.include_router(analyze_router)
+app.include_router(ai_connections_router, dependencies=premium_dependencies)
 app.include_router(signals_router, dependencies=premium_dependencies)
 app.include_router(alpha_router, dependencies=premium_dependencies)
 app.include_router(quant_ops_router, dependencies=premium_dependencies)

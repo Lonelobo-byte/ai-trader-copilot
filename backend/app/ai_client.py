@@ -1,10 +1,21 @@
+from dataclasses import dataclass
 from typing import Any
 from openai import OpenAI, AsyncOpenAI
 
 from .settings import Settings
 
 
-def ai_is_configured(settings: Settings) -> bool:
+@dataclass(frozen=True)
+class AIRequestConfig:
+    """In-memory credentials for one authenticated user's AI request."""
+    provider: str
+    api_key: str
+    model: str
+
+
+def ai_is_configured(settings: Settings, override: AIRequestConfig | None = None) -> bool:
+    if override is not None:
+        return bool(override.api_key.strip())
     provider = settings.ai_provider.lower().strip()
     if provider == "openrouter":
         return bool(settings.openrouter_api_key.strip())
@@ -19,7 +30,9 @@ def ai_is_configured(settings: Settings) -> bool:
     return False
 
 
-def get_model_for_task(settings: Settings, task: str) -> str:
+def get_model_for_task(settings: Settings, task: str, override: AIRequestConfig | None = None) -> str:
+    if override is not None:
+        return override.model
     provider = settings.ai_provider.lower().strip()
     is_judge = task.lower().strip() == "judge"
 
@@ -37,7 +50,14 @@ def get_model_for_task(settings: Settings, task: str) -> str:
     raise ValueError(f"Unsupported AI provider: {settings.ai_provider}")
 
 
-def build_ai_client(settings: Settings) -> OpenAI | None:
+def build_ai_client(settings: Settings, override: AIRequestConfig | None = None) -> OpenAI | None:
+    if override is not None:
+        if override.provider.lower().strip() != "openrouter" or not override.api_key.strip():
+            return None
+        return OpenAI(
+            base_url=settings.openrouter_base_url, api_key=override.api_key, max_retries=0,
+            default_headers={"HTTP-Referer": settings.openrouter_http_referer, "X-OpenRouter-Title": settings.openrouter_app_title},
+        )
     provider = settings.ai_provider.lower().strip()
 
     if provider == "openrouter":
@@ -88,7 +108,14 @@ def build_ai_client(settings: Settings) -> OpenAI | None:
     raise ValueError(f"Unsupported AI provider: {settings.ai_provider}")
 
 
-def build_async_ai_client(settings: Settings) -> AsyncOpenAI | None:
+def build_async_ai_client(settings: Settings, override: AIRequestConfig | None = None) -> AsyncOpenAI | None:
+    if override is not None:
+        if override.provider.lower().strip() != "openrouter" or not override.api_key.strip():
+            return None
+        return AsyncOpenAI(
+            base_url=settings.openrouter_base_url, api_key=override.api_key, max_retries=0,
+            default_headers={"HTTP-Referer": settings.openrouter_http_referer, "X-OpenRouter-Title": settings.openrouter_app_title},
+        )
     provider = settings.ai_provider.lower().strip()
 
     if provider == "openrouter":
@@ -202,4 +229,3 @@ async def safe_async_chat_completion(
 
             # Re-raise if no retry condition met or max retries exhausted
             raise
-

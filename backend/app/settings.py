@@ -39,6 +39,12 @@ class Settings(BaseSettings):
     openrouter_model_judge: str = "openrouter/free"
     openrouter_http_referer: str = "http://localhost:8000"
     openrouter_app_title: str = "AI Trader Copilot"
+    # Users can supply an OpenRouter key for their own research.  The key is
+    # encrypted at rest with this secret (or AUTH_JWT_SECRET when omitted).
+    user_secrets_encryption_key: str = ""
+    # Web dashboard requests should be BYOK by default so a public deployment
+    # cannot silently spend the operator's OpenRouter credits.
+    allow_platform_ai_fallback: bool = False
 
     openai_api_key: str = ""
     openai_model_scanner: str = "gpt-5.4-mini"

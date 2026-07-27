@@ -11,7 +11,7 @@ from sqlalchemy.pool import StaticPool
 
 import app.db.database
 from app.db.database import Base
-from app.db.models import AnalysisSession, TradeSignal  # noqa: F401
+from app.db.models import AnalysisSession, TradeSignal, User  # noqa: F401
 from app.settings import get_settings
 
 # Legacy numerical tests exercise public research algorithms, not SaaS access.
@@ -33,15 +33,16 @@ app.db.database.AsyncSessionLocal = TestSessionLocal
 # The legacy test suite verifies research calculations and endpoint payloads.
 # Explicitly bypass the premium dependency here; subscription behavior has its
 # own smoke coverage and remains enabled by default in application settings.
-from app.auth import require_active_subscription
+from app.auth import current_user, require_active_subscription
 from app.main import app
 
 
 async def _test_subscription_bypass():
-    return None
+    return User(id="test-user", email="test@example.com", password_hash="test", role="member", is_active=True)
 
 
 app.dependency_overrides[require_active_subscription] = _test_subscription_bypass
+app.dependency_overrides[current_user] = _test_subscription_bypass
 
 
 @pytest.fixture(scope="session")
