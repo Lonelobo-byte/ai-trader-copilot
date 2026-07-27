@@ -83,6 +83,38 @@ const connectBtn = document.getElementById('connect-btn');
 const wsStatus = document.getElementById('ws-status');
 const controlsCard = document.querySelector('.controls-card');
 const councilProcessingTicker = document.getElementById('council-processing-ticker');
+const appToastRegion = document.getElementById('app-toast-region');
+
+window.showAppToast = function showAppToast(message, tone = 'info', duration = 4200) {
+  if (!appToastRegion || !message) return;
+  const toast = document.createElement('div');
+  toast.className = `app-toast app-toast-${tone}`;
+  const dot = document.createElement('span');
+  dot.className = 'app-toast-dot';
+  const copy = document.createElement('span');
+  copy.className = 'app-toast-copy';
+  copy.textContent = message;
+  const close = document.createElement('button');
+  close.type = 'button';
+  close.className = 'app-toast-close';
+  close.setAttribute('aria-label', 'Dismiss notification');
+  close.textContent = '×';
+  const dismiss = () => {
+    toast.classList.remove('is-visible');
+    window.setTimeout(() => toast.remove(), 220);
+  };
+  close.addEventListener('click', dismiss);
+  toast.append(dot, copy, close);
+  appToastRegion.append(toast);
+  window.requestAnimationFrame(() => toast.classList.add('is-visible'));
+  window.setTimeout(dismiss, duration);
+};
+
+function animateModalIn(modal) {
+  if (!modal) return;
+  modal.classList.remove('motion-open');
+  window.requestAnimationFrame(() => modal.classList.add('motion-open'));
+}
 
 // Per-user OpenRouter connection. The browser only ever receives a masked key
 // hint; the actual key is posted on save and is never rendered back.
@@ -145,6 +177,7 @@ window.openAiConnectionModal = async function openAiConnectionModal() {
   const elements = aiConnectionElements();
   if (!elements.modal) return;
   elements.modal.style.display = 'flex';
+  animateModalIn(elements.modal);
   if (elements.message) elements.message.textContent = '';
   if (elements.keyInput) elements.keyInput.value = '';
   try {
@@ -157,7 +190,7 @@ window.openAiConnectionModal = async function openAiConnectionModal() {
 
 window.closeAiConnectionModal = function closeAiConnectionModal() {
   const modal = document.getElementById('ai-connection-modal');
-  if (modal) modal.style.display = 'none';
+  if (modal) { modal.classList.remove('motion-open'); modal.style.display = 'none'; }
 };
 
 window.saveAiConnection = async function saveAiConnection(event) {
@@ -180,6 +213,7 @@ window.saveAiConnection = async function saveAiConnection(event) {
     renderAiConnection(connection);
     if (elements.keyInput) elements.keyInput.value = '';
     if (elements.message) { elements.message.textContent = 'Connection saved. Your next AI analysis will use this model.'; elements.message.classList.add('is-success'); }
+    window.showAppToast?.('AI connection saved. Future analysis will use your selected model.', 'success');
   } catch (error) {
     if (elements.message) elements.message.textContent = error.message || 'Could not save the AI connection.';
   } finally {
@@ -197,6 +231,7 @@ window.removeAiConnection = async function removeAiConnection() {
     renderAiConnection({ connected: false });
     if (elements.keyInput) elements.keyInput.value = '';
     if (elements.message) { elements.message.textContent = 'Saved key removed.'; elements.message.classList.add('is-success'); }
+    window.showAppToast?.('Saved AI connection removed.', 'info');
   } catch (error) {
     if (elements.message) elements.message.textContent = error.message || 'Could not remove the AI connection.';
   } finally {
@@ -1872,11 +1907,12 @@ window.openAgentDossierModal = function(title, dataJsonStr) {
     bodyEl.scrollTop = 0;
   }
   modal.style.display = 'flex';
+  animateModalIn(modal);
 };
 
 window.closeAgentDossierModal = function() {
   const modal = document.getElementById('agent-dossier-modal');
-  if (modal) modal.style.display = 'none';
+  if (modal) { modal.classList.remove('motion-open'); modal.style.display = 'none'; }
 };
 
 if (!window.agentDossierEscapeBound) {

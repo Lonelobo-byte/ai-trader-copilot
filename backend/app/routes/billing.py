@@ -157,7 +157,12 @@ async def my_subscription(user: User = Depends(current_user)):
     async with AsyncSessionLocal() as session:
         rows = await session.scalars(select(Subscription).where(Subscription.user_id == user.id).order_by(Subscription.created_at.desc()))
         subscription = _pick_subscription(list(rows))
-        return {"role": user.role, "subscription": _subscription_view(subscription)}
+        access_granted = (
+            not get_settings().subscription_enforcement_enabled
+            or user.role == "admin"
+            or (subscription is not None and subscription_is_active(subscription))
+        )
+        return {"role": user.role, "subscription": _subscription_view(subscription), "access_granted": access_granted}
 
 
 @router.post("/checkout")

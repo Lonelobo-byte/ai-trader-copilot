@@ -66,10 +66,16 @@
       <h2>Choose your research edge.</h2>
       <p>Unlock the full analyst workstation. Payment activation occurs only after verified provider confirmation.</p>
       <div id="plan-options" class="plan-options"></div>
+      <div id="checkout-progress" class="checkout-progress" hidden aria-live="polite">
+        <div class="checkout-progress-copy"><span class="checkout-progress-spinner" aria-hidden="true"></span><span id="checkout-progress-text">Securing checkout…</span></div>
+        <div class="checkout-progress-track" role="progressbar" aria-label="Creating secure checkout"><span></span></div>
+      </div>
       <div id="plan-error" class="plan-error" aria-live="polite"></div>
       <div class="membership-footer"><span>◇</span> Powered by secure crypto checkout · No private keys stored</div>
     </div>
   </div>
+
+  <div id="app-toast-region" class="app-toast-region" aria-live="polite" aria-atomic="true"></div>
 
   <!-- Left Sidebar -->
   <aside class="sidebar">
@@ -847,6 +853,15 @@
       const toggle = document.getElementById('auth-toggle'), copy = document.getElementById('auth-copy');
       let register = false;
       let paymentPollTimer = null;
+      let checkoutInProgress = false;
+      const setCheckoutProgress = (active, planName = '', status = '') => {
+        const progress = document.getElementById('checkout-progress');
+        const progressText = document.getElementById('checkout-progress-text');
+        if (!progress || !progressText) return;
+        progress.hidden = !active;
+        progress.classList.toggle('is-active', active);
+        progressText.textContent = active ? (status || `Securing ${planName || 'your'} checkout…`) : 'Securing checkout…';
+      };
       const unlock = (token) => {
         gate.style.display = 'none';
         window.atcAuthenticated = true;
@@ -856,6 +871,8 @@
       const showPlans = async (token) => {
         shell.hidden = true; picker.hidden = false;
         const options = document.getElementById('plan-options'), planError = document.getElementById('plan-error');
+        checkoutInProgress = false;
+        setCheckoutProgress(false);
         try {
           const response = await fetch('/billing/plans'); const data = await response.json();
           if (!data.checkout_available) { planError.textContent = data.checkout_message || 'Checkout is temporarily unavailable.'; return; }
@@ -881,9 +898,14 @@
               <span class="plan-card-price"><strong>${data.currency} ${plan.amount}</strong><small>${plan.code === 'monthly' ? '/ month' : `/ ${plan.days} days`}</small></span>
               <span class="plan-card-value">${featured ? 'Priority value plan' : `${plan.days} days of full access`}</span>`;
             button.onclick = async () => {
+              if (checkoutInProgress) return;
+              const checkoutStartedAt = performance.now();
+              checkoutInProgress = true;
               options.querySelectorAll('.plan-card').forEach(card => card.classList.remove('is-selected'));
               button.classList.add('is-selected', 'is-loading');
-              button.disabled = true; planError.textContent = ''; try {
+              options.querySelectorAll('.plan-card').forEach(card => { card.disabled = true; });
+              setCheckoutProgress(true, planLabels[plan.code] || plan.code);
+              planError.textContent = ''; try {
                 const checkout = await fetch('/billing/checkout', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` }, body: JSON.stringify({ plan_code: plan.code }) });
                 const raw = await checkout.text();
                 let invoice = {};
@@ -891,8 +913,20 @@
                 catch { invoice = { detail: raw || `Checkout failed with HTTP ${checkout.status}.` }; }
                 if (!checkout.ok) throw new Error(invoice.detail || 'Checkout is unavailable.');
                 if (!invoice.invoice_url) throw new Error('Checkout did not return an invoice URL.');
+                setCheckoutProgress(true, planLabels[plan.code] || plan.code, 'Checkout ready. Opening secure payment…');
+                // Let the browser paint the locked, animated handoff before navigating away.
+                const minimumHandoffMs = 700;
+                const remainingHandoffMs = minimumHandoffMs - (performance.now() - checkoutStartedAt);
+                if (remainingHandoffMs > 0) {
+                  await new Promise(resolve => window.setTimeout(resolve, remainingHandoffMs));
+                }
                 window.location.assign(invoice.invoice_url);
-              } catch (err) { planError.textContent = err.message; button.disabled = false; button.classList.remove('is-loading'); }
+              } catch (err) {
+                checkoutInProgress = false;
+                setCheckoutProgress(false);
+                planError.textContent = err.message;
+                options.querySelectorAll('.plan-card').forEach(card => { card.disabled = false; card.classList.remove('is-loading'); });
+              }
             };
             return button;
           }));

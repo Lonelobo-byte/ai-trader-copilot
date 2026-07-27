@@ -406,6 +406,106 @@
       margin-bottom: 1rem;
     }
 
+    .radar-evidence-loading {
+      align-items: center;
+      display: flex;
+      gap: clamp(1.25rem, 4vw, 3rem);
+      justify-content: center;
+      margin: 0 auto;
+      max-width: 780px;
+      min-height: 220px;
+      padding: 2rem 1rem;
+      text-align: left;
+    }
+
+    .evidence-radar-orbit {
+      background: radial-gradient(circle, rgba(62, 151, 255, .12), rgba(62, 151, 255, .025) 48%, transparent 70%);
+      border: 1px solid rgba(62, 151, 255, .3);
+      border-radius: 50%;
+      flex: 0 0 74px;
+      height: 74px;
+      overflow: visible;
+      position: relative;
+      width: 74px;
+    }
+
+    .evidence-radar-orbit::before,
+    .evidence-radar-orbit::after {
+      border: 1px solid rgba(62, 151, 255, .18);
+      border-radius: 50%;
+      content: '';
+      inset: -13px;
+      opacity: 0;
+      position: absolute;
+      animation: evidence-ping 2.6s ease-out infinite;
+    }
+
+    .evidence-radar-orbit::after { animation-delay: 1.3s; }
+    .evidence-radar-orbit span {
+      background: conic-gradient(from 0deg, rgba(62, 151, 255, .4), transparent 30%);
+      border-radius: inherit;
+      inset: 0;
+      position: absolute;
+      animation: evidence-sweep 3.5s linear infinite;
+    }
+
+    .evidence-radar-orbit i {
+      background: var(--neon-blue);
+      border-radius: 50%;
+      box-shadow: 0 0 14px rgba(62, 151, 255, .9);
+      height: 6px;
+      left: calc(50% - 3px);
+      position: absolute;
+      top: calc(50% - 3px);
+      width: 6px;
+    }
+
+    .evidence-loading-copy { flex: 1 1 460px; min-width: 0; }
+    .evidence-loading-meta {
+      align-items: center;
+      color: var(--neon-blue);
+      display: flex;
+      font: 800 .61rem var(--font-mono);
+      gap: .55rem;
+      letter-spacing: .15em;
+      text-transform: uppercase;
+    }
+
+    .evidence-loading-meta::before {
+      background: var(--neon-blue);
+      border-radius: 50%;
+      box-shadow: 0 0 9px rgba(62, 151, 255, .8);
+      content: '';
+      height: 5px;
+      width: 5px;
+    }
+
+    .evidence-loading-copy h3 { color: var(--text-primary); font-size: 1.02rem; letter-spacing: -.015em; margin: .5rem 0 .25rem; }
+    .evidence-loading-copy p { color: var(--text-muted); font-size: .72rem; line-height: 1.5; margin: 0; }
+    .evidence-loading-stages { display: grid; gap: .55rem; grid-template-columns: repeat(3, minmax(0, 1fr)); margin-top: 1.2rem; }
+    .evidence-stage { min-width: 0; opacity: .48; }
+    .evidence-stage-label { align-items: center; color: var(--text-secondary); display: flex; font: 700 .57rem var(--font-mono); gap: .35rem; letter-spacing: .055em; overflow: hidden; text-overflow: ellipsis; text-transform: uppercase; white-space: nowrap; }
+    .evidence-stage-label::before { background: rgba(255,255,255,.32); border-radius: 50%; content: ''; flex: 0 0 5px; height: 5px; width: 5px; }
+    .evidence-stage-bar { background: rgba(255,255,255,.08); height: 2px; margin-top: .42rem; overflow: hidden; position: relative; }
+    .evidence-stage.active { opacity: 1; }
+    .evidence-stage.active .evidence-stage-label { color: #c9dfff; }
+    .evidence-stage.active .evidence-stage-label::before { background: var(--neon-blue); box-shadow: 0 0 8px rgba(62,151,255,.8); }
+    .evidence-stage.active .evidence-stage-bar::after { animation: evidence-shimmer 1.7s ease-in-out infinite; background: linear-gradient(90deg, transparent, var(--neon-blue), transparent); content: ''; inset: 0; position: absolute; transform: translateX(-100%); }
+    .evidence-loading-progress { background: rgba(255,255,255,.07); border-radius: 999px; height: 3px; margin-top: 1.1rem; overflow: hidden; }
+    .evidence-loading-progress span { animation: evidence-progress 1.8s ease-in-out infinite; background: linear-gradient(90deg, transparent, rgba(62,151,255,.95), transparent); display: block; height: 100%; transform: translateX(-100%); width: 42%; }
+
+    @keyframes evidence-ping { 0% { opacity: .7; transform: scale(.7); } 100% { opacity: 0; transform: scale(1.3); } }
+    @keyframes evidence-sweep { to { transform: rotate(360deg); } }
+    @keyframes evidence-shimmer { to { transform: translateX(100%); } }
+    @keyframes evidence-progress { to { transform: translateX(340%); } }
+    @media (max-width: 640px) {
+      .radar-evidence-loading { align-items: flex-start; flex-direction: column; min-height: 260px; padding: 1.5rem .3rem; }
+      .evidence-radar-orbit { margin-left: .8rem; }
+      .evidence-loading-copy { flex-basis: auto; width: 100%; }
+      .evidence-loading-stages { gap: .38rem; }
+      .evidence-stage-label { font-size: .51rem; }
+    }
+
     /* Premium Modal Window */
     .modal-overlay {
       position: fixed;
@@ -853,6 +953,31 @@
       cursor: pointer;
     }
 
+    /* Calm operational feedback: Radar animates state changes, never prices. */
+    .radar-summary-card,
+    .radar-table-container,
+    .radar-research-brief,
+    .research-evidence-cell {
+      transition: border-color .22s cubic-bezier(.2,.8,.2,1), background-color .22s cubic-bezier(.2,.8,.2,1), box-shadow .22s cubic-bezier(.2,.8,.2,1), transform .22s cubic-bezier(.2,.8,.2,1);
+    }
+
+    .radar-summary-card:hover,
+    .radar-research-brief:hover { border-color: rgba(62,151,255,.2); box-shadow: 0 10px 24px rgba(0,0,0,.16); }
+    .research-evidence-cell:hover { border-color: rgba(255,255,255,.13); background: rgba(255,255,255,.035); }
+    .filter-btn:focus-visible,
+    .action-btn-sm:focus-visible,
+    .top-research-btn:focus-visible,
+    .research-expand:focus-visible,
+    .modal-close:focus-visible { outline: 2px solid rgba(62,151,255,.8); outline-offset: 3px; }
+    .filter-btn:active,
+    .action-btn-sm:active,
+    .top-research-btn:not(:disabled):active { transform: scale(.98); }
+    .radar-refresh-spinner { filter: drop-shadow(0 0 4px rgba(62,151,255,.42)); }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; transition-duration: .01ms !important; }
+    }
+
     @media (max-width: 900px) {
       .research-evidence-grid {
         grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1043,9 +1168,19 @@
             <!-- Populated dynamically via JS -->
             <tr>
               <td colspan="9">
-                <div class="radar-empty-state">
-                  <span class="icon">🔍</span>
-                  <p>Mapping market context. Fetching liquidity, positioning and flow evidence...</p>
+                <div class="radar-evidence-loading" role="status" aria-live="polite">
+                  <div class="evidence-radar-orbit" aria-hidden="true"><span></span><i></i></div>
+                  <div class="evidence-loading-copy">
+                    <div class="evidence-loading-meta">Live collection in progress</div>
+                    <h3>Acquiring market evidence</h3>
+                    <p>Mapping the current context before Radar ranks any opportunity.</p>
+                    <div class="evidence-loading-stages" aria-label="Evidence collection stages">
+                      <div class="evidence-stage active"><span class="evidence-stage-label">Liquidity map</span><div class="evidence-stage-bar"></div></div>
+                      <div class="evidence-stage"><span class="evidence-stage-label">Positioning</span><div class="evidence-stage-bar"></div></div>
+                      <div class="evidence-stage"><span class="evidence-stage-label">Order flow</span><div class="evidence-stage-bar"></div></div>
+                    </div>
+                    <div class="evidence-loading-progress" aria-hidden="true"><span></span></div>
+                  </div>
                 </div>
               </td>
             </tr>
@@ -1171,6 +1306,19 @@
           if (!response.ok) return false;
           const payload = await response.json();
           return payload?.payment?.subscription?.active === true;
+        } catch (_) {
+          return false;
+        }
+      }
+      async function radarAccessGranted() {
+        try {
+          const token = await ensureRadarAccessToken();
+          const response = await radarOriginalFetch('/billing/me', {
+            headers: { 'Authorization': `Bearer ${token}` }, credentials: 'same-origin'
+          });
+          if (!response.ok) return false;
+          const payload = await response.json();
+          return payload?.access_granted === true;
         } catch (_) {
           return false;
         }
@@ -1958,6 +2106,13 @@
           // sessionStorage token from a restarted backend. Refresh before the
           // initial protected call so the browser never emits a spurious 401.
           await ensureRadarAccessToken(true);
+          if (!await radarAccessGranted()) {
+            await reconcileRadarMembership();
+            if (!await radarAccessGranted()) {
+              showRadarMembershipRequired();
+              return;
+            }
+          }
           await fetchBreakouts();
           startTimer();
         } catch (error) {

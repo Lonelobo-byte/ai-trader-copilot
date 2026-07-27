@@ -132,7 +132,7 @@ app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
 @app.get("/")
 def read_root():
-    return RedirectResponse(url="/static/index.html")
+    return RedirectResponse(url="/static/radar.html")
 
 
 @app.get("/dashboard")
