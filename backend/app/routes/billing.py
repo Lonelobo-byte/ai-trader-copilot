@@ -162,7 +162,6 @@ async def my_subscription(user: User = Depends(current_user)):
 
 @router.post("/checkout")
 async def checkout(body: CheckoutRequest, request: Request, user: User = Depends(current_user)):
-    enforce_rate_limit(request, "checkout", limit=5, window_seconds=15 * 60)
     try:
         plan = plan_details(body.plan_code)
     except ValueError as exc:
@@ -200,6 +199,9 @@ async def checkout(body: CheckoutRequest, request: Request, user: User = Depends
                 return {"payment_id": existing.id, "provider_invoice_id": existing.provider_invoice_id, "provider_payment_id": existing.provider_payment_id, "invoice_url": invoice_url, "order_id": existing.order_id, "reused": True}
             raise HTTPException(status_code=409, detail="A verified NOWPayments payment is still pending, but its checkout URL is unavailable. Contact support with this order reference: " + existing.order_id)
 
+    # Only genuine creation attempts consume the checkout quota.  Reopening a
+    # pending invoice and reconciling an older payment are idempotent actions.
+    enforce_rate_limit(request, "checkout", limit=5, window_seconds=15 * 60)
     subscription_id, payment_id, order_id = str(uuid.uuid4()), str(uuid.uuid4()), f"atc-{uuid.uuid4().hex}"
     try:
         invoice = await create_nowpayments_invoice(order_id, body.plan_code)

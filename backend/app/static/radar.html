@@ -1162,6 +1162,25 @@
         const status = document.getElementById('radar-status');
         if (status) status.querySelector('.text').textContent = 'Sign in required';
       }
+      async function reconcileRadarMembership() {
+        try {
+          const token = await ensureRadarAccessToken();
+          const response = await radarOriginalFetch('/billing/payment-status', {
+            headers: { 'Authorization': `Bearer ${token}` }, credentials: 'same-origin'
+          });
+          if (!response.ok) return false;
+          const payload = await response.json();
+          return payload?.payment?.subscription?.active === true;
+        } catch (_) {
+          return false;
+        }
+      }
+      function showRadarMembershipRequired() {
+        refreshText.textContent = 'Membership activation is required before Radar can scan.';
+        const status = document.getElementById('radar-status');
+        if (status) status.querySelector('.text').textContent = 'Membership required';
+        showResearchBriefNotice('Radar access requires an active membership', 'If you just completed a NOWPayments checkout, Radar checked the verified provider status once. Return to the dashboard payment screen to continue waiting for confirmation or start a new checkout after a failed payment is released.', 'ACCESS REQUIRED');
+      }
 
       // AI Radar Cooldown Manager (Hardened 5-minute / 300s limit)
       const AI_COOLDOWN_MS = 5 * 60 * 1000; // 300,000 ms = 5 minutes
@@ -1807,7 +1826,7 @@
       }
 
       // This final definition keeps automatic scans deterministic; research is an explicit, separate action.
-      async function fetchBreakouts() {
+      async function fetchBreakouts(retriedAfterPaymentCheck = false) {
         radarScanReady = false;
         setResearchButtonState('SCANNING');
         spinner.style.display = 'block';
@@ -1833,6 +1852,13 @@
         } catch (error) {
           rawBreakouts = [];
           radarScanReady = false;
+          if (/active subscription|subscription is required|403/i.test(error.message || '') && !retriedAfterPaymentCheck) {
+            refreshText.textContent = 'Checking verified payment status…';
+            if (await reconcileRadarMembership()) return fetchBreakouts(true);
+            setResearchButtonState();
+            showRadarMembershipRequired();
+            return;
+          }
           console.error('Error loading Radar data:', error);
           setResearchButtonState();
           showResearchBriefNotice('Radar scan unavailable', 'Research briefs cannot be built until a live Radar scan succeeds. Check your session or market-data connection, then let Radar retry.', 'SCAN FAILED');
