@@ -94,24 +94,49 @@
   <div class="main-wrapper">
     <header class="main-header">
       <div class="header-title-sec">
-        <h1>Co-Pilot Dashboard</h1>
-        <div class="breadcrumbs">Home <span class="bullet">/</span> Co-Pilot Dashboard <span class="badge">V1.0.0</span>
+        <div class="header-kicker">APEX / MARKET INTELLIGENCE</div>
+        <h1>Command Center</h1>
+        <div class="breadcrumbs">Private analyst workspace <span class="bullet">/</span> Co-Pilot <span class="badge">LIVE</span></div>
+      </div>
+
+      <div class="header-market-context" aria-label="Current workspace context">
+        <div class="header-context-item">
+          <span>Active instrument</span>
+          <strong class="font-mono">BTC/USDT</strong>
+        </div>
+        <div class="header-context-item">
+          <span>Default interval</span>
+          <strong class="font-mono">15M</strong>
+        </div>
+        <div class="header-context-item header-context-risk">
+          <span>Research mode</span>
+          <strong>MONITORING</strong>
         </div>
       </div>
 
-      <!-- Real-time Scanner status in header -->
-      <div class="header-scanner-status" id="header-scanner-info">
-        <span class="scanner-dot pulse green"></span>
-        <span class="scanner-text" id="header-scanner-status-text">Scanner: Active</span>
-      </div>
-
-      <div style="display: flex; gap: 1rem; align-items: center;">
+      <div class="header-live-state">
+        <div class="header-scanner-status" id="header-scanner-info">
+          <span class="scanner-dot pulse green"></span>
+          <span class="scanner-text" id="header-scanner-status-text">Scanner: Active</span>
+        </div>
         <div class="connection-status" id="ws-status">
           <span class="dot red"></span>
           <span class="text">Disconnected</span>
         </div>
       </div>
     </header>
+
+    <section class="command-overview" aria-label="Command Center workspace overview">
+      <div class="command-overview-copy">
+        <span class="eyebrow">Live research workspace</span>
+        <strong>Evidence before execution.</strong>
+        <span>Configure an instrument, activate a stream, then review the committee’s evidence and risk context.</span>
+      </div>
+      <div class="command-overview-state">
+        <span class="state-light"></span>
+        <div><small>Workflow state</small><strong>Ready for analysis</strong></div>
+      </div>
+    </section>
 
     <div id="macro-alert-banner" class="macro-alert-banner hidden">
       <span class="banner-icon">⚠️</span>
