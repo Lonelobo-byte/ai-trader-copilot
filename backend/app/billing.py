@@ -97,7 +97,9 @@ async def fetch_nowpayments_invoice_payments(invoice_id: str) -> list[dict[str, 
     async with httpx.AsyncClient(timeout=15) as client:
         response = await client.get(
             f"{settings.nowpayments_api_base_url.rstrip('/')}/payment/",
-            params={"invoiceId": invoice_id, "limit": 50, "page": 0, "sortBy": "created_at", "orderBy": "desc"},
+            # NOWPayments documents this query name in lowercase.  Query keys
+            # are case-sensitive at the provider edge.
+            params={"invoiceid": invoice_id, "limit": 50, "page": 0, "sortBy": "created_at", "orderBy": "desc"},
             headers={"x-api-key": settings.nowpayments_api_key},
         )
     if response.is_error:

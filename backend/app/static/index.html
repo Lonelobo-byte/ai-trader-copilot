@@ -65,10 +65,13 @@
           Secure checkout</span></div>
       <h2>Choose your research edge.</h2>
       <p>Unlock the full analyst workstation. Payment activation occurs only after verified provider confirmation.</p>
+      <button type="button" id="plan-back" class="membership-back">← Back to account</button>
       <div id="plan-options" class="plan-options"></div>
       <div id="checkout-progress" class="checkout-progress" hidden aria-live="polite">
-        <div class="checkout-progress-copy"><span class="checkout-progress-spinner" aria-hidden="true"></span><span id="checkout-progress-text">Securing checkout…</span></div>
-        <div class="checkout-progress-track" role="progressbar" aria-label="Creating secure checkout"><span></span></div>
+        <div class="checkout-progress-copy"><span class="checkout-progress-spinner" aria-hidden="true"></span><span
+            id="checkout-progress-text">Securing checkout…</span></div>
+        <div class="checkout-progress-track" role="progressbar" aria-label="Creating secure checkout"><span></span>
+        </div>
       </div>
       <div id="plan-error" class="plan-error" aria-live="polite"></div>
       <div class="membership-footer"><span>◇</span> Powered by secure crypto checkout · No private keys stored</div>
@@ -384,7 +387,8 @@
             </div>
             <span class="monitor-status scanning" id="monitor-status-val">SCANNING</span>
           </div>
-          <section class="monitor-confirmation-scenarios" id="monitor-confirmation-scenarios" aria-label="Confirmation scenario" hidden></section>
+          <section class="monitor-confirmation-scenarios" id="monitor-confirmation-scenarios"
+            aria-label="Confirmation scenario" hidden></section>
           <section class="monitor-evidence-hero scanning" id="monitor-evidence-hero" aria-label="Evidence state">
             <div>
               <span class="monitor-eyebrow" id="monitor-evidence-state">EVIDENCE STATE · SCANNING</span>
@@ -491,43 +495,55 @@
         </div>
 
 
-        <!-- EXACT TRADE SETUP DETAILS -->
-        <div class="card exact-setup-card">
-          <h3>Trade Setup Plan</h3>
-          <div class="setup-status-row">
-            <span class="setup-status" id="setup-status-val">NO TRADE</span>
-            <span class="setup-reason" id="setup-reason-val">Waiting for a qualified setup.</span>
+        <!-- TRADE SETUP LEDGER: a scenario view, never an automatic order ticket. -->
+        <div class="card exact-setup-card setup-ledger-card" id="setup-ledger-card">
+          <div class="setup-ledger-header">
+            <div><span class="setup-ledger-kicker">Causal scenario ledger</span>
+              <h3>Trade Setup Plan</h3>
+            </div>
+            <div class="setup-ledger-statuses"><span class="setup-status" id="setup-status-val">NO TRADE</span><span
+                class="setup-ledger-type" id="setup-type-val">NO SCENARIO</span></div>
           </div>
-          <div class="setup-grid">
-            <div class="setup-item">
-              <span class="label">Side</span>
-              <span class="value" id="setup-side-val">-</span>
+          <section class="setup-evidence-hero" id="setup-evidence-hero" aria-label="Setup evidence state">
+            <div>
+              <span class="setup-eyebrow" id="setup-evidence-state">PLAN STATE · NO TRADE</span>
+              <strong id="setup-evidence-title">No directional scenario is currently established</strong>
+              <p id="setup-reason-val">Waiting for a qualified setup.</p>
             </div>
-            <div class="setup-item">
-              <span class="label">Entry Zone</span>
-              <span class="value font-mono" id="setup-entry-val">-</span>
-            </div>
-            <div class="setup-item">
-              <span class="label">Stop</span>
-              <span class="value font-mono" id="setup-stop-val">-</span>
-            </div>
-            <div class="setup-item">
-              <span class="label">Risk per Unit</span>
-              <span class="value font-mono" id="setup-risk-val">-</span>
-            </div>
+            <span class="setup-evidence-mark" id="setup-evidence-mark">—</span>
+          </section>
+          <div class="setup-provenance" id="setup-provenance" aria-label="Measured level provenance">
+            <span class="setup-provenance-chip" id="setup-entry-source-val">ENTRY SOURCE · —</span>
+            <span class="setup-provenance-chip" id="setup-stop-source-val">INVALIDATION · —</span>
+            <span class="setup-provenance-chip" id="setup-objective-val">OBJECTIVE · —</span>
           </div>
-          <div class="target-grid">
-            <div class="target-item"><span>TP1 1.5R</span><strong id="setup-tp1-val" class="font-mono">-</strong></div>
-            <div class="target-item"><span>TP2 2.5R</span><strong id="setup-tp2-val" class="font-mono">-</strong></div>
-            <div class="target-item"><span>TP3 3.5R</span><strong id="setup-tp3-val" class="font-mono">-</strong></div>
-            <div class="target-item"><span>Runner 5R</span><strong id="setup-runner-val" class="font-mono">-</strong>
+          <div class="setup-price-map">
+            <div class="setup-price-column entry"><span>Entry / retest</span><strong id="setup-entry-val"
+                class="font-mono">-</strong><small id="setup-side-val">NO SIDE</small></div>
+            <div class="setup-price-column invalidation"><span>Invalidation</span><strong id="setup-stop-val"
+                class="font-mono">-</strong><small id="setup-risk-val">NO RISK MAP</small></div>
+          </div>
+          <div class="setup-control-strip" aria-label="Execution controls">
+            <div><span>Allocation</span><strong id="setup-allocation-val">NO ALLOCATION</strong></div>
+            <div><span>Execution</span><strong id="setup-execution-val">MANUAL ONLY</strong></div>
+            <div><span>Leverage cap</span><strong id="setup-leverage-val">-</strong></div>
+          </div>
+          <section class="setup-target-journey" aria-label="Target journey">
+            <span class="setup-section-label">Target journey</span>
+            <div class="setup-target-rail">
+              <div class="setup-target-node active"><i></i><span>TP1 · 1.5R</span><strong id="setup-tp1-val"
+                  class="font-mono">-</strong></div>
+              <div class="setup-target-node"><i></i><span>TP2 · 2.5R</span><strong id="setup-tp2-val"
+                  class="font-mono">-</strong></div>
+              <div class="setup-target-node"><i></i><span>TP3 · 3.5R</span><strong id="setup-tp3-val"
+                  class="font-mono">-</strong></div>
+              <div class="setup-target-node"><i></i><span>Runner · 5R</span><strong id="setup-runner-val"
+                  class="font-mono">-</strong></div>
             </div>
-          </div>
-          <div class="leverage-summary">
-            <span>Recommended Leverage</span>
-            <strong id="setup-leverage-val">-</strong>
-          </div>
-          <div class="leverage-table" id="leverage-table-container">
+          </section>
+          <div class="setup-safety-note">Manual research and review only. This plan does not place or authorize an
+            order.</div>
+          <div class="leverage-table setup-leverage-table" id="leverage-table-container">
             <div class="empty-leverage">No leverage limits loaded.</div>
           </div>
         </div>
@@ -610,43 +626,7 @@
         </div>
 
 
-        <!-- MERGED MARKET INTELLIGENCE CARD -->
-        <div class="card intelligence-card" id="market-intel-panel-card">
-          <div class="card-tabs">
-            <button type="button" class="card-tab-btn active" data-card-tab="calendar">📅 Macro Calendar</button>
-            <button type="button" class="card-tab-btn" data-card-tab="news">📰 News Sentiment</button>
-            <button type="button" class="card-tab-btn" data-card-tab="liquidations">⚡ Liquidation Magnets</button>
-          </div>
 
-          <!-- Economic Calendar -->
-          <div class="card-tab-content" data-card-tab="calendar">
-            <div class="calendar-list" id="calendar-list-container">
-              <div class="empty-calendar">No upcoming US events loaded.</div>
-            </div>
-          </div>
-
-          <!-- News Sentiment -->
-          <div class="card-tab-content hidden" data-card-tab="news">
-            <div class="news-scope-selector"
-              style="display: flex; gap: 0.35rem; justify-content: flex-end; margin-bottom: 0.5rem;">
-              <button type="button" class="btn active" id="news-scope-token"
-                style="font-size: 0.62rem; padding: 2px 8px; border-radius: 4px; line-height: 1;">Token
-                Specific</button>
-              <button type="button" class="btn" id="news-scope-global"
-                style="font-size: 0.62rem; padding: 2px 8px; border-radius: 4px; line-height: 1;">Global Crypto</button>
-            </div>
-            <ul class="news-list" id="news-list-container" style="list-style-type: none;">
-              <li class="empty-news">No headlines.</li>
-            </ul>
-          </div>
-
-          <!-- Liquidation Magnet price levels -->
-          <div class="card-tab-content hidden" data-card-tab="liquidations">
-            <div class="liquidation-list" id="liquidation-list-container">
-              <div class="empty-liq">No liquidation clusters loaded.</div>
-            </div>
-          </div>
-        </div>
 
 
       </section>
@@ -804,8 +784,46 @@
         </div>
 
 
+        <!-- MERGED MARKET INTELLIGENCE CARD -->
+        <div class="card intelligence-card" id="market-intel-panel-card">
+          <div class="card-tabs">
+            <button type="button" class="card-tab-btn active" data-card-tab="calendar">📅 Macro Calendar</button>
+            <button type="button" class="card-tab-btn" data-card-tab="news">📰 News Sentiment</button>
+            <button type="button" class="card-tab-btn" data-card-tab="liquidations">⚡ Liquidation Magnets</button>
+          </div>
+
+          <!-- Economic Calendar -->
+          <div class="card-tab-content" data-card-tab="calendar">
+            <div class="calendar-list" id="calendar-list-container">
+              <div class="empty-calendar">No upcoming US events loaded.</div>
+            </div>
+          </div>
+
+          <!-- News Sentiment -->
+          <div class="card-tab-content hidden" data-card-tab="news">
+            <div class="news-scope-selector"
+              style="display: flex; gap: 0.35rem; justify-content: flex-end; margin-bottom: 0.5rem;">
+              <button type="button" class="btn active" id="news-scope-token"
+                style="font-size: 0.62rem; padding: 2px 8px; border-radius: 4px; line-height: 1;">Token
+                Specific</button>
+              <button type="button" class="btn" id="news-scope-global"
+                style="font-size: 0.62rem; padding: 2px 8px; border-radius: 4px; line-height: 1;">Global Crypto</button>
+            </div>
+            <ul class="news-list" id="news-list-container" style="list-style-type: none;">
+              <li class="empty-news">No headlines.</li>
+            </ul>
+          </div>
+
+          <!-- Liquidation Magnet price levels -->
+          <div class="card-tab-content hidden" data-card-tab="liquidations">
+            <div class="liquidation-list" id="liquidation-list-container">
+              <div class="empty-liq">No liquidation clusters loaded.</div>
+            </div>
+          </div>
+        </div>
+
         <!-- QUANT STRATEGY LAB CARD -->
-        <div class="card operations-card">
+        <!-- <div class="card operations-card">
           <h3>Quant Strategy Testing</h3>
           <div class="ops-controls">
             <div class="form-group-inline">
@@ -825,7 +843,7 @@
             <div class="ops-metrics-grid" id="ops-metrics-display"></div>
             <div class="ops-log" id="ops-results-log"></div>
           </div>
-        </div>
+        </div> -->
       </section>
 
 
@@ -850,7 +868,7 @@
     (() => {
       const gate = document.getElementById('auth-gate'), shell = document.getElementById('access-shell'), form = document.getElementById('auth-form'), picker = document.getElementById('plan-picker');
       const error = document.getElementById('auth-error'), submit = document.getElementById('auth-submit');
-      const toggle = document.getElementById('auth-toggle'), copy = document.getElementById('auth-copy');
+      const toggle = document.getElementById('auth-toggle'), copy = document.getElementById('auth-copy'), planBack = document.getElementById('plan-back');
       let register = false;
       let paymentPollTimer = null;
       let checkoutInProgress = false;
@@ -868,6 +886,13 @@
         window.dispatchEvent(new CustomEvent('atc:authenticated', { detail: { token } }));
       };
       const showLogin = (message = '') => { picker.hidden = true; shell.hidden = false; form.style.display = 'block'; error.textContent = message; };
+      planBack.onclick = () => {
+        if (checkoutInProgress) return;
+        if (paymentPollTimer) clearTimeout(paymentPollTimer);
+        paymentPollTimer = null;
+        history.replaceState({}, '', '/dashboard');
+        showLogin();
+      };
       const showPlans = async (token) => {
         shell.hidden = true; picker.hidden = false;
         const options = document.getElementById('plan-options'), planError = document.getElementById('plan-error');
@@ -966,7 +991,10 @@
           }
           const d = await r.json();
           if (!r.ok) throw new Error('Could not verify your account.');
-          if (d.role === 'admin' || (d.subscription && d.subscription.active)) return unlock(token);
+          // The server is the entitlement authority.  In local/test mode it
+          // may deliberately grant access with subscription enforcement off;
+          // production still returns false until NOWPayments is verified.
+          if (d.access_granted) return unlock(token);
           if (new URLSearchParams(location.search).get('payment') === 'success') {
             await showPlans(token);
             return waitForPayment(token);

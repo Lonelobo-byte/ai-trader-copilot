@@ -389,6 +389,17 @@ const setupTp3Val = document.getElementById('setup-tp3-val');
 const setupRunnerVal = document.getElementById('setup-runner-val');
 const setupLeverageVal = document.getElementById('setup-leverage-val');
 const leverageTableContainer = document.getElementById('leverage-table-container');
+const setupLedgerCard = document.getElementById('setup-ledger-card');
+const setupTypeVal = document.getElementById('setup-type-val');
+const setupEvidenceHero = document.getElementById('setup-evidence-hero');
+const setupEvidenceState = document.getElementById('setup-evidence-state');
+const setupEvidenceTitle = document.getElementById('setup-evidence-title');
+const setupEvidenceMark = document.getElementById('setup-evidence-mark');
+const setupEntrySourceVal = document.getElementById('setup-entry-source-val');
+const setupStopSourceVal = document.getElementById('setup-stop-source-val');
+const setupObjectiveVal = document.getElementById('setup-objective-val');
+const setupAllocationVal = document.getElementById('setup-allocation-val');
+const setupExecutionVal = document.getElementById('setup-execution-val');
 
 // Causal market-context panel. This is deliberately separate from the
 // legacy indicator telemetry so the dashboard explains evidence hierarchy.
@@ -775,12 +786,24 @@ if (window.atcAuthenticated) fetchScannerStatus();
 
 function renderTradeSetup(setup) {
   const status = setup?.status || 'NO_TRADE';
+  const label = value => String(value || 'UNAVAILABLE').replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').toUpperCase();
   setupStatusVal.textContent = status.replace(/_/g, ' ');
   setupStatusVal.className = 'setup-status ' + status.toLowerCase();
   setupReasonVal.textContent = setup?.reason || 'Waiting for a qualified setup.';
+  if (setupLedgerCard) setupLedgerCard.className = `card exact-setup-card setup-ledger-card ledger-${status.toLowerCase()}`;
+  if (setupEvidenceHero) setupEvidenceHero.className = `setup-evidence-hero ${status.toLowerCase()}`;
+  if (setupEvidenceState) setupEvidenceState.textContent = `PLAN STATE · ${label(status)}`;
+  if (setupTypeVal) setupTypeVal.textContent = label(setup?.setup_type || 'NO SCENARIO');
+  if (setupEvidenceTitle) setupEvidenceTitle.textContent = status === 'NO_TRADE'
+    ? 'No directional causal scenario is currently established'
+    : status === 'WATCH_ONLY' ? 'Directional value-retest scenario mapped'
+      : status === 'BLOCKED_BY_MACRO' ? 'Scenario mapped, but macro controls block release'
+        : 'Institutional controls passed for manual review';
+  if (setupEvidenceMark) setupEvidenceMark.textContent = status === 'NO_TRADE' ? '—' : status === 'WATCH_ONLY' ? '◌' : status === 'BLOCKED_BY_MACRO' ? '!' : '✓';
 
   if (!setup || status === 'NO_TRADE') {
     setupSideVal.textContent = '-';
+    setupSideVal.className = '';
     setupEntryVal.textContent = '-';
     setupStopVal.textContent = '-';
     setupRiskVal.textContent = '-';
@@ -789,6 +812,11 @@ function renderTradeSetup(setup) {
     setupTp3Val.textContent = '-';
     setupRunnerVal.textContent = '-';
     setupLeverageVal.textContent = '-';
+    if (setupEntrySourceVal) setupEntrySourceVal.textContent = 'ENTRY SOURCE · —';
+    if (setupStopSourceVal) setupStopSourceVal.textContent = 'INVALIDATION · —';
+    if (setupObjectiveVal) setupObjectiveVal.textContent = 'OBJECTIVE · —';
+    if (setupAllocationVal) setupAllocationVal.textContent = 'NO ALLOCATION';
+    if (setupExecutionVal) setupExecutionVal.textContent = 'MANUAL ONLY';
     leverageTableContainer.innerHTML = '<div class="empty-leverage">No leverage plan loaded.</div>';
     return;
   }
@@ -808,7 +836,14 @@ function renderTradeSetup(setup) {
   setupTp2Val.textContent = formatCurrency(targets.tp2_2r);
   setupTp3Val.textContent = formatCurrency(targets.tp3_3r);
   setupRunnerVal.textContent = formatCurrency(targets.runner_5r);
-  setupLeverageVal.textContent = `${leverage.recommended || '-'}x (max sensible ${leverage.max_sensible || '-'}x)`;
+  setupLeverageVal.textContent = `${leverage.max_sensible || leverage.recommended || '-'}x MAX`;
+  if (setupEntrySourceVal) setupEntrySourceVal.textContent = `ENTRY SOURCE · ${label(entry.mode)}`;
+  if (setupStopSourceVal) setupStopSourceVal.textContent = `INVALIDATION · ${label(stop.liquidity_reference_kind || stop.method)}`;
+  if (setupObjectiveVal) setupObjectiveVal.textContent = `OBJECTIVE · ${label(setup.liquidity_objective?.kind || 'RISK LADDER')}`;
+  if (setupAllocationVal) setupAllocationVal.textContent = setup.execution_permitted
+    ? `${position.risk_pct ?? 0}% RISK · $${formatCurrency(position.risk_amount_usd)}`
+    : 'ZERO RISK · WATCH';
+  if (setupExecutionVal) setupExecutionVal.textContent = setup.execution_permitted ? 'MANUAL REVIEW' : 'NO AUTO-EXECUTION';
 
   const rows = Array.isArray(leverage.options) ? leverage.options : [];
   if (rows.length === 0) {
@@ -2087,16 +2122,18 @@ function monitorControlState(reason, terms, fallback = 'OBSERVED') {
 }
 
 function renderMonitorConfirmationScenario(data) {
-  if (!monitorConfirmationScenarios) return { institutional: false, tactical: false };
+  if (!monitorConfirmationScenarios) return { institutional: false, tactical: false, tacticalCandidate: false };
   const scenarios = data.confirmation_scenarios || {};
   const institutional = scenarios.institutional || {};
   const tactical = scenarios.tactical || {};
-  const selected = institutional.passed ? institutional : (tactical.passed ? tactical : null);
+  const tacticalCandidate = Boolean(tactical.candidate || tactical.passed);
+  const selected = institutional.passed ? institutional : (tacticalCandidate ? tactical : null);
   const isInstitutional = selected === institutional;
+  const isTacticalConfirmed = selected === tactical && Boolean(tactical.passed);
   if (!selected) {
     monitorConfirmationScenarios.hidden = true;
     monitorConfirmationScenarios.innerHTML = '';
-    return { institutional: false, tactical: false };
+    return { institutional: false, tactical: false, tacticalCandidate: false };
   }
   const setup = data.candidate_setup || {};
   const entry = setup.entry || {};
@@ -2106,41 +2143,64 @@ function renderMonitorConfirmationScenario(data) {
     ? 'Higher-timeframe and primary-timeframe evidence are aligned.'
     : 'Primary-timeframe evidence is valid; higher timeframe is not aligned.';
   const label = isInstitutional ? 'INSTITUTIONAL CONFIRMATION' : 'TACTICAL CONFIRMATION · LOWER CONFIDENCE';
-  const htfLabel = selected.higher_timeframe_aligned ? 'ALIGNED' : 'NOT ALIGNED';
+  const htfState = String(selected.higher_timeframe_state || '').toUpperCase();
+  const displayHeadline = isInstitutional
+    ? headline
+    : isTacticalConfirmed
+      ? headline
+      : 'Primary-timeframe scenario is mapped; its required proof is still awaited.';
+  const displayLabel = isInstitutional
+    ? label
+    : isTacticalConfirmed
+      ? label
+      : 'PRIMARY-TIMEFRAME WATCH · NOT TRADEABLE';
+  const displayHtfLabel = selected.higher_timeframe_aligned
+    ? 'ALIGNED'
+    : htfState === 'UNAVAILABLE'
+      ? 'UNAVAILABLE'
+      : 'NOT ALIGNED';
   monitorConfirmationScenarios.hidden = false;
   monitorConfirmationScenarios.innerHTML = `
     <div class="monitor-confirmation-panel ${levelClass}">
       <div>
-        <span class="monitor-confirmation-kicker">${label}</span>
-        <strong>${headline}</strong>
+        <span class="monitor-confirmation-kicker">${displayLabel}</span>
+        <strong>${displayHeadline}</strong>
         <p>${cioSafeText(selected.reason || 'Measured evidence is aligned for this scenario.')}</p>
       </div>
       <div class="monitor-confirmation-levels" aria-label="Scenario setup levels">
         <span>SIDE<b>${cioSafeText(setup.side || data.side || '—')}</b></span>
         <span>ENTRY<b>${cioSafeText(formatCurrency(entry.reference))}</b></span>
         <span>STOP<b>${cioSafeText(formatCurrency(stop.selected || stop.current))}</b></span>
-        <span>HTF<b>${htfLabel}</b></span>
+        <span>HTF<b>${displayHtfLabel}</b></span>
       </div>
     </div>`;
-  return { institutional: Boolean(institutional.passed), tactical: Boolean(tactical.passed) };
+  return { institutional: Boolean(institutional.passed), tactical: Boolean(tactical.passed), tacticalCandidate };
 }
 
 function renderMonitorEvidenceState(data, status, isPublished, isTerminalFailure) {
-  const reason = data.reason || data.approval?.blockers?.[0] || 'Waiting for qualified setup.';
+  const scenarios = data.confirmation_scenarios || {};
+  const institutionalConfirmed = Boolean(scenarios.institutional?.passed);
+  const tactical = scenarios.tactical || {};
+  const tacticalReady = Boolean(tactical.passed) && !institutionalConfirmed;
+  const tacticalCandidate = Boolean(tactical.candidate || tactical.passed) && !institutionalConfirmed;
+  // Prefer the primary-timeframe evidence gap when its playbook exists. The
+  // institutional HTF-rejection sentence is still preserved in the scenario.
+  const reason = (tacticalCandidate && tactical.reason) || data.reason || data.approval?.blockers?.[0] || 'Waiting for qualified setup.';
   const reasonLower = reason.toLowerCase();
   const waitingForBreak = /has not closed through|structure level|completed.*break|breakout/.test(reasonLower);
-  const tacticalReady = Boolean(data.confirmation_scenarios?.tactical?.passed) && !Boolean(data.confirmation_scenarios?.institutional?.passed);
   const blocked = isTerminalFailure;
-  const state = blocked ? 'blocked' : isPublished ? 'published' : tacticalReady ? 'tactical' : waitingForBreak ? 'waiting' : 'scanning';
-  const stateCopy = blocked ? 'TRADE CLOSED / INVALIDATED' : isPublished ? 'SIGNAL PUBLISHED' : tacticalReady ? 'TACTICAL WATCH' : waitingForBreak ? 'WAITING FOR CONFIRMATION' : 'EVIDENCE WATCH';
+  const state = blocked ? 'blocked' : isPublished ? 'published' : tacticalCandidate ? 'tactical' : waitingForBreak ? 'waiting' : 'scanning';
+  const stateCopy = blocked ? 'TRADE CLOSED / INVALIDATED' : isPublished ? 'SIGNAL PUBLISHED' : tacticalReady ? 'TACTICAL WATCH' : tacticalCandidate ? 'PRIMARY-TIMEFRAME WATCH' : waitingForBreak ? 'WAITING FOR CONFIRMATION' : 'EVIDENCE WATCH';
   const title = blocked ? 'Published lifecycle has reached a terminal state'
     : isPublished ? 'Published signal is under lifecycle control'
       : tacticalReady ? 'Primary-timeframe setup is ready for tactical review'
+      : tacticalCandidate ? 'Primary-timeframe scenario is awaiting measured proof'
       : waitingForBreak ? 'Completed structure break awaited'
         : 'Monitoring for a qualified causal alignment';
   const detail = blocked ? reason
     : isPublished ? 'Entry, stop, targets, and outcome controls are now active for this published signal.'
       : tacticalReady ? 'The setup is visible above, but only higher-timeframe alignment can upgrade it to institutional confirmation.'
+      : tacticalCandidate ? reason
       : waitingForBreak ? 'The system will not publish early. It needs a completed candle through the relevant 20-candle structure level.'
         : reason;
 
@@ -2148,11 +2208,13 @@ function renderMonitorEvidenceState(data, status, isPublished, isTerminalFailure
   if (monitorEvidenceState) monitorEvidenceState.textContent = `EVIDENCE STATE · ${stateCopy}`;
   if (monitorEvidenceTitle) monitorEvidenceTitle.textContent = title;
   if (monitorEvidenceDetail) monitorEvidenceDetail.textContent = detail;
-  if (monitorEvidenceMark) monitorEvidenceMark.textContent = blocked ? '!' : isPublished ? '✓' : waitingForBreak ? '↗' : '…';
+  if (monitorEvidenceMark) monitorEvidenceMark.textContent = blocked ? '!' : isPublished ? '✓' : tacticalCandidate || waitingForBreak ? '↗' : '…';
   if (monitorMissingEvidence) monitorMissingEvidence.classList.toggle('hidden', isPublished || blocked);
-  if (monitorMissingTitle) monitorMissingTitle.textContent = tacticalReady ? 'Higher-timeframe alignment' : waitingForBreak ? 'Completed 20-candle structure break' : 'Next required evidence';
+  if (monitorMissingTitle) monitorMissingTitle.textContent = tacticalReady ? 'Higher-timeframe alignment' : tacticalCandidate ? 'Required primary-timeframe confirmation' : waitingForBreak ? 'Completed 20-candle structure break' : 'Next required evidence';
   if (monitorMissingDetail) monitorMissingDetail.textContent = tacticalReady
     ? 'This remains a tactical watch. It does not publish a trade signal until the higher timeframe confirms the same direction.'
+    : tacticalCandidate
+    ? `${reason} This is a research watch only; it cannot publish a trade signal.`
     : waitingForBreak
     ? 'Wait for the current candle to close through the relevant structure level; an intrabar move is not confirmation.'
     : reason;
@@ -2161,8 +2223,10 @@ function renderMonitorEvidenceState(data, status, isPublished, isTerminalFailure
   if (monitorWatchPlan) monitorWatchPlan.classList.toggle('hidden', isPublished);
   if (monitorWatchStepOneTitle) monitorWatchStepOneTitle.textContent = 'Causal context mapped';
   if (monitorWatchStepOneDetail) monitorWatchStepOneDetail.textContent = 'Regime, liquidity, positioning, and order flow are assessed from the same snapshot.';
-  if (monitorWatchStepTwoTitle) monitorWatchStepTwoTitle.textContent = waitingForBreak ? 'Completed structure break awaited' : 'Evidence control awaited';
-  if (monitorWatchStepTwoDetail) monitorWatchStepTwoDetail.textContent = waitingForBreak
+  if (monitorWatchStepTwoTitle) monitorWatchStepTwoTitle.textContent = tacticalCandidate ? 'Primary-timeframe proof awaited' : waitingForBreak ? 'Completed structure break awaited' : 'Evidence control awaited';
+  if (monitorWatchStepTwoDetail) monitorWatchStepTwoDetail.textContent = tacticalCandidate
+    ? reason
+    : waitingForBreak
     ? 'A completed close through the relevant 20-candle structure level is required before any signal can be published.'
     : reason;
 
@@ -2214,7 +2278,9 @@ function renderSignalMonitor(monitor) {
   }
   if (monitorActionVal) monitorActionVal.textContent = !isPublished && (evidence.state === 'waiting' || evidence.state === 'tactical') ? 'WATCH' : action.replace(/_/g, ' ');
   if (monitorReasonVal) {
-    const reasonText = data.reason || 'Scanning for opportunities.';
+    const tactical = data.confirmation_scenarios?.tactical || {};
+    const useTacticalReason = Boolean(tactical.candidate || tactical.passed) && !Boolean(data.confirmation_scenarios?.institutional?.passed);
+    const reasonText = (useTacticalReason && tactical.reason) || data.reason || 'Scanning for opportunities.';
     if (status === 'SCANNING') {
       monitorReasonVal.innerHTML = `
         <div style="display: inline-flex; align-items: center; gap: 0.35rem;">

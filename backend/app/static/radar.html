@@ -1678,7 +1678,7 @@
               <td class="value-mono">${label(flow.bias || 'UNAVAILABLE')}</td>
               <td class="value-mono">${coverage.available_domains || 0}/${coverage.required_domains || 4} domains</td>
               <td>${state}</td>
-              <td><div class="radar-action-group"><button class="action-btn-sm" type="button" onclick="verifySetupWithAI('${item.symbol}')">Review</button><a class="action-btn-sm research-btn" href="index.html?symbol=${encodeURIComponent(item.symbol)}">Research ↗</a></div></td>
+              <td><div class="radar-action-group"><button class="action-btn-sm" type="button" onclick="verifySetupWithAI('${item.symbol}')">Review</button><a class="action-btn-sm research-btn" href="index.html?symbol=${encodeURIComponent(item.symbol)}" target="_blank" rel="noopener" title="Open ${item.symbol} research in a new tab">Research ↗</a></div></td>
             </tr>`;
         }).join('');
       }

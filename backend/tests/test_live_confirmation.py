@@ -126,3 +126,20 @@ def test_primary_setup_remains_visible_as_tactical_when_higher_timeframe_mismatc
     assert result["scenarios"]["tactical"]["passed"] is True
     assert result["scenarios"]["tactical"]["status"] == "TACTICAL_CONFIRMED_WATCH"
     assert result["scenarios"]["tactical"]["higher_timeframe_aligned"] is False
+
+
+def test_primary_scenario_stays_visible_while_higher_timeframe_is_unavailable() -> None:
+    """A tactical evidence watch must not be hidden behind the HTF rejection."""
+    primary = _candles(start=100.0, step=-0.20, last_volume=2_000.0)
+    inputs = _live_inputs(primary[-1].close)
+    with patch("app.quant.live_confirmation.classify_market_phase", return_value="DISTRIBUTION"):
+        result = verify_main_signal_snapshot(
+            symbol="TESTUSDT", timeframe="5m", side="SHORT", candles=primary, higher_candles=[],
+            order_book=inputs["order_book"], funding=inputs["funding"], derivatives=inputs["derivatives"],
+        )
+
+    assert result["passed"] is False
+    assert result["scenarios"]["institutional"]["reason"].startswith("No approved regime playbook")
+    assert result["scenarios"]["tactical"]["candidate"] is True
+    assert result["scenarios"]["tactical"]["status"] == "TACTICAL_EVIDENCE_WATCH"
+    assert result["scenarios"]["tactical"]["higher_timeframe_state"] == "UNAVAILABLE"

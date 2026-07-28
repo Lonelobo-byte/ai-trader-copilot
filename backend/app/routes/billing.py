@@ -195,13 +195,15 @@ async def checkout(body: CheckoutRequest, request: Request, user: User = Depends
                 await session.commit()
             if existing.status not in _ACTIVE_PROVIDER_STATUSES:
                 existing = None
-            elif not reconciled:
-                raise HTTPException(status_code=409, detail="Your existing payment could not be verified with NOWPayments yet. Please wait a moment and retry; a new checkout was not created to avoid duplicate charges.")
-
         if existing:
             invoice_url = (existing.raw_payload or {}).get("invoice_url")
             if invoice_url:
-                return {"payment_id": existing.id, "provider_invoice_id": existing.provider_invoice_id, "provider_payment_id": existing.provider_payment_id, "invoice_url": invoice_url, "order_id": existing.order_id, "reused": True}
+                # A transient provider lookup failure must never force a second
+                # invoice.  Reopen the exact hosted invoice instead; the
+                # provider remains authoritative for its eventual status.
+                return {"payment_id": existing.id, "provider_invoice_id": existing.provider_invoice_id, "provider_payment_id": existing.provider_payment_id, "invoice_url": invoice_url, "order_id": existing.order_id, "reused": True, "verification_pending": not reconciled}
+            if not reconciled:
+                raise HTTPException(status_code=409, detail="Your existing payment could not be verified and its secure checkout link is unavailable. Contact support with this order reference: " + existing.order_id)
             raise HTTPException(status_code=409, detail="A verified NOWPayments payment is still pending, but its checkout URL is unavailable. Contact support with this order reference: " + existing.order_id)
 
     # Only genuine creation attempts consume the checkout quota.  Reopening a

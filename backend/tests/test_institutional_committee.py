@@ -146,6 +146,40 @@ def test_trade_plan_keeps_entry_zone_outside_stop() -> None:
     assert setup["stop"]["distance_pct"] >= 0.25
 
 
+def test_directional_causal_context_gets_a_zero_risk_value_retest_watch() -> None:
+    setup = build_ai_driven_trade_setup(
+        {
+            "decision": "WAIT",
+            "confidence_pct": 54,
+            "trade_grade": "C",
+            "institutional_dossier": {
+                "provisional_thesis": {"direction": "LONG"},
+                "risk_committee": {
+                    "hard_blockers": ["Live confirmation is still required."],
+                    "allocation_ceiling": {"risk_fraction": 0.005, "max_notional_usd": 500.0},
+                },
+            },
+        },
+        {
+            "current_price": 100.0,
+            "volatility": {"atr": 1.0},
+            "vwap_context": {"daily": 99.0, "weekly": 97.0, "anchored": 98.0},
+            "volume_profile": {"poc": 98.0},
+            "liquidity_map": {
+                "nearest_below": {"kind": "equal_lows", "price": 96.5},
+                "nearest_above": {"kind": "previous_day_high", "price": 104.0},
+            },
+        },
+        _settings(),
+    )
+    assert setup["status"] == "WATCH_ONLY"
+    assert setup["setup_type"] == "causal_value_retest_watch"
+    assert setup["entry"]["reference"] == 99.0
+    assert setup["stop"]["selected"] < 96.5
+    assert setup["position"]["risk_amount_usd"] == 0.0
+    assert setup["execution_permitted"] is False
+
+
 def test_risk_veto_cannot_be_overridden_by_bullish_cio_output() -> None:
     dossier = _dossier(
         validated=False,

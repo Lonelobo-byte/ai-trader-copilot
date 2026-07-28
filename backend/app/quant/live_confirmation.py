@@ -162,7 +162,7 @@ def verify_main_signal_snapshot(
             "reason": risk_flags[0], "evaluation_mode": "causal_regime_aware_live_confirmation",
             "scenarios": {
                 "institutional": {"passed": False, "status": "UNAVAILABLE", "reason": risk_flags[0]},
-                "tactical": {"passed": False, "status": "UNAVAILABLE", "reason": risk_flags[0]},
+                "tactical": {"passed": False, "candidate": False, "status": "UNAVAILABLE", "reason": risk_flags[0]},
             },
         }
 
@@ -330,6 +330,15 @@ def verify_main_signal_snapshot(
     apply_live_confirmation(tactical_candidate, live)
     tactical_live_checks = tactical_candidate["advanced_confirmation"]["checks"]
     tactical_passed = all(tactical_structure_checks.values()) and tactical_candidate["status"] == "LIVE_CONFIRMED_REVIEW"
+    # Keep a viable primary-timeframe setup visible while it is waiting for
+    # its own measured proof. This never authorizes a trade: only the
+    # institutional scenario can publish a signal.
+    tactical_watch_candidate = (
+        tactical_playbook != "NONE"
+        and tactical_structure_checks.get("directional_plan", False)
+        and tactical_structure_checks.get("completed_primary_candles", False)
+        and tactical_structure_checks.get("structure_not_opposed", False)
+    )
     tactical_reason = tactical_candidate["risk_flags"][0] if tactical_candidate["risk_flags"] else "Primary-timeframe structure and execution evidence are aligned."
     result = {
         "symbol": symbol, "timeframe": timeframe, "direction": direction, "passed": passed,
@@ -363,16 +372,25 @@ def verify_main_signal_snapshot(
             "live_checks": live_checks,
             "playbook": playbook,
             "higher_timeframe_aligned": higher_direction == direction,
+            "higher_timeframe_state": higher_phase,
         },
         "tactical": {
             "passed": tactical_passed,
-            "status": "TACTICAL_CONFIRMED_WATCH" if tactical_passed else "TACTICAL_REJECTED",
+            "candidate": tactical_watch_candidate,
+            "status": (
+                "TACTICAL_CONFIRMED_WATCH"
+                if tactical_passed
+                else "TACTICAL_EVIDENCE_WATCH"
+                if tactical_watch_candidate
+                else "TACTICAL_REJECTED"
+            ),
             "label": "TACTICAL CONFIRMATION",
             "reason": tactical_reason,
             "structure_checks": tactical_structure_checks,
             "live_checks": tactical_live_checks,
             "playbook": tactical_playbook,
             "higher_timeframe_aligned": higher_direction == direction,
+            "higher_timeframe_state": higher_phase,
         },
     }
     return result
