@@ -102,6 +102,12 @@ def apply_live_confirmation(candidate: dict[str, Any], live: dict[str, Any]) -> 
     # incompatible point system. Legacy callers retain their prior behavior.
     if not candidate.get("causal_radar"):
         candidate["score"] = min(100, int(candidate["score"]) + live_points)
+    # Displayed depth is useful context but it is not durable proof: a single
+    # snapshot can be cancelled or spoofed.  Publication therefore needs the
+    # two harder-to-fake observations together (aggressive taker flow and a
+    # matching price/OI regime).  Depth remains visible as supporting or
+    # contradictory evidence instead of becoming a one-snapshot veto.
+    execution_evidence_confirmed = flow_aligned and positioning_aligned
     checks = {
         "data_complete": bool(live.get("data_complete")),
         "spread_within_limit": liquid,
@@ -109,19 +115,33 @@ def apply_live_confirmation(candidate: dict[str, Any], live: dict[str, Any]) -> 
         "taker_flow_aligned": flow_aligned,
         "price_oi_aligned": positioning_aligned,
         "funding_not_crowded": not crowded,
+        "execution_evidence_confirmed": execution_evidence_confirmed,
     }
     risk_flags = candidate.setdefault("risk_flags", [])
     messages = {
         "data_complete": "Live depth, funding, open-interest, or taker-flow data is incomplete.",
         "spread_within_limit": "Live spread exceeds the execution-quality limit.",
-        "depth_aligned": "Displayed 20-level order-book depth does not support the proposed direction.",
+        "depth_aligned": "Displayed 20-level order-book depth does not support the proposed direction (a snapshot only; not used as a standalone veto).",
         "taker_flow_aligned": "Recent taker buy/sell flow does not support the proposed direction.",
         "price_oi_aligned": "Price and open interest do not form an aligned positioning regime.",
         "funding_not_crowded": "Funding is crowded in the proposed direction; squeeze/flush risk is elevated.",
+        "execution_evidence_confirmed": "Aggressive flow and price/OI positioning are not jointly aligned.",
     }
-    risk_flags.extend(message for key, message in messages.items() if not checks[key])
-    candidate["advanced_confirmation"] = {**live, "checks": checks, "live_points": live_points}
-    accepted = all(checks.values()) and candidate["score"] >= (65 if candidate.get("causal_radar") else 75)
+    required_checks = {
+        key: checks[key]
+        for key in ("data_complete", "spread_within_limit", "taker_flow_aligned", "price_oi_aligned", "funding_not_crowded", "execution_evidence_confirmed")
+    }
+    risk_flags.extend(message for key, message in messages.items() if key in required_checks and not checks[key])
+    supporting_warnings = [messages["depth_aligned"]] if not depth_aligned else []
+    candidate["advanced_confirmation"] = {
+        **live,
+        "checks": checks,
+        "required_checks": required_checks,
+        "depth_evidence": "SUPPORTIVE" if depth_aligned else "CONTRADICTORY_SNAPSHOT",
+        "supporting_warnings": supporting_warnings,
+        "live_points": live_points,
+    }
+    accepted = all(required_checks.values()) and candidate["score"] >= (65 if candidate.get("causal_radar") else 75)
     candidate["review_status"] = "REVIEW_CANDIDATE" if accepted else "WATCH_ONLY"
     candidate["status"] = "LIVE_CONFIRMED_REVIEW" if accepted else "LIVE_CONFIRMATION_REJECTED"
     candidate["quality_badge"] = "LIVE CHECK PASSED" if accepted else "LIVE CHECK FAILED"
@@ -317,6 +337,18 @@ def verify_main_signal_snapshot(
         "price_change_pct": ((_number(primary[-1].close) - _number(primary[-6].close)) / _number(primary[-6].close) * 100.0) if _number(primary[-6].close) else 0.0,
         "taker_buy_sell_ratio": _number(taker.get("ratio", taker.get("buy_sell_ratio"))) if taker.get("available") else None,
     }
+    coverage_requirements = {
+        "order_book": bool(bids and asks),
+        "funding": bool(funding),
+        "oi_history": bool(oi_history.get("available")),
+        "taker_flow": bool(taker.get("available")),
+    }
+    publication_coverage = {
+        "ready": all(coverage_requirements.values()),
+        "requirements": coverage_requirements,
+        "missing": [name for name, available in coverage_requirements.items() if not available],
+        "label": "PUBLICATION DATA READY" if all(coverage_requirements.values()) else "PUBLICATION DATA PARTIAL",
+    }
     candidate = {"symbol": symbol, "direction": direction, "score": 75 if all(structure_checks.values()) else 0, "risk_flags": risk_flags}
     apply_live_confirmation(candidate, live)
     live_checks = candidate["advanced_confirmation"]["checks"]
@@ -360,6 +392,7 @@ def verify_main_signal_snapshot(
             "choch": choch,
         },
         "live_evidence": candidate["advanced_confirmation"],
+        "publication_coverage": publication_coverage,
         "evaluation_mode": "causal_regime_aware_live_confirmation",
     }
     result["scenarios"] = {

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections import Counter
 from datetime import datetime, timezone
 from typing import Any
 from sqlalchemy import select, text
@@ -15,7 +16,7 @@ from app.brains.council import run_ai_council
 from app.brains.signal_builder import build_ai_driven_trade_setup, evaluate_ai_driven_approval
 from app.data_sources.data_aggregator import fetch_market_intelligence, fetch_pair_discovery_data
 from app.db.database import AsyncSessionLocal, engine
-from app.db.models import ScannerConfiguration, TradeSignal
+from app.db.models import ScannerConfiguration, ScannerObservation, TradeSignal
 from app.signal_service import _lock_signal_key, get_active_signal, ensure_signal_database
 from app.brains.signal_lifecycle import build_signal_seed
 from app.quant.live_confirmation import verify_main_signal_snapshot
@@ -35,6 +36,102 @@ scanner_state: dict[str, Any] = {
     "discovered_pairs": [],
     "active_signals_count": 0,
 }
+
+
+def _scanner_observation(
+    *, symbol: str, timeframe: str, status: str, decision: str | None = None,
+    confidence: float | None = None, approval: dict[str, Any] | None = None,
+    live_confirmation: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Keep durable scanner history focused on evidence, never full AI payloads."""
+    confirmation = live_confirmation or {}
+    scenarios = confirmation.get("scenarios", {}) or {}
+    institutional = scenarios.get("institutional", {}) or {}
+    tactical = scenarios.get("tactical", {}) or {}
+    coverage = confirmation.get("publication_coverage", {}) or {}
+    blockers = list((approval or {}).get("blockers", []) or [])
+    live_reason = confirmation.get("reason")
+    if live_reason and live_reason not in blockers:
+        blockers.append(str(live_reason))
+    return {
+        "symbol": symbol,
+        "timeframe": timeframe,
+        "status": status,
+        "decision": decision,
+        "confidence": confidence,
+        "primary_blocker": blockers[0] if blockers else None,
+        "blockers": blockers[:8],
+        "publication_coverage": coverage,
+        "institutional": {
+            "passed": bool(institutional.get("passed")),
+            "status": institutional.get("status"),
+            "playbook": institutional.get("playbook"),
+            "reason": institutional.get("reason"),
+        },
+        "tactical": {
+            "candidate": bool(tactical.get("candidate")),
+            "passed": bool(tactical.get("passed")),
+            "status": tactical.get("status"),
+            "playbook": tactical.get("playbook"),
+            "reason": tactical.get("reason"),
+        },
+    }
+
+
+async def _record_scanner_observations(results: list[dict[str, Any]], timeframe: str) -> None:
+    """Persist compact failure/success evidence so calibration is measurable."""
+    observations = [item.get("scanner_observation") for item in results if item.get("scanner_observation")]
+    if not observations:
+        return
+    try:
+        async with AsyncSessionLocal() as db:
+            db.add_all([ScannerObservation(**observation) for observation in observations])
+            await db.commit()
+    except Exception as exc:
+        # Scanner operation must not fail merely because historical telemetry
+        # could not be written; the current run remains visible in memory.
+        logger.warning("Unable to persist scanner observations: %s", exc)
+
+
+async def get_scanner_diagnostics(limit: int = 120) -> dict[str, Any]:
+    """Return recent blocker distribution and tactical/institutional conversion."""
+    try:
+        async with AsyncSessionLocal() as db:
+            rows = (await db.scalars(
+                select(ScannerObservation)
+                .order_by(ScannerObservation.created_at.desc(), ScannerObservation.id.desc())
+                .limit(max(1, min(limit, 500)))
+            )).all()
+    except Exception as exc:
+        logger.warning("Unable to load scanner diagnostics: %s", exc)
+        return {"available": False, "reason": "scanner_observation_history_unavailable"}
+
+    blocker_counts = Counter(row.primary_blocker for row in rows if row.primary_blocker)
+    published = sum(row.status == "SIGNAL_PUBLISHED" for row in rows)
+    tactical_watches = sum(bool((row.tactical or {}).get("candidate")) for row in rows)
+    return {
+        "available": True,
+        "observations": len(rows),
+        "published": published,
+        "tactical_watches": tactical_watches,
+        "blocker_counts": [
+            {"reason": reason, "count": count}
+            for reason, count in blocker_counts.most_common(5)
+        ],
+        "latest": [
+            {
+                "symbol": row.symbol,
+                "timeframe": row.timeframe,
+                "status": row.status,
+                "primary_blocker": row.primary_blocker,
+                "publication_ready": bool((row.publication_coverage or {}).get("ready")),
+                "institutional": row.institutional or {},
+                "tactical": row.tactical or {},
+                "created_at": row.created_at.isoformat() if row.created_at else None,
+            }
+            for row in rows[:8]
+        ],
+    }
 
 
 async def get_scanner_configuration(settings: Any | None = None) -> dict[str, Any]:
@@ -122,6 +219,15 @@ async def run_single_symbol_scan(symbol: str, timeframe: str, settings: Any) -> 
 
         # Evaluate approval
         approval = evaluate_ai_driven_approval(cio_result, trade_setup)
+        observation = _scanner_observation(
+            symbol=symbol,
+            timeframe=timeframe,
+            status="SIGNAL_PUBLISHED" if approval["approved"] else ("WATCH_ONLY" if trade_setup.get("status") == "WATCH_ONLY" else "HOLD"),
+            decision=cio_result.get("decision"),
+            confidence=cio_result.get("confidence_pct"),
+            approval=approval,
+            live_confirmation=cio_result.get("live_confirmation"),
+        )
 
         if approval["approved"]:
             logger.info(f"Institutional Committee approved a manual-review signal for {symbol}/{timeframe}.")
@@ -176,6 +282,7 @@ async def run_single_symbol_scan(symbol: str, timeframe: str, settings: Any) -> 
                     "signal_id": signal.id,
                     "side": signal.side,
                     "confidence": signal.confidence,
+                    "scanner_observation": observation,
                 }
         else:
             return {
@@ -184,6 +291,7 @@ async def run_single_symbol_scan(symbol: str, timeframe: str, settings: Any) -> 
                 "reason": approval["summary"],
                 "decision": cio_result["decision"],
                 "confidence": cio_result["confidence_pct"],
+                "scanner_observation": observation,
             }
 
     except Exception as exc:
@@ -262,6 +370,7 @@ async def run_scan_cycle() -> None:
         })
         # Limit history size
         scanner_state["scan_history"] = scanner_state["scan_history"][:10]
+        await _record_scanner_observations(results, timeframe)
 
     except Exception as exc:
         logger.error(f"Scanner cycle failed: {exc}", exc_info=True)

@@ -1,4 +1,4 @@
-"""Liquidation heatmap / magnet estimation."""
+"""Modelled liquidation-risk zones, not observed liquidation events."""
 from __future__ import annotations
 
 from typing import Any
@@ -40,6 +40,9 @@ def calculate_liquidation_heatmap(
     nearest_short = min(shorts, key=lambda x: x["distance_pct"])
 
     return {
+        "observed": False,
+        "method": "price_structure_atr_open_interest_proxy",
+        "limitations": "These are modelled liquidity-risk zones from price structure, ATR and aggregate OI. They are not an exchange liquidation feed or verified liquidation pools.",
         "nearest_short_magnet": round(nearest_short["price"], 4),
         "short_distance_pct": round(nearest_short["distance_pct"], 2),
         "short_magnet_strength": int(nearest_short["strength"]),

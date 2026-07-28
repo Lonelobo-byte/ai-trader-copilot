@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from app.auth import require_admin
 from app.autonomous_scanner import (
+    get_scanner_diagnostics,
     get_scanner_configuration,
     scanner_state,
     run_scan_cycle,
@@ -39,13 +40,14 @@ class ScannerToggle(BaseModel):
 
 @router.get("/status")
 async def get_scanner_status():
-    """Get the current state and run history of the autonomous scanner."""
+    """Get current scanner state plus durable calibration diagnostics."""
     config = await get_scanner_configuration()
     payload = dict(scanner_state)
     payload["autonomous_scan_enabled"] = config["enabled"]
     payload["autonomous_pair_discovery"] = config["discovery"]
     payload["watchlist"] = config["watchlist"]
     payload["configuration_updated_at"] = config["updated_at"]
+    payload["diagnostics"] = await get_scanner_diagnostics()
     return payload
 
 

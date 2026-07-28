@@ -137,7 +137,10 @@ class Settings(BaseSettings):
     watchlist: list[str] = ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
     scan_interval_seconds: int = 300
     autonomous_scan_enabled: bool = False
-    autonomous_pair_discovery: bool = False
+    # New deployments expand beyond the fixed three-pair watchlist with a
+    # small, liquid discovery set. Existing database configuration remains
+    # operator-controlled and is never silently changed by this default.
+    autonomous_pair_discovery: bool = True
 
 
 

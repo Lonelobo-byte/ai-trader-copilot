@@ -219,6 +219,28 @@ class ScannerConfiguration(Base):
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
 
+class ScannerObservation(Base):
+    """Durable, compact evidence record for one autonomous scanner decision."""
+    __tablename__ = "scanner_observations"
+
+    id = Column(Integer, primary_key=True)
+    symbol = Column(String(20), nullable=False, index=True)
+    timeframe = Column(String(16), nullable=False, index=True)
+    status = Column(String(32), nullable=False, index=True)
+    decision = Column(String(24), nullable=True)
+    confidence = Column(Float, nullable=True)
+    primary_blocker = Column(String(300), nullable=True, index=True)
+    blockers = Column(JSON, nullable=False, default=list)
+    publication_coverage = Column(JSON, nullable=False, default=dict)
+    institutional = Column(JSON, nullable=False, default=dict)
+    tactical = Column(JSON, nullable=False, default=dict)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
+
+    __table_args__ = (
+        Index("ix_scanner_observations_symbol_time_created", "symbol", "timeframe", "created_at"),
+    )
+
+
 class RadarSnapshot(Base):
     """One shared, durable Radar snapshot per supported timeframe pair."""
     __tablename__ = "radar_snapshots"

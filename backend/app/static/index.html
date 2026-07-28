@@ -428,6 +428,15 @@
             <button id="trigger-scan-btn" class="btn action-btn">Scan Watchlist Now</button>
           </div>
 
+          <section class="scanner-evidence-panel" id="scanner-evidence-panel" aria-live="polite">
+            <div class="scanner-evidence-head">
+              <span>Publication diagnostics</span>
+              <strong id="scanner-evidence-status">Collecting evidence</strong>
+            </div>
+            <p id="scanner-evidence-summary">Recent scanner decisions and their primary blockers will appear here.</p>
+            <div class="scanner-blocker-list" id="scanner-blocker-list"></div>
+          </section>
+
           <div class="watchlist-section">
             <h4>Watchlist Setup</h4>
             <div class="watchlist-input-row">
@@ -908,7 +917,7 @@
           <div class="card-tabs">
             <button type="button" class="card-tab-btn active" data-card-tab="calendar">📅 Macro Calendar</button>
             <button type="button" class="card-tab-btn" data-card-tab="news">📰 News Sentiment</button>
-            <button type="button" class="card-tab-btn" data-card-tab="liquidations">⚡ Liquidation Magnets</button>
+            <button type="button" class="card-tab-btn" data-card-tab="liquidations">⚡ Modelled Liquidity Zones</button>
           </div>
 
           <!-- Economic Calendar -->
@@ -933,7 +942,7 @@
             </ul>
           </div>
 
-          <!-- Liquidation Magnet price levels -->
+          <!-- Modelled liquidity-risk price zones; not observed liquidations. -->
           <div class="card-tab-content hidden" data-card-tab="liquidations">
             <div class="liquidation-list" id="liquidation-list-container">
               <div class="empty-liq">No liquidation clusters loaded.</div>

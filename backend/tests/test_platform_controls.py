@@ -8,7 +8,7 @@ from starlette.requests import Request
 
 from app.ai_budget import AIBudgetExceededError, reserve_platform_ai_budget
 from app.auth import require_admin
-from app.autonomous_scanner import get_scanner_configuration, update_scanner_configuration
+from app.autonomous_scanner import _scanner_observation, get_scanner_configuration, update_scanner_configuration
 from app.billing import PLANS
 from app.db.models import User
 from app.routes.radar import get_radar_breakouts
@@ -46,6 +46,27 @@ async def test_scanner_configuration_survives_process_state_changes() -> None:
         assert loaded == updated
     finally:
         settings.autonomous_scan_enabled, settings.autonomous_pair_discovery, settings.watchlist = original
+
+
+def test_scanner_observation_keeps_publication_and_tactical_evidence() -> None:
+    observation = _scanner_observation(
+        symbol="BTCUSDT",
+        timeframe="15m",
+        status="WATCH_ONLY",
+        decision="BUY_WATCH",
+        confidence=67.0,
+        approval={"blockers": ["Live confirmation failed: price/OI not aligned."]},
+        live_confirmation={
+            "publication_coverage": {"ready": True, "missing": []},
+            "scenarios": {
+                "institutional": {"passed": False, "status": "LIVE_CONFIRMATION_REJECTED", "playbook": "TREND_CONTINUATION"},
+                "tactical": {"candidate": True, "passed": False, "status": "TACTICAL_EVIDENCE_WATCH", "playbook": "PRIMARY_TREND_CONTINUATION"},
+            },
+        },
+    )
+    assert observation["primary_blocker"].startswith("Live confirmation failed")
+    assert observation["publication_coverage"]["ready"] is True
+    assert observation["tactical"]["candidate"] is True
 
 
 @pytest.mark.asyncio

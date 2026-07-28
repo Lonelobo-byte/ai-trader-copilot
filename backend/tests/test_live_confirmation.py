@@ -49,9 +49,11 @@ def test_main_signal_uses_radar_equivalent_confirmation_gate() -> None:
     assert result["status"] == "LIVE_CONFIRMED_REVIEW"
     assert all(result["structure_checks"].values())
     assert all(result["live_checks"].values())
+    assert result["publication_coverage"]["ready"] is True
+    assert result["publication_coverage"]["missing"] == []
 
 
-def test_main_signal_blocks_when_live_depth_opposes_direction() -> None:
+def test_main_signal_keeps_depth_as_supporting_evidence_not_a_snapshot_veto() -> None:
     primary = _candles(start=100.0, step=0.20, last_volume=2_000.0)
     higher = _candles(start=100.0, step=0.40, last_volume=2_000.0)
     inputs = _live_inputs(primary[-1].close)
@@ -63,9 +65,11 @@ def test_main_signal_blocks_when_live_depth_opposes_direction() -> None:
         symbol="TESTUSDT", timeframe="5m", side="LONG", candles=primary, higher_candles=higher,
         order_book=inputs["order_book"], funding=inputs["funding"], derivatives=inputs["derivatives"],
     )
-    assert result["passed"] is False
-    assert result["status"] == "LIVE_CONFIRMATION_REJECTED"
+    assert result["passed"] is True
+    assert result["status"] == "LIVE_CONFIRMED_REVIEW"
     assert result["live_checks"]["depth_aligned"] is False
+    assert result["live_evidence"]["depth_evidence"] == "CONTRADICTORY_SNAPSHOT"
+    assert all(result["live_evidence"]["required_checks"].values())
 
 
 def test_main_signal_accepts_completed_range_sweep_with_context_acceptance() -> None:

@@ -628,13 +628,27 @@ def compute_quant_features(
 
 
 def _data_quality(intelligence: dict[str, Any], closed: list[Candle], current_price: float) -> dict[str, Any]:
-    """Expose whether the signal was computed from a complete usable snapshot."""
+    """Expose core-analysis and publication-data coverage separately.
+
+    A chart can be analysed with price and book data, while a new published
+    signal additionally needs live derivatives evidence.  Keeping these two
+    states distinct prevents a green "data quality" badge from implying that
+    all execution gates are available.
+    """
     meta = intelligence.get("meta", {}) or {}
     available = list(meta.get("sources_available", []))
     failed = list(meta.get("sources_failed", []))
     required = {"candles", "ticker", "order_book"}
     missing_required = sorted(required - set(available))
     passed = bool(closed and current_price > 0 and not missing_required)
+    derivatives = intelligence.get("derivatives", {}) or {}
+    publication_requirements = {
+        "order_book": bool((intelligence.get("order_book", {}) or {}).get("bids") and (intelligence.get("order_book", {}) or {}).get("asks")),
+        "funding": bool(intelligence.get("funding", {})),
+        "oi_history": bool((derivatives.get("oi_history", {}) or {}).get("available")),
+        "taker_flow": bool((derivatives.get("taker_buy_sell_volume", {}) or {}).get("available")),
+    }
+    publication_missing = [name for name, available_now in publication_requirements.items() if not available_now]
     return {
         "passed": passed,
         "closed_candles": len(closed),
@@ -643,6 +657,12 @@ def _data_quality(intelligence: dict[str, Any], closed: list[Candle], current_pr
         "missing_required": missing_required,
         "coverage_pct": round(len(available) / max(int(meta.get("total_sources", len(available) or 1)), 1) * 100, 1),
         "reason": "complete_core_snapshot" if passed else "missing_core_market_data",
+        "publication_coverage": {
+            "ready": not publication_missing,
+            "requirements": publication_requirements,
+            "missing": publication_missing,
+            "label": "PUBLICATION DATA READY" if not publication_missing else "PUBLICATION DATA PARTIAL",
+        },
     }
 
 

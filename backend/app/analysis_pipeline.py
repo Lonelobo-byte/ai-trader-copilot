@@ -408,6 +408,7 @@ async def run_full_analysis(
     # primary-timeframe-only confirmation is attached for the monitor as a
     # lower-confidence research watch; it cannot create or alter a signal.
     signal_monitor["confirmation_scenarios"] = (cio_result.get("live_confirmation") or {}).get("scenarios", {})
+    signal_monitor["publication_coverage"] = (cio_result.get("live_confirmation") or {}).get("publication_coverage", {})
     signal_monitor["candidate_setup"] = {
         "side": trade_setup.get("side", "NEUTRAL"),
         "entry": trade_setup.get("entry", {}),

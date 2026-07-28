@@ -636,6 +636,9 @@ const addPairBtn = document.getElementById('add-pair-btn');
 const watchlistTagsContainer = document.getElementById('watchlist-tags-container');
 const discoveredSectionBox = document.getElementById('discovered-section-box');
 const discoveredTagsContainer = document.getElementById('discovered-tags-container');
+const scannerEvidenceStatus = document.getElementById('scanner-evidence-status');
+const scannerEvidenceSummary = document.getElementById('scanner-evidence-summary');
+const scannerBlockerList = document.getElementById('scanner-blocker-list');
 
 // Operations controls
 const runBacktestBtn = document.getElementById('run-backtest-btn');
@@ -682,6 +685,38 @@ function applyScannerPermissions() {
   if (disabled && triggerScanBtn) triggerScanBtn.title = 'Platform-wide scanner controls are restricted to administrators.';
 }
 
+function renderScannerDiagnostics(diagnostics) {
+  if (!scannerEvidenceStatus || !scannerEvidenceSummary || !scannerBlockerList) return;
+  scannerBlockerList.replaceChildren();
+  if (!diagnostics?.available) {
+    scannerEvidenceStatus.textContent = 'History unavailable';
+    scannerEvidenceSummary.textContent = 'Scanner diagnostics will appear after the database migration and the first completed scan.';
+    return;
+  }
+
+  const observations = Number(diagnostics.observations || 0);
+  const published = Number(diagnostics.published || 0);
+  const tactical = Number(diagnostics.tactical_watches || 0);
+  scannerEvidenceStatus.textContent = observations ? `${published} published · ${tactical} tactical` : 'Awaiting first scan';
+  scannerEvidenceSummary.textContent = observations
+    ? `${observations} recent autonomous decisions recorded. Tune the most frequent blocker, not activity volume.`
+    : 'No completed scanner decision yet. Enable the scanner, then run a watchlist scan to establish a baseline.';
+
+  const blockers = Array.isArray(diagnostics.blocker_counts) ? diagnostics.blocker_counts : [];
+  if (!blockers.length && observations) {
+    const chip = document.createElement('span');
+    chip.className = 'scanner-blocker-chip';
+    chip.textContent = 'No primary publication blocker recorded.';
+    scannerBlockerList.appendChild(chip);
+  }
+  blockers.forEach(({ reason, count }) => {
+    const chip = document.createElement('span');
+    chip.className = 'scanner-blocker-chip';
+    chip.textContent = `${count}× ${reason || 'Unclassified blocker'}`;
+    scannerBlockerList.appendChild(chip);
+  });
+}
+
 // ── Autonomous Scanner Integration ──────────────────────────────────────────
 
 async function fetchScannerStatus() {
@@ -711,6 +746,7 @@ async function fetchScannerStatus() {
 
     scannerLastRun.textContent = data.last_scan_time ? new Date(data.last_scan_time).toLocaleTimeString() : "Never";
     scannerNextRun.textContent = data.next_scan_time ? new Date(data.next_scan_time).toLocaleTimeString() : "Pending";
+    renderScannerDiagnostics(data.diagnostics);
 
     // Update watchlist tags
     const watchlist = data.watchlist || [];
@@ -1706,7 +1742,7 @@ function renderDashboard(data) {
     const shortBarWidth = Math.max(10, Math.min(100, 100 - (liq.short_distance_pct * 15)));
     shortItem.innerHTML = `
       <div class="liquidation-info">
-        <span>Short Magnet (Liquidity Resistance)</span>
+        <span>Modelled short-liquidity zone</span>
         <span style="color: var(--neon-red)">$${formatCurrency(liq.nearest_short_magnet)}</span>
       </div>
       <div class="liquidation-bar-container">
@@ -1714,7 +1750,7 @@ function renderDashboard(data) {
       </div>
       <div class="liquidation-meta">
         <span>Distance: +${liq.short_distance_pct.toFixed(2)}% | Strength: ${liq.short_magnet_strength}/99</span>
-        <span>Notional Pool: ${formatVolume(liq.estimated_short_liquidity)}</span>
+        <span>Proxy OI weight: ${formatVolume(liq.estimated_short_liquidity)}</span>
       </div>
     `;
 
@@ -1723,7 +1759,7 @@ function renderDashboard(data) {
     const longBarWidth = Math.max(10, Math.min(100, 100 - (liq.long_distance_pct * 15)));
     longItem.innerHTML = `
       <div class="liquidation-info">
-        <span>Long Magnet (Liquidity Support)</span>
+        <span>Modelled long-liquidity zone</span>
         <span style="color: var(--neon-green)">$${formatCurrency(liq.nearest_long_magnet)}</span>
       </div>
       <div class="liquidation-bar-container">
@@ -1731,7 +1767,7 @@ function renderDashboard(data) {
       </div>
       <div class="liquidation-meta">
         <span>Distance: -${liq.long_distance_pct.toFixed(2)}% | Strength: ${liq.long_magnet_strength}/99</span>
-        <span>Notional Pool: ${formatVolume(liq.estimated_long_liquidity)}</span>
+        <span>Proxy OI weight: ${formatVolume(liq.estimated_long_liquidity)}</span>
       </div>
     `;
 
@@ -2313,14 +2349,16 @@ function renderMonitorEvidenceState(data, status, isPublished, isTerminalFailure
       : reason;
 
   if (monitorGateStrip) {
+    const publicationCoverage = data.publication_coverage || data.live_confirmation?.publication_coverage || data.gates?.live_confirmation?.publication_coverage || {};
     const controls = [
       ['Structure', waitingForBreak ? 'AWAITED' : monitorControlState(reason, ['structure', 'break'], isPublished ? 'CONFIRMED' : 'MONITORING')],
       ['Liquidity', monitorControlState(reason, ['liquid', 'spread', 'depth'], isPublished ? 'CONFIRMED' : 'OBSERVED')],
       ['Order flow', monitorControlState(reason, ['flow', 'taker', 'order book'], isPublished ? 'CONFIRMED' : 'OBSERVED')],
       ['Positioning', monitorControlState(reason, ['open interest', 'funding', 'position'], isPublished ? 'CONFIRMED' : 'OBSERVED')],
+      ['Publication data', publicationCoverage.ready === true ? 'READY' : publicationCoverage.ready === false ? 'PARTIAL' : 'CHECKING'],
       ['Macro', monitorControlState(reason, ['macro', 'calendar'], isPublished ? 'CONFIRMED' : 'CLEAR')],
     ];
-    monitorGateStrip.innerHTML = controls.map(([label, value]) => `<span class="monitor-gate-chip ${value === 'CONFIRMED' || value === 'CLEAR' ? 'verified' : value === 'AWAITED' ? 'awaited' : ''}"><b>${label}</b><strong>${value}</strong></span>`).join('');
+    monitorGateStrip.innerHTML = controls.map(([label, value]) => `<span class="monitor-gate-chip ${value === 'CONFIRMED' || value === 'CLEAR' || value === 'READY' ? 'verified' : value === 'AWAITED' || value === 'PARTIAL' ? 'awaited' : ''}"><b>${label}</b><strong>${value}</strong></span>`).join('');
   }
   return { state, stateCopy };
 }
