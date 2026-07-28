@@ -75,7 +75,7 @@ def _currency_label(code: str) -> str:
 
 
 async def fetch_nowpayments_currencies() -> list[dict[str, str]]:
-    """Return the provider's current payment routes, cached briefly for the picker."""
+    """Return only payment-capable, provider-enabled routes for the picker."""
     global _CURRENCY_CACHE
     api_url = nowpayments_api_base_url()
     if _CURRENCY_CACHE and _CURRENCY_CACHE[0] == api_url and monotonic() - _CURRENCY_CACHE[1] < 300:
@@ -88,14 +88,35 @@ async def fetch_nowpayments_currencies() -> list[dict[str, str]]:
             f"{api_url}/currencies",
             headers={"x-api-key": settings.nowpayments_api_key},
         )
+        detail_response = await client.get(
+            f"{api_url}/full-currencies",
+            headers={"x-api-key": settings.nowpayments_api_key},
+        )
     if response.is_error:
         raise PaymentProviderError(f"NOWPayments currency lookup failed ({response.status_code}).")
+    if detail_response.is_error:
+        raise PaymentProviderError(f"NOWPayments detailed currency lookup failed ({detail_response.status_code}).")
     body = response.json()
     raw_codes = body.get("currencies", []) if isinstance(body, dict) else body
     if not isinstance(raw_codes, list):
         raise PaymentProviderError("NOWPayments returned an invalid currency catalog.")
-    codes = sorted({str(code).strip().lower() for code in raw_codes if str(code).strip()})
-    currencies = [{"code": code, "label": _currency_label(code)} for code in codes]
+    detail_body = detail_response.json()
+    detail_rows = detail_body.get("currencies", detail_body) if isinstance(detail_body, dict) else detail_body
+    if not isinstance(detail_rows, list):
+        raise PaymentProviderError("NOWPayments returned an invalid detailed currency catalog.")
+    enabled_details = {
+        str(item.get("code")).strip().lower(): item
+        for item in detail_rows
+        if isinstance(item, dict) and item.get("enable") is True and str(item.get("code", "")).strip()
+    }
+    payment_codes = {str(code).strip().lower() for code in raw_codes if str(code).strip()}
+    codes = sorted(payment_codes.intersection(enabled_details))
+    currencies = []
+    for code in codes:
+        details = enabled_details[code]
+        name = str(details.get("name") or _currency_label(code)).strip()
+        network = str(details.get("network") or "").strip()
+        currencies.append({"code": code, "label": f"{name} · {network}" if network else name})
     if not currencies:
         raise PaymentProviderError("NOWPayments currently has no available payment currencies.")
     _CURRENCY_CACHE = (api_url, monotonic(), currencies)
@@ -121,8 +142,6 @@ async def create_nowpayments_payment(order_id: str, plan_code: str, pay_currency
         "ipn_callback_url": f"{base_url}/billing/webhooks/nowpayments",
         "is_fixed_rate": True,
     }
-    if settings.nowpayments_sandbox:
-        payload["case"] = settings.nowpayments_sandbox_case.strip().lower() or "success"
     async with httpx.AsyncClient(timeout=20) as client:
         response = await client.post(
             f"{nowpayments_api_base_url()}/payment",

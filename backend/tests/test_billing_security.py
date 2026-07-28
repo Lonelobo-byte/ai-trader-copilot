@@ -92,6 +92,52 @@ def test_orphaned_legacy_checkout_is_released_only_after_provider_lookup() -> No
     assert subscription.status == "expired"
 
 
+def test_unused_legacy_hosted_checkout_is_superseded_after_provider_lookup() -> None:
+    subscription = Subscription(id="sub", user_id="user", plan_code="monthly", status="pending")
+    payment = Payment(
+        id="pay", user_id="user", subscription_id="sub", provider="nowpayments",
+        provider_invoice_id="invoice-1", order_id="atc-order", status="waiting",
+        amount=19.0, currency="usd", raw_payload={"invoice_url": "https://nowpayments.example/invoice"},
+    )
+    with patch("app.routes.billing.fetch_nowpayments_invoice_payments", AsyncMock(return_value=[])):
+        assert asyncio.run(_reconcile_pending_payment(payment, subscription)) is True
+    assert payment.status == "expired"
+    assert subscription.status == "expired"
+
+
+def test_legacy_checkout_with_an_ambiguous_provider_payment_stays_locked() -> None:
+    subscription = Subscription(id="sub", user_id="user", plan_code="monthly", status="pending")
+    payment = Payment(
+        id="pay", user_id="user", subscription_id="sub", provider="nowpayments",
+        provider_invoice_id="invoice-1", order_id="atc-order", status="waiting",
+        amount=19.0, currency="usd", raw_payload={"invoice_url": "https://nowpayments.example/invoice"},
+    )
+    unrelated = {"payment_id": "provider-pay", "payment_status": "waiting", "order_id": "unexpected-order", "price_amount": 19.0, "price_currency": "usd"}
+    with patch("app.routes.billing.fetch_nowpayments_invoice_payments", AsyncMock(return_value=[unrelated])):
+        assert asyncio.run(_reconcile_pending_payment(payment, subscription)) is False
+    assert payment.status == "waiting"
+    assert subscription.status == "pending"
+
+
+def test_local_sandbox_releases_legacy_invoice_when_provider_lookup_uses_the_wrong_environment() -> None:
+    settings = get_settings()
+    original_sandbox, original_environment = settings.nowpayments_sandbox, settings.app_env
+    subscription = Subscription(id="sub", user_id="user", plan_code="monthly", status="pending")
+    payment = Payment(
+        id="pay", user_id="user", subscription_id="sub", provider="nowpayments",
+        provider_invoice_id="invoice-1", order_id="atc-order", status="waiting",
+        amount=19.0, currency="usd", raw_payload={"invoice_url": "https://nowpayments.example/invoice"},
+    )
+    try:
+        settings.nowpayments_sandbox, settings.app_env = True, "local"
+        with patch("app.routes.billing.fetch_nowpayments_invoice_payments", AsyncMock(side_effect=PaymentProviderError("401"))):
+            assert asyncio.run(_reconcile_pending_payment(payment, subscription)) is True
+    finally:
+        settings.nowpayments_sandbox, settings.app_env = original_sandbox, original_environment
+    assert payment.status == "expired"
+    assert subscription.status == "expired"
+
+
 def test_in_page_checkout_generates_its_qr_without_a_third_party_url() -> None:
     assert payment_qr_data_uri("TExamplePaymentAddress").startswith("data:image/png;base64,")
 

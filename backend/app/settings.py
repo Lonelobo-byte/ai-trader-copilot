@@ -27,9 +27,6 @@ class Settings(BaseSettings):
     nowpayments_ipn_secret: str = ""
     nowpayments_api_base_url: str = "https://api.nowpayments.io/v1"
     nowpayments_sandbox: bool = False
-    # Sandbox supports simulated provider outcomes such as success, failed,
-    # or partially_paid. It is ignored completely in live mode.
-    nowpayments_sandbox_case: str = "success"
     billing_currency: str = "usd"
     enable_real_trading: bool = False
     manual_trading_only: bool = True

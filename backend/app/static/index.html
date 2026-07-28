@@ -134,7 +134,15 @@
             <p id="payment-instruction-message" class="payment-instruction-message">Send the exact amount using the
               selected network. We will confirm it automatically.</p>
           </div>
-          <div id="payment-legacy" class="payment-legacy" hidden></div>
+          <div id="payment-success" class="payment-success" hidden aria-live="polite">
+            <div class="payment-success-orbit"><span>✓</span></div>
+            <span class="payment-success-eyebrow">VERIFIED PROVIDER CONFIRMATION</span>
+            <h3>Payment confirmed.</h3>
+            <p id="payment-success-copy">Your analyst workspace is now active.</p>
+            <div class="payment-success-rail"><span class="is-complete">Payment</span><b></b><span class="is-complete">Confirmed</span><b></b><span class="is-active">Access active</span></div>
+            <button id="payment-success-enter" type="button">Enter research workspace <span>→</span></button>
+            <small>Opening automatically in a moment…</small>
+          </div>
         </section>
       </div>
     </section>
@@ -937,11 +945,13 @@
       let selectedPlan = null;
       let checkoutToken = '';
       let availablePaymentCurrencies = new Set();
+      let paymentSuccessTimer = null;
+      let paymentSuccessShown = false;
       const paymentModal = document.getElementById('payment-modal');
       const paymentSetup = document.getElementById('payment-setup');
       const paymentLoading = document.getElementById('payment-loading');
       const paymentInstructions = document.getElementById('payment-instructions');
-      const paymentLegacy = document.getElementById('payment-legacy');
+      const paymentSuccess = document.getElementById('payment-success');
       const unlock = (token, role = 'member') => {
         gate.style.display = 'none';
         window.atcAuthenticated = true;
@@ -965,7 +975,24 @@
         paymentSetup.hidden = state !== 'setup';
         paymentLoading.hidden = state !== 'loading';
         paymentInstructions.hidden = state !== 'instructions';
-        paymentLegacy.hidden = state !== 'legacy';
+        paymentSuccess.hidden = state !== 'success';
+      };
+      const enterResearchWorkspace = (token) => {
+        if (paymentSuccessTimer) clearTimeout(paymentSuccessTimer);
+        paymentSuccessTimer = null;
+        history.replaceState({}, '', '/dashboard');
+        unlock(token);
+      };
+      const showPaymentSuccess = (token, subscription) => {
+        if (paymentSuccessShown) return;
+        paymentSuccessShown = true;
+        checkoutInProgress = true;
+        document.getElementById('payment-success-copy').textContent = subscription?.ends_at
+          ? `Your subscription is active through ${new Date(subscription.ends_at).toLocaleDateString()}.`
+          : 'Your analyst workspace is now active.';
+        setPaymentWorkspace('success');
+        paymentModal.classList.add('payment-confirmed');
+        paymentSuccessTimer = setTimeout(() => enterResearchWorkspace(token), 2800);
       };
       const formatExpiry = (value) => {
         const date = value ? new Date(value) : null;
@@ -992,20 +1019,6 @@
           if (payment.plan_days) document.getElementById('payment-plan-duration').textContent = `${payment.plan_days} days`;
           if (payment.plan_amount) document.getElementById('payment-plan-price').textContent = `${payment.price_currency || 'USD'} ${payment.plan_amount}`;
         }
-        if (payment.legacy_hosted_checkout) {
-          setPaymentWorkspace('legacy');
-          const title = document.createElement('strong');
-          title.textContent = 'Existing secure checkout';
-          const message = document.createElement('p');
-          message.textContent = 'This payment began before the in-page workspace. To prevent duplicate charges, resume the original provider checkout.';
-          const link = document.createElement('a');
-          link.href = payment.invoice_url;
-          link.target = '_blank';
-          link.rel = 'noopener';
-          link.textContent = 'Open existing NOWPayments checkout ↗';
-          paymentLegacy.replaceChildren(title, message, link);
-          return;
-        }
         setPaymentWorkspace('instructions');
         document.getElementById('payment-order-reference').hidden = false;
         document.getElementById('payment-order-reference').textContent = `Order reference · ${payment.order_id}`;
@@ -1031,6 +1044,10 @@
       const openPaymentModal = (plan, currency, token) => {
         selectedPlan = plan;
         checkoutToken = token;
+        paymentSuccessShown = false;
+        paymentModal.classList.remove('payment-confirmed');
+        if (paymentSuccessTimer) clearTimeout(paymentSuccessTimer);
+        paymentSuccessTimer = null;
         document.getElementById('payment-plan-name').textContent = ({ monthly: 'Monthly', quarterly: 'Quarterly', half_yearly: 'Half-yearly', annual: 'Annual' })[plan.code] || plan.code;
         document.getElementById('payment-plan-duration').textContent = `${plan.days} days`;
         document.getElementById('payment-plan-price').textContent = `${currency} ${plan.amount}`;
@@ -1093,7 +1110,7 @@
           if (!response.ok) throw new Error(payment.detail || 'Checkout is unavailable.');
           renderPaymentInstructions(payment);
           checkoutInProgress = false;
-          if (!payment.legacy_hosted_checkout) waitForPayment(checkoutToken);
+          waitForPayment(checkoutToken);
         } catch (err) {
           checkoutInProgress = false;
           setPaymentWorkspace('setup');
@@ -1103,6 +1120,7 @@
       document.getElementById('payment-create').onclick = createPaymentInstructions;
       document.getElementById('payment-modal-close').onclick = closePaymentModal;
       document.getElementById('payment-modal-back').onclick = closePaymentModal;
+      document.getElementById('payment-success-enter').onclick = () => enterResearchWorkspace(checkoutToken);
       paymentModal.addEventListener('click', event => { if (event.target === paymentModal && !checkoutInProgress) closePaymentModal(); });
       document.addEventListener('keydown', event => { if (event.key === 'Escape' && !paymentModal.hidden && !checkoutInProgress) closePaymentModal(); });
       document.getElementById('payment-copy').onclick = async () => {
@@ -1169,8 +1187,8 @@
           const subscription = d.payment?.subscription;
           if (subscription?.active) {
             if (paymentPollTimer) clearTimeout(paymentPollTimer);
-            history.replaceState({}, '', '/dashboard');
-            return unlock(token);
+            paymentPollTimer = null;
+            return showPaymentSuccess(token, subscription);
           }
           if (d.payment && !paymentModal.hidden) renderPaymentInstructions(d.payment);
           if (['failed', 'expired', 'refunded'].includes(String(d.payment?.status || '').toLowerCase())) {

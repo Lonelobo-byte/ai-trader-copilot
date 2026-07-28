@@ -139,24 +139,7 @@ def _checkout_view(payment: Payment, subscription: Subscription, *, reused: bool
             "reused": reused,
             "verification_pending": verification_pending,
         }
-    # Old hosted-invoice records have no selected currency or address. Retain a
-    # one-time resume path instead of silently creating a second charge.
-    invoice_url = payload.get("invoice_url")
-    if invoice_url:
-        return {
-            "payment_id": payment.id,
-            "provider_invoice_id": payment.provider_invoice_id,
-            "order_id": payment.order_id,
-            "plan_code": subscription.plan_code,
-            "plan_days": plan["days"],
-            "plan_amount": plan["amount"],
-            "price_currency": payment.currency.upper(),
-            "legacy_hosted_checkout": True,
-            "invoice_url": invoice_url,
-            "reused": True,
-            "verification_pending": verification_pending,
-        }
-    raise HTTPException(status_code=409, detail="The existing payment cannot be resumed safely. Contact support with this order reference: " + payment.order_id)
+    raise HTTPException(status_code=409, detail="The existing payment has no usable payment instructions. Create a new checkout after its provider status is reconciled.")
 
 
 def _provider_payload_is_expected(payment: Payment, payload: dict) -> bool:
@@ -194,6 +177,29 @@ def _apply_provider_status(payment: Payment, subscription: Subscription, payload
         subscription.status = "cancelled" if status_value == "refunded" else "expired"
 
 
+def _expire_pending_checkout(payment: Payment, subscription: Subscription) -> None:
+    """Retire a checkout that has no provider payment route."""
+    payment.status = "expired"
+    if subscription.status == "pending":
+        subscription.status = "expired"
+
+
+def _can_release_unverified_sandbox_legacy_checkout(payment: Payment) -> bool:
+    """A local sandbox may contain invoices created under an older API mode.
+
+    Those test invoices cannot move real funds, and NOWPayments will reject a
+    cross-environment lookup.  Allow a developer to start a clean sandbox
+    checkout, but never use this bypass for live payments.
+    """
+    settings = get_settings()
+    return (
+        bool(payment.provider_invoice_id)
+        and not payment.provider_payment_id
+        and settings.nowpayments_sandbox
+        and settings.app_env.lower() in {"local", "development", "test"}
+    )
+
+
 async def _reconcile_pending_payment(payment: Payment, subscription: Subscription) -> bool:
     """Synchronize one pending checkout from NOWPayments without trusting UI redirects.
 
@@ -209,9 +215,7 @@ async def _reconcile_pending_payment(payment: Payment, subscription: Subscriptio
 
         if not payment.provider_invoice_id:
             if not (payment.raw_payload or {}).get("invoice_url"):
-                payment.status = "expired"
-                if subscription.status == "pending":
-                    subscription.status = "expired"
+                _expire_pending_checkout(payment, subscription)
                 return True
             return False
         provider_payments = await fetch_nowpayments_invoice_payments(payment.provider_invoice_id)
@@ -220,15 +224,21 @@ async def _reconcile_pending_payment(payment: Payment, subscription: Subscriptio
             _apply_provider_status(payment, subscription, matching)
             return True
 
-        # Legacy records created before invoice_url validation cannot be
-        # resumed by the customer.  A provider lookup confirming that no
-        # payment exists makes this local lock safe to release.
-        if not (payment.raw_payload or {}).get("invoice_url"):
-            payment.status = "expired"
-            if subscription.status == "pending":
-                subscription.status = "expired"
+        # A pre-workspace hosted invoice has no payment route until the
+        # customer chooses a coin on NOWPayments.  Once NOWPayments confirms
+        # that it has no route/payment at all, retire it locally and allow a
+        # clean in-page checkout.  If the provider returned any non-matching
+        # record, keep the lock: replacing an ambiguous payment could charge
+        # the customer twice.
+        if provider_payments:
+            return False
+        _expire_pending_checkout(payment, subscription)
         return True
     except (PaymentProviderError, ValueError) as exc:
+        if _can_release_unverified_sandbox_legacy_checkout(payment):
+            logger.info("Releasing legacy sandbox checkout %s after cross-environment provider lookup failed", payment.id)
+            _expire_pending_checkout(payment, subscription)
+            return True
         logger.warning("Could not reconcile NOWPayments payment %s: %s", payment.id, exc)
         return False
 
@@ -282,6 +292,14 @@ async def checkout(body: CheckoutRequest, request: Request, user: User = Depends
                     if existing.status not in _ACTIVE_PROVIDER_STATUSES:
                         existing = None
                 if existing:
+                    if existing.provider_invoice_id and not existing.provider_payment_id:
+                        raise HTTPException(
+                            status_code=409,
+                            detail=(
+                                "The previous provider checkout could not be verified. "
+                                "Confirm that the NOWPayments API key and sandbox/live mode match the original payment, then retry."
+                            ),
+                        )
                     if existing.pay_currency and existing.pay_currency.lower() != body.pay_currency.lower():
                         raise HTTPException(
                             status_code=409,
