@@ -980,8 +980,15 @@
       const enterResearchWorkspace = (token) => {
         if (paymentSuccessTimer) clearTimeout(paymentSuccessTimer);
         paymentSuccessTimer = null;
-        history.replaceState({}, '', '/dashboard');
-        unlock(token);
+        checkoutInProgress = false;
+        paymentModal.classList.remove('payment-confirmed');
+        closePaymentModal();
+        if (token) sessionStorage.setItem('atc_access_token', token);
+        // A full authenticated navigation is more reliable than trying to
+        // re-initialize every dashboard controller under the checkout modal.
+        // /dashboard serves the same research workspace after entitlement is
+        // verified, while a refresh cookie restores the active session.
+        window.location.assign('/dashboard');
       };
       const showPaymentSuccess = (token, subscription) => {
         if (paymentSuccessShown) return;

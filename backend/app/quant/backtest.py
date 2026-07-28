@@ -394,6 +394,7 @@ async def run_backtest(
                     use_ai=False,
                     market_intelligence=historical_intelligence,
                     reconcile_signals=False,
+                    historical_replay=True,
                 )
             except Exception as e:
                 logger.error(f"Error in backtest pipeline execution: {e}")

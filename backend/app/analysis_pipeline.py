@@ -123,6 +123,7 @@ async def run_full_analysis(
     last_ai_open_time: int = 0,
     market_intelligence: dict[str, Any] | None = None,
     reconcile_signals: bool = True,
+    historical_replay: bool = False,
     ai_override: AIRequestConfig | None = None,
     ai_cache_key: str = "platform",
 ) -> tuple[dict[str, Any], int]:
@@ -281,9 +282,11 @@ async def run_full_analysis(
     trade_setup = build_ai_driven_trade_setup(cio_result, features, settings)
     # A new live signal must pass the same completed-structure and live
     # execution checks that drive Radar's LIVE CHECK PASSED/FAILED badge.
-    # Historical backtests do not publish and therefore do not apply this
-    # live-only gate.
-    if reconcile_signals:
+    # A read-only subscriber analysis is still a live market assessment. It
+    # must receive the same completed-candle / structure evaluation as the
+    # publishing monitor, while remaining unable to write the shared ledger.
+    # Only genuine historical replays skip this live-only gate.
+    if not historical_replay:
         confirmation_timeframes = {
             "1m": "5m", "5m": "1h", "15m": "4h", "1h": "1d", "4h": "1d", "1d": "1w",
         }
@@ -341,12 +344,22 @@ async def run_full_analysis(
             ai_result=cio_result,
             council_approval=approval,
         )
-    else:
+    elif historical_replay:
         signal_monitor = {
             "status": "SIMULATED_APPROVED" if approval.get("approved") else "SIMULATED_REJECTED",
             "action": "SIMULATED",
             "side": trade_setup.get("side", "NEUTRAL"),
             "reason": "Historical replay; no live signal was read or written.",
+        }
+    else:
+        signal_monitor = {
+            "status": "LIVE_RESEARCH_WATCH" if approval.get("approved") else "LIVE_RESEARCH_MONITORING",
+            "action": "WATCH",
+            "side": trade_setup.get("side", "NEUTRAL"),
+            "reason": (
+                "Live market snapshot assessed. This account can monitor the setup, "
+                "but global signal publication is platform-controlled."
+            ),
         }
 
     # The institutional scenario remains the only publication authority. A
