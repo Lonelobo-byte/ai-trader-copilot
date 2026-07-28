@@ -2594,7 +2594,9 @@ let signalHistoryTimer = null;
 function startSignalHistoryPolling() {
   if (signalHistoryTimer) return;
   refreshSignalHistory();
-  signalHistoryTimer = setInterval(refreshSignalHistory, 5000);
+  // History changes only when a signal advances; a 15-second cadence keeps
+  // the ledger current without every open dashboard tab polling the server.
+  signalHistoryTimer = setInterval(refreshSignalHistory, 15000);
 }
 
 // economic and backtest/training operations handlers

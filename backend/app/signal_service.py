@@ -222,12 +222,14 @@ async def list_signal_history(limit: int = 20) -> list[dict[str, Any]]:
         return [_view(signal) for signal in result.scalars().all()]
 
 
-async def monitor_open_signals(price_lookup: Any) -> None:
+async def monitor_open_signals(price_lookup: Any) -> bool:
     """Background fallback when no dashboard websocket is connected."""
     await ensure_signal_database()
     async with AsyncSessionLocal() as db:
         result = await db.execute(select(TradeSignal).where(TradeSignal.status.in_(OPEN_SIGNAL_STATUSES)))
         signals = result.scalars().all()
+        if not signals:
+            return False
         for signal in signals:
             try:
                 price = float(await price_lookup(signal.symbol))
@@ -236,3 +238,4 @@ async def monitor_open_signals(price_lookup: Any) -> None:
             updated = advance_signal(_record_data(signal), current_price=price)
             _apply(signal, updated)
         await db.commit()
+        return True

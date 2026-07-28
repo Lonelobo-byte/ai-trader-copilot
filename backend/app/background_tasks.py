@@ -148,13 +148,16 @@ async def signal_monitor_loop() -> None:
         ticker = await client.ticker_24hr(symbol)
         return float(ticker["lastPrice"])
 
+    has_open_signals = False
     while True:
         try:
-            await asyncio.sleep(5)
-            await monitor_open_signals(latest_price)
+            # The dedicated websocket monitor handles active signals in real
+            # time. This REST path is a low-frequency fallback, not another
+            # competing live feed. An idle ledger checks less often.
+            await asyncio.sleep(10 if has_open_signals else 30)
+            has_open_signals = await monitor_open_signals(latest_price)
         except asyncio.CancelledError:
             ws_task.cancel()
             raise
         except Exception:
             logger.exception("Signal lifecycle monitor failed for this cycle.")
-

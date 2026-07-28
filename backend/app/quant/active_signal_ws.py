@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from time import monotonic
 from typing import Any
 
 import websockets
@@ -32,6 +33,22 @@ class ActiveSignalWSMonitor:
     def __init__(self):
         self._running = False
         self._last_evaluated: dict[int, float] = {}
+        self._last_symbol_price: dict[str, float] = {}
+        self._active_symbols: set[str] = set()
+        self._next_signal_refresh_at = 0.0
+
+    async def _refresh_active_symbols(self) -> None:
+        """Refresh the small active-symbol set without reading every ticker."""
+        now = monotonic()
+        if now < self._next_signal_refresh_at:
+            return
+        async with AsyncSessionLocal() as db:
+            from sqlalchemy import select
+            result = await db.execute(
+                select(TradeSignal.symbol).where(TradeSignal.status.in_(OPEN_SIGNAL_STATUSES))
+            )
+            self._active_symbols = {str(symbol).upper() for symbol in result.scalars().all()}
+        self._next_signal_refresh_at = now + (15.0 if self._active_symbols else 30.0)
 
     async def start(self) -> None:
         """Start the background WebSocket monitor loop."""
@@ -45,26 +62,42 @@ class ActiveSignalWSMonitor:
 
         while self._running:
             try:
+                await self._refresh_active_symbols()
+                if not self._active_symbols:
+                    # Do not keep Binance's all-market stream open, or query
+                    # the database on every ticker packet, when there is no
+                    # published signal to monitor.
+                    await asyncio.sleep(30)
+                    continue
                 async with websockets.connect(ws_url, ping_interval=20, ping_timeout=10) as ws:
                     logger.info("Real-time WebSocket Price Monitor connected to Binance.")
                     while self._running:
                         msg = await ws.recv()
+                        await self._refresh_active_symbols()
+                        if not self._active_symbols:
+                            break
                         data = json.loads(msg)
 
                         # data is a list of ticker objects: [{'s': 'BTCUSDT', 'c': '65432.10'}, ...]
                         if isinstance(data, list):
-                            ticker_map = {}
+                            relevant_prices: dict[str, float] = {}
                             for item in data:
-                                symbol = item.get("s")
+                                symbol = str(item.get("s") or "").upper()
+                                if symbol not in self._active_symbols:
+                                    continue
                                 close_price = item.get("c")
-                                if symbol and close_price:
+                                if close_price:
                                     try:
-                                        ticker_map[symbol.upper()] = float(close_price)
+                                        price = float(close_price)
                                     except ValueError:
                                         continue
-
-                            if ticker_map:
-                                await self._evaluate_open_signals(ticker_map)
+                                    last_price = self._last_symbol_price.get(symbol)
+                                    if last_price is not None and abs(price - last_price) / max(last_price, 1e-9) < 0.0001:
+                                        continue
+                                    self._last_symbol_price[symbol] = price
+                                    relevant_prices[symbol] = price
+                            if relevant_prices:
+                                await self._evaluate_open_signals(relevant_prices)
 
             except asyncio.CancelledError:
                 logger.info("Active Signal WebSocket Monitor task cancelled.")
@@ -80,7 +113,10 @@ class ActiveSignalWSMonitor:
             async with AsyncSessionLocal() as db:
                 from sqlalchemy import select
                 result = await db.execute(
-                    select(TradeSignal).where(TradeSignal.status.in_(OPEN_SIGNAL_STATUSES))
+                    select(TradeSignal).where(
+                        TradeSignal.status.in_(OPEN_SIGNAL_STATUSES),
+                        TradeSignal.symbol.in_(list(ticker_map)),
+                    )
                 )
                 signals = result.scalars().all()
 
