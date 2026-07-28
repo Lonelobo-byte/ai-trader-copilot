@@ -282,6 +282,14 @@ async def checkout(body: CheckoutRequest, request: Request, user: User = Depends
                     if existing.status not in _ACTIVE_PROVIDER_STATUSES:
                         existing = None
                 if existing:
+                    if existing.pay_currency and existing.pay_currency.lower() != body.pay_currency.lower():
+                        raise HTTPException(
+                            status_code=409,
+                            detail=(
+                                f"A {existing.pay_currency.upper()} payment is still {existing.status}. "
+                                "Complete it or wait for it to expire before choosing another token, so you cannot be charged twice."
+                            ),
+                        )
                     return _checkout_view(existing, subscription, reused=True, verification_pending=not reconciled)
 
                 # Only genuine creation attempts consume checkout quota.
@@ -306,6 +314,10 @@ async def checkout(body: CheckoutRequest, request: Request, user: User = Depends
                     payment_address=str(provider_payment["pay_address"]),
                     raw_payload=provider_payment,
                 )
+                # A sandbox success case can already be finished in the create
+                # response. Apply the same provider/order validation used by
+                # IPN and status polling before granting any entitlement.
+                _apply_provider_status(payment, subscription, provider_payment)
                 session.add_all([subscription, payment])
                 return _checkout_view(payment, subscription, reused=False)
 

@@ -23,11 +23,21 @@ PLANS: dict[str, dict[str, Any]] = {
     "half_yearly": {"amount": 29.99, "days": 180, "list_amount": 35.94},
     "annual": {"amount": 55.99, "days": 365, "list_amount": 71.88},
 }
-_CURRENCY_CACHE: tuple[float, list[dict[str, str]]] | None = None
+_CURRENCY_CACHE: tuple[str, float, list[dict[str, str]]] | None = None
+_LIVE_NOWPAYMENTS_API_URL = "https://api.nowpayments.io/v1"
+_SANDBOX_NOWPAYMENTS_API_URL = "https://api-sandbox.nowpayments.io/v1"
 
 
 class PaymentProviderError(RuntimeError):
     """A safe, actionable error returned by the payment provider."""
+
+
+def nowpayments_api_base_url() -> str:
+    """Use the sandbox API automatically unless a custom endpoint was supplied."""
+    settings = get_settings()
+    if settings.nowpayments_sandbox and settings.nowpayments_api_base_url.rstrip("/") == _LIVE_NOWPAYMENTS_API_URL:
+        return _SANDBOX_NOWPAYMENTS_API_URL
+    return settings.nowpayments_api_base_url.rstrip("/")
 
 
 def callback_configuration_error() -> str | None:
@@ -67,14 +77,15 @@ def _currency_label(code: str) -> str:
 async def fetch_nowpayments_currencies() -> list[dict[str, str]]:
     """Return the provider's current payment routes, cached briefly for the picker."""
     global _CURRENCY_CACHE
-    if _CURRENCY_CACHE and monotonic() - _CURRENCY_CACHE[0] < 300:
-        return _CURRENCY_CACHE[1]
+    api_url = nowpayments_api_base_url()
+    if _CURRENCY_CACHE and _CURRENCY_CACHE[0] == api_url and monotonic() - _CURRENCY_CACHE[1] < 300:
+        return _CURRENCY_CACHE[2]
     settings = get_settings()
     if settings.payment_provider != "nowpayments" or not settings.nowpayments_api_key:
         raise RuntimeError("Crypto checkout is not configured.")
     async with httpx.AsyncClient(timeout=15) as client:
         response = await client.get(
-            f"{settings.nowpayments_api_base_url.rstrip('/')}/currencies",
+            f"{api_url}/currencies",
             headers={"x-api-key": settings.nowpayments_api_key},
         )
     if response.is_error:
@@ -87,7 +98,7 @@ async def fetch_nowpayments_currencies() -> list[dict[str, str]]:
     currencies = [{"code": code, "label": _currency_label(code)} for code in codes]
     if not currencies:
         raise PaymentProviderError("NOWPayments currently has no available payment currencies.")
-    _CURRENCY_CACHE = (monotonic(), currencies)
+    _CURRENCY_CACHE = (api_url, monotonic(), currencies)
     return currencies
 
 
@@ -110,19 +121,30 @@ async def create_nowpayments_payment(order_id: str, plan_code: str, pay_currency
         "ipn_callback_url": f"{base_url}/billing/webhooks/nowpayments",
         "is_fixed_rate": True,
     }
+    if settings.nowpayments_sandbox:
+        payload["case"] = settings.nowpayments_sandbox_case.strip().lower() or "success"
     async with httpx.AsyncClient(timeout=20) as client:
         response = await client.post(
-            f"{settings.nowpayments_api_base_url.rstrip('/')}/payment",
+            f"{nowpayments_api_base_url()}/payment",
             json=payload,
             headers={"x-api-key": settings.nowpayments_api_key},
         )
         if response.is_error:
             raise PaymentProviderError(f"NOWPayments payment request failed ({response.status_code}): {response.text[:500]}")
         payment = response.json()
+    validate_nowpayments_payment_route(payment, pay_currency)
+    return payment
+
+
+def validate_nowpayments_payment_route(payment: Any, requested_currency: str) -> None:
+    """Never present provider instructions for a currency other than selected."""
     required = ("payment_id", "payment_status", "pay_address", "pay_amount", "pay_currency")
     if not isinstance(payment, dict) or any(payment.get(key) in (None, "") for key in required):
         raise PaymentProviderError("NOWPayments returned incomplete payment instructions.")
-    return payment
+    if str(payment["pay_currency"]).lower() != requested_currency.lower():
+        raise PaymentProviderError(
+            "NOWPayments did not return the token/network you selected. No payment instructions were shown; choose another route and try again."
+        )
 
 
 def payment_qr_data_uri(payment_address: str) -> str:
@@ -140,7 +162,7 @@ async def fetch_nowpayments_payment(payment_id: str) -> dict[str, Any]:
         raise PaymentProviderError("NOWPayments API key is missing.")
     async with httpx.AsyncClient(timeout=15) as client:
         response = await client.get(
-            f"{settings.nowpayments_api_base_url.rstrip('/')}/payment/{payment_id}",
+            f"{nowpayments_api_base_url()}/payment/{payment_id}",
             headers={"x-api-key": settings.nowpayments_api_key},
         )
     if response.is_error:
@@ -163,7 +185,7 @@ async def fetch_nowpayments_invoice_payments(invoice_id: str) -> list[dict[str, 
         raise PaymentProviderError("NOWPayments API key is missing.")
     async with httpx.AsyncClient(timeout=15) as client:
         response = await client.get(
-            f"{settings.nowpayments_api_base_url.rstrip('/')}/payment/",
+            f"{nowpayments_api_base_url()}/payment/",
             # NOWPayments documents this query name in lowercase.  Query keys
             # are case-sensitive at the provider edge.
             params={"invoiceid": invoice_id, "limit": 50, "page": 0, "sortBy": "created_at", "orderBy": "desc"},

@@ -5,8 +5,10 @@ from datetime import timedelta
 import asyncio
 from unittest.mock import AsyncMock, patch
 
+import pytest
+
 from app.auth import utcnow
-from app.billing import callback_configuration_error, payment_qr_data_uri
+from app.billing import PaymentProviderError, callback_configuration_error, nowpayments_api_base_url, payment_qr_data_uri, validate_nowpayments_payment_route
 from app.db.models import Payment, Subscription
 from app.routes.billing import _apply_provider_status, _checkout_view, _pick_subscription, _reconcile_pending_payment
 from app.settings import get_settings
@@ -40,6 +42,19 @@ def test_local_sandbox_can_exercise_checkout_without_weakening_production_gate()
         assert callback_configuration_error() is not None
     finally:
         settings.public_base_url, settings.nowpayments_sandbox, settings.app_env = original
+
+
+def test_sandbox_uses_the_sandbox_api_without_a_custom_endpoint() -> None:
+    settings = get_settings()
+    original_sandbox, original_url = settings.nowpayments_sandbox, settings.nowpayments_api_base_url
+    try:
+        settings.nowpayments_sandbox = True
+        settings.nowpayments_api_base_url = "https://api.nowpayments.io/v1"
+        assert nowpayments_api_base_url() == "https://api-sandbox.nowpayments.io/v1"
+        settings.nowpayments_api_base_url = "https://sandbox-proxy.example/v1"
+        assert nowpayments_api_base_url() == "https://sandbox-proxy.example/v1"
+    finally:
+        settings.nowpayments_sandbox, settings.nowpayments_api_base_url = original_sandbox, original_url
 
 
 def test_active_subscription_wins_over_newer_pending_checkout() -> None:
@@ -95,3 +110,9 @@ def test_checkout_view_returns_only_the_bound_provider_instructions() -> None:
     assert view["pay_currency"] == "USDTTRC20"
     assert view["plan_days"] == 30
     assert view["qr_data_uri"].startswith("data:image/png;base64,")
+
+
+def test_provider_currency_must_match_the_user_selected_route() -> None:
+    provider_payload = {"payment_id": "provider", "payment_status": "waiting", "pay_address": "btc-address", "pay_amount": "0.001", "pay_currency": "btc"}
+    with pytest.raises(PaymentProviderError, match="did not return the token"):
+        validate_nowpayments_payment_route(provider_payload, "usdttrc20")
