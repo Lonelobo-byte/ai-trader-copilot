@@ -3,7 +3,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from fastapi import HTTPException
+from fastapi import HTTPException, Response
 from starlette.requests import Request
 
 from app.ai_budget import AIBudgetExceededError, reserve_platform_ai_budget
@@ -62,9 +62,13 @@ async def test_platform_mutations_require_an_admin_role() -> None:
 async def test_radar_discovery_is_public_without_a_subscription_dependency() -> None:
     request = Request({"type": "http", "method": "GET", "path": "/quant/breakout-radar", "headers": [], "client": ("127.0.0.1", 9000)})
     expected = [{"symbol": "BTCUSDT", "score": 77}]
+    response = Response()
     with patch("app.radar_service.get_breakout_candidates", return_value=expected):
-        result = await get_radar_breakouts(request, ltf="5m", htf="1h")
+        result = await get_radar_breakouts(request, response=response, ltf="5m", htf="1h")
     assert result == expected
+    assert response.headers["cache-control"] == "no-store, max-age=0"
+    assert response.headers["x-radar-next-refresh-at"]
+    assert response.headers["x-radar-server-time"]
 
 
 @pytest.mark.asyncio

@@ -1406,6 +1406,7 @@
       let refreshTimer = null;
       let secondsRemaining = 30;
       let nextRadarRefreshAtMs = 0;
+      let radarServerClockOffsetMs = 0;
       let isFetchingRadar = false;
 
       function setResearchButtonState(state = 'READY') {
@@ -1518,7 +1519,7 @@
         const headers = new Headers(options.headers || {});
         const token = radarAccessToken();
         if (token) headers.set('Authorization', `Bearer ${token}`);
-        return radarOriginalFetch(url, { ...options, headers, credentials: 'same-origin' });
+        return radarOriginalFetch(url, { ...options, headers, credentials: 'same-origin', cache: 'no-store' });
       }
       // Render breakout records
       function renderTable() {
@@ -2068,6 +2069,10 @@
         return 30;
       }
 
+      function sharedRadarNow() {
+        return Date.now() + radarServerClockOffsetMs;
+      }
+
       async function fetchBreakouts() {
         if (isFetchingRadar) return;
         isFetchingRadar = true;
@@ -2079,7 +2084,9 @@
         refreshText.textContent = 'Scanning causal market evidence...';
         const [ltf, htf] = (scanModeSelect.value || '5m,1h').split(',');
         try {
+          const requestStartedAt = Date.now();
           const response = await publicRadarFetch(`/quant/breakout-radar?ltf=${ltf}&htf=${htf}`);
+          const responseReceivedAt = Date.now();
           if (!response.ok) {
             const errData = await response.json().catch(() => ({}));
             throw new Error(errData.detail || 'API query failed.');
@@ -2088,12 +2095,18 @@
           const snapshotState = response.headers.get('X-Radar-Snapshot-State');
           const snapshotAt = response.headers.get('X-Radar-Snapshot-At');
           const nextRefreshAt = response.headers.get('X-Radar-Next-Refresh-At');
+          const serverNow = response.headers.get('X-Radar-Server-Time');
+          const parsedServerNow = serverNow ? Date.parse(serverNow) : NaN;
+          if (Number.isFinite(parsedServerNow)) {
+            const estimatedServerTimeAtReceipt = parsedServerNow + (responseReceivedAt - requestStartedAt) / 2;
+            radarServerClockOffsetMs = estimatedServerTimeAtReceipt - responseReceivedAt;
+          }
           const parsedRefreshAt = nextRefreshAt ? Date.parse(nextRefreshAt) : NaN;
           if (Number.isFinite(parsedRefreshAt)) {
             nextRadarRefreshAtMs = parsedRefreshAt;
-            secondsRemaining = Math.max(0, Math.ceil((nextRadarRefreshAtMs - Date.now()) / 1000));
+            secondsRemaining = Math.max(0, Math.ceil((nextRadarRefreshAtMs - sharedRadarNow()) / 1000));
           } else {
-            nextRadarRefreshAtMs = Date.now() + radarRefreshSeconds(ltf, htf) * 1000;
+            nextRadarRefreshAtMs = sharedRadarNow() + radarRefreshSeconds(ltf, htf) * 1000;
             secondsRemaining = radarRefreshSeconds(ltf, htf);
           }
           if (snapshotState === 'STALE_REFRESHING') {
@@ -2123,7 +2136,7 @@
           spinner.style.display = 'none';
           spinner.classList.remove('is-active');
           if (!nextRadarRefreshAtMs) {
-            nextRadarRefreshAtMs = Date.now() + radarRefreshSeconds(ltf, htf) * 1000;
+            nextRadarRefreshAtMs = sharedRadarNow() + radarRefreshSeconds(ltf, htf) * 1000;
           }
         }
       }
@@ -2200,11 +2213,11 @@
       // Timing scanning loops
       function startTimer() {
         refreshTimer = setInterval(() => {
-          secondsRemaining = Math.max(0, Math.ceil((nextRadarRefreshAtMs - Date.now()) / 1000));
+          secondsRemaining = Math.max(0, Math.ceil((nextRadarRefreshAtMs - sharedRadarNow()) / 1000));
           if (secondsRemaining <= 0) {
             fetchBreakouts();
           } else {
-            refreshText.textContent = `Refreshs in ${secondsRemaining}s`;
+            refreshText.textContent = `Refreshes in ${secondsRemaining}s`;
           }
         }, 1000);
       }

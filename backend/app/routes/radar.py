@@ -14,7 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
 from ..data_sources.binance_public import Candle
-from ..auth import require_active_subscription
+from ..auth import require_active_subscription, utcnow
 from ..db.models import User
 from ..indicators.liquidity import detect_liquidity_sweep
 from ..indicators.structure import classify_market_phase, find_swing_points
@@ -45,6 +45,11 @@ async def get_radar_breakouts(request: Request, response: Response = None, ltf: 
         shared = await read_radar_pair(ltf, htf)
         if response is not None:
             response.headers["X-Radar-Snapshot-State"] = shared.state
+            response.headers["X-Radar-Server-Time"] = utcnow().isoformat()
+            # Radar is shared, but it is still live market data. Never let a
+            # browser/proxy replay an older HTTP response and desynchronise
+            # its countdown from the current shared snapshot.
+            response.headers["Cache-Control"] = "no-store, max-age=0"
         if response is not None and shared.captured_at:
             response.headers["X-Radar-Snapshot-At"] = shared.captured_at
         if response is not None and shared.next_refresh_at:
