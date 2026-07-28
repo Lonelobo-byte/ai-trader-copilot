@@ -6,6 +6,7 @@ routes and backtests.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 from hashlib import sha256
@@ -24,6 +25,17 @@ logger = logging.getLogger(__name__)
 # Module-level cache persists a deliberation only for intra-candle dashboard
 # updates. A completed candle always receives a fresh committee review.
 _ai_council_cache: dict[str, dict[str, Any]] = {}
+_ai_council_cache_candle: dict[str, int | None] = {}
+_ai_council_locks: dict[str, asyncio.Lock] = {}
+
+
+def _council_lock(cache_key: str) -> asyncio.Lock:
+    """Serialize a user's identical council requests within one process."""
+    lock = _ai_council_locks.get(cache_key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _ai_council_locks[cache_key] = lock
+    return lock
 
 
 def _build_analysis_snapshot(
@@ -192,18 +204,35 @@ async def run_full_analysis(
             or cache_key not in _ai_council_cache
         )
 
+        current_candle_open_time = getattr(candles[-1], "open_time", None) if candles else None
         if should_run_ai:
-            logger.info(f"Convening live AI Council for {symbol}/{timeframe} (vol_ratio={vol_ratio:.2f}, range_ratio={range_ratio:.2f})")
-            # ``intel`` has already been normalised to the explicit REST or
-            # WebSocket candle/ticker/order-book snapshot. Passing the original
-            # optional argument here caused the WebSocket path to fetch a second
-            # snapshot and let the committee decide on different data.
-            cio_result = await run_ai_council(symbol, timeframe, settings, intelligence=intel, ai_override=ai_override)
-            features = cio_result.get("full_quant_features") or features
-            # Cache the deliberation report
-            _ai_council_cache[cache_key] = cio_result
-            macro_blockout = cio_result["macro_blockout"]
-            historical_stats = cio_result["historical_stats"]
+            # Two browser tabs can begin on the same candle at virtually the
+            # same time.  Re-check after obtaining the lock so that one BYOK
+            # council call is reused instead of charging/running twice.
+            async with _council_lock(cache_key):
+                should_run_ai = not (
+                    cache_key in _ai_council_cache
+                    and _ai_council_cache_candle.get(cache_key) == current_candle_open_time
+                )
+                if should_run_ai:
+                    logger.info(f"Convening live AI Council for {symbol}/{timeframe} (vol_ratio={vol_ratio:.2f}, range_ratio={range_ratio:.2f})")
+                    # ``intel`` has already been normalised to the explicit REST or
+                    # WebSocket candle/ticker/order-book snapshot. Passing the original
+                    # optional argument here caused the WebSocket path to fetch a second
+                    # snapshot and let the committee decide on different data.
+                    cio_result = await run_ai_council(symbol, timeframe, settings, intelligence=intel, ai_override=ai_override)
+                    features = cio_result.get("full_quant_features") or features
+                    _ai_council_cache[cache_key] = cio_result
+                    _ai_council_cache_candle[cache_key] = current_candle_open_time
+                    macro_blockout = cio_result["macro_blockout"]
+                    historical_stats = cio_result["historical_stats"]
+                else:
+                    cio_result = _ai_council_cache[cache_key].copy()
+                    cio_result["quant_features"] = features
+                    cio_result["full_quant_features"] = features
+                    cio_result["data_quality"] = features.get("data_quality", {})
+                    macro_blockout = cio_result.get("macro_blockout", {"active": False, "reason": ""})
+                    historical_stats = cio_result.get("historical_stats", {"similar_setups_count": 0, "historical_win_rate": 50.0})
         elif use_ai and cache_key in _ai_council_cache:
             logger.info(f"Reusing cached AI Council deliberation for {symbol}/{timeframe} (cooldown tick)")
             cio_result = _ai_council_cache[cache_key].copy()

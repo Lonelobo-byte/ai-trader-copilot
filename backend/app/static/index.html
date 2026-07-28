@@ -104,9 +104,18 @@
             <p>Select the asset and network you will use. We will generate a fixed, provider-issued payment instruction.
             </p>
             <label class="payment-field-label" for="payment-currency">Search asset or network</label>
-            <input id="payment-currency" class="payment-currency-select" list="payment-currency-options"
-              autocomplete="off" placeholder="Loading supported assets…">
-            <datalist id="payment-currency-options"></datalist>
+            <div id="payment-currency-picker" class="payment-currency-picker">
+              <div class="payment-currency-input-shell">
+                <span id="payment-currency-input-mark" class="payment-token-mark payment-token-mark-small"
+                  hidden></span>
+                <input id="payment-currency" class="payment-currency-select" autocomplete="off" role="combobox"
+                  aria-autocomplete="list" aria-controls="payment-currency-results" aria-expanded="false"
+                  placeholder="Loading supported assets…">
+                <span class="payment-currency-search" aria-hidden="true">⌕</span>
+              </div>
+              <div id="payment-currency-results" class="payment-currency-results" role="listbox" hidden></div>
+            </div>
+            <div id="payment-selected-token" class="payment-selected-token" hidden></div>
             <button id="payment-create" type="button" class="payment-create-button">Generate secure payment
               <span>→</span></button>
             <p class="payment-setup-footnote">You remain on this page. Access unlocks only after verified network
@@ -139,7 +148,8 @@
             <span class="payment-success-eyebrow">VERIFIED PROVIDER CONFIRMATION</span>
             <h3>Payment confirmed.</h3>
             <p id="payment-success-copy">Your analyst workspace is now active.</p>
-            <div class="payment-success-rail"><span class="is-complete">Payment</span><b></b><span class="is-complete">Confirmed</span><b></b><span class="is-active">Access active</span></div>
+            <div class="payment-success-rail"><span class="is-complete">Payment</span><b></b><span
+                class="is-complete">Confirmed</span><b></b><span class="is-active">Access active</span></div>
             <button id="payment-success-enter" type="button">Enter research workspace <span>→</span></button>
             <small>Opening automatically in a moment…</small>
           </div>
@@ -172,11 +182,51 @@
           <line x1="2" y1="12" x2="22" y2="12" stroke="currentColor" stroke-width="1.5" />
         </svg>
       </a>
+
     </nav>
     <div class="sidebar-footer">
-      <span class="user-avatar" title="Apex AI Co-Pilot">AP</span>
+      <button id="membership-capacity-trigger" type="button" class="nav-item membership-capacity-trigger"
+        title="Membership and research capacity" aria-haspopup="dialog" aria-expanded="false">
+        <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true">
+          <rect x="3" y="5" width="18" height="14" rx="3" stroke="currentColor" stroke-width="1.7" fill="none" />
+          <circle cx="8" cy="12" r="2" stroke="currentColor" stroke-width="1.5" fill="none" />
+          <path d="M12 10h5M12 14h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
+        </svg>
+        <span class="membership-capacity-dot" aria-hidden="true"></span>
+      </button>
+      <!-- <span class="user-avatar" title="Apex AI Co-Pilot">AP</span> -->
     </div>
   </aside>
+
+  <div id="membership-card-layer" class="membership-card-layer" hidden>
+    <button id="membership-card-scrim" class="membership-card-scrim" type="button"
+      aria-label="Close membership details"></button>
+    <section id="membership-card" class="membership-card" role="dialog" aria-modal="true"
+      aria-labelledby="membership-card-title">
+      <button id="membership-card-close" class="membership-card-close" type="button"
+        aria-label="Close membership details">×</button>
+      <div class="membership-card-topline"><span class="membership-card-kicker">ANALYST CREDENTIAL</span><span
+          id="membership-card-status" class="membership-card-status">LOADING</span></div>
+      <div class="membership-card-identity"><span class="membership-card-mark">◇</span>
+        <div>
+          <h2 id="membership-card-title">Membership</h2>
+          <p id="membership-card-plan">Loading plan details…</p>
+        </div>
+      </div>
+      <div class="membership-card-expiry"><span>ACTIVE THROUGH</span><strong
+          id="membership-card-expiry-value">—</strong></div>
+      <div class="membership-card-capacity">
+        <div><span>LIVE RESEARCH CAPACITY</span><strong id="membership-card-capacity-value">— / —</strong></div>
+        <div class="membership-card-meter"><i id="membership-card-capacity-fill"></i></div>
+        <p id="membership-card-capacity-copy">Checking active research sessions…</p>
+      </div>
+      <div class="membership-card-slots"><span>ACTIVE RESEARCH</span>
+        <div id="membership-card-slot-list" class="membership-card-slot-list"></div>
+      </div>
+      <p class="membership-card-footnote">Capacity is enforced by the server. Closing a research tab releases its slot.
+      </p>
+    </section>
+  </div>
 
   <div class="main-wrapper">
     <header class="main-header">
@@ -945,6 +995,7 @@
       let selectedPlan = null;
       let checkoutToken = '';
       let availablePaymentCurrencies = new Set();
+      let paymentCurrencyCatalog = new Map();
       let paymentSuccessTimer = null;
       let paymentSuccessShown = false;
       const paymentModal = document.getElementById('payment-modal');
@@ -952,6 +1003,10 @@
       const paymentLoading = document.getElementById('payment-loading');
       const paymentInstructions = document.getElementById('payment-instructions');
       const paymentSuccess = document.getElementById('payment-success');
+      const paymentCurrencyInput = document.getElementById('payment-currency');
+      const paymentCurrencyResults = document.getElementById('payment-currency-results');
+      const paymentCurrencyInputMark = document.getElementById('payment-currency-input-mark');
+      const paymentSelectedToken = document.getElementById('payment-selected-token');
       const unlock = (token, role = 'member') => {
         gate.style.display = 'none';
         window.atcAuthenticated = true;
@@ -976,6 +1031,77 @@
         paymentLoading.hidden = state !== 'loading';
         paymentInstructions.hidden = state !== 'instructions';
         paymentSuccess.hidden = state !== 'success';
+      };
+      const createPaymentTokenIcon = (item) => {
+        const shell = document.createElement('span');
+        shell.className = 'payment-token-icon-shell';
+        const fallback = document.createElement('span');
+        fallback.className = 'payment-token-icon-fallback';
+        fallback.textContent = String(item.ticker || item.code || '?').slice(0, 2).toUpperCase();
+        if (item.logo_url) {
+          const image = document.createElement('img');
+          image.className = 'payment-token-icon';
+          image.src = item.logo_url;
+          image.alt = `${item.name || item.ticker || item.code} logo`;
+          image.referrerPolicy = 'no-referrer';
+          image.addEventListener('error', () => image.remove());
+          shell.append(image);
+        }
+        shell.append(fallback);
+        return shell;
+      };
+      const clearSelectedPaymentCurrency = () => {
+        paymentCurrencyInputMark.hidden = true;
+        paymentCurrencyInputMark.replaceChildren();
+        paymentSelectedToken.hidden = true;
+        paymentSelectedToken.replaceChildren();
+      };
+      const selectPaymentCurrency = (item) => {
+        paymentCurrencyInput.value = item.code;
+        paymentCurrencyInputMark.hidden = false;
+        paymentCurrencyInputMark.replaceChildren(createPaymentTokenIcon(item));
+        paymentSelectedToken.hidden = false;
+        const content = document.createElement('span');
+        content.className = 'payment-selected-token-copy';
+        const ticker = document.createElement('strong');
+        ticker.textContent = item.ticker || item.code.toUpperCase();
+        const detail = document.createElement('small');
+        detail.textContent = [item.name || item.label, item.network].filter(Boolean).join(' · ');
+        content.append(ticker, detail);
+        const selected = document.createElement('span');
+        selected.className = 'payment-selected-token-state';
+        selected.textContent = 'Selected';
+        paymentSelectedToken.replaceChildren(createPaymentTokenIcon(item), content, selected);
+        paymentCurrencyResults.hidden = true;
+        paymentCurrencyInput.setAttribute('aria-expanded', 'false');
+      };
+      const renderPaymentCurrencyResults = (query = '', isOpen = true) => {
+        const normalized = query.trim().toLowerCase();
+        const matches = [...paymentCurrencyCatalog.values()].filter((item) =>
+          [item.code, item.ticker, item.name, item.network, item.label].filter(Boolean).join(' ').toLowerCase().includes(normalized)
+        );
+        paymentCurrencyResults.replaceChildren(...matches.slice(0, 36).map((item) => {
+          const row = document.createElement('button');
+          row.type = 'button';
+          row.className = 'payment-currency-result';
+          row.setAttribute('role', 'option');
+          const copy = document.createElement('span');
+          copy.className = 'payment-currency-result-copy';
+          const ticker = document.createElement('strong');
+          ticker.textContent = item.ticker || item.code.toUpperCase();
+          const detail = document.createElement('small');
+          detail.textContent = [item.name || item.label, item.network].filter(Boolean).join(' · ');
+          copy.append(ticker, detail);
+          const code = document.createElement('span');
+          code.className = 'payment-currency-result-code';
+          code.textContent = item.code.toUpperCase();
+          row.append(createPaymentTokenIcon(item), copy, code);
+          row.addEventListener('mousedown', (event) => event.preventDefault());
+          row.addEventListener('click', () => selectPaymentCurrency(item));
+          return row;
+        }));
+        paymentCurrencyResults.hidden = !isOpen || !matches.length;
+        paymentCurrencyInput.setAttribute('aria-expanded', String(!paymentCurrencyResults.hidden));
       };
       const enterResearchWorkspace = (token) => {
         if (paymentSuccessTimer) clearTimeout(paymentSuccessTimer);
@@ -1060,9 +1186,12 @@
         document.getElementById('payment-plan-price').textContent = `${currency} ${plan.amount}`;
         document.getElementById('payment-plan-note').textContent = `${plan.days} days of full analyst workstation access.`;
         document.getElementById('payment-order-reference').hidden = true;
-        const selector = document.getElementById('payment-currency');
-        selector.value = '';
-        selector.disabled = true;
+        paymentCurrencyInput.value = '';
+        paymentCurrencyInput.disabled = true;
+        paymentCurrencyCatalog = new Map();
+        paymentCurrencyResults.replaceChildren();
+        paymentCurrencyResults.hidden = true;
+        clearSelectedPaymentCurrency();
         paymentModal.hidden = false;
         paymentModal.setAttribute('aria-hidden', 'false');
         requestAnimationFrame(() => paymentModal.classList.add('motion-open'));
@@ -1079,11 +1208,10 @@
           const currencies = Array.isArray(data.currencies) ? data.currencies : [];
           if (!currencies.length) throw new Error('No payment currencies are available right now.');
           availablePaymentCurrencies = new Set(currencies.map(item => item.code));
-          const options = document.getElementById('payment-currency-options');
-          options.replaceChildren(...currencies.map(item => new Option(item.label, item.code)));
-          const selector = document.getElementById('payment-currency');
-          selector.disabled = false;
-          selector.placeholder = 'e.g. USDT, BTC, SOL…';
+          paymentCurrencyCatalog = new Map(currencies.map(item => [item.code, item]));
+          paymentCurrencyInput.disabled = false;
+          paymentCurrencyInput.placeholder = 'Search enabled assets…';
+          renderPaymentCurrencyResults('', false);
           setPaymentWorkspace('setup');
         } catch (err) {
           closePaymentModal();
@@ -1092,13 +1220,13 @@
       };
       const createPaymentInstructions = async () => {
         if (!selectedPlan || checkoutInProgress) return;
-        const payCurrency = document.getElementById('payment-currency').value.trim().toLowerCase();
+        const payCurrency = paymentCurrencyInput.value.trim().toLowerCase();
         if (!availablePaymentCurrencies.has(payCurrency)) {
-          const selector = document.getElementById('payment-currency');
-          selector.setCustomValidity('Choose a supported asset from the list.');
-          selector.reportValidity();
-          selector.setCustomValidity('');
-          selector.focus();
+          paymentCurrencyInput.setCustomValidity('Choose a supported asset from the list.');
+          paymentCurrencyInput.reportValidity();
+          paymentCurrencyInput.setCustomValidity('');
+          paymentCurrencyInput.focus();
+          renderPaymentCurrencyResults(paymentCurrencyInput.value);
           return;
         }
         checkoutInProgress = true;
@@ -1125,6 +1253,25 @@
         }
       };
       document.getElementById('payment-create').onclick = createPaymentInstructions;
+      paymentCurrencyInput.addEventListener('focus', () => renderPaymentCurrencyResults(paymentCurrencyInput.value));
+      paymentCurrencyInput.addEventListener('input', () => {
+        const selected = paymentCurrencyCatalog.get(paymentCurrencyInput.value.trim().toLowerCase());
+        if (selected) selectPaymentCurrency(selected);
+        else {
+          clearSelectedPaymentCurrency();
+          renderPaymentCurrencyResults(paymentCurrencyInput.value);
+        }
+      });
+      paymentCurrencyInput.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape') {
+          paymentCurrencyResults.hidden = true;
+          paymentCurrencyInput.setAttribute('aria-expanded', 'false');
+        }
+      });
+      paymentCurrencyInput.addEventListener('blur', () => setTimeout(() => {
+        paymentCurrencyResults.hidden = true;
+        paymentCurrencyInput.setAttribute('aria-expanded', 'false');
+      }, 120));
       document.getElementById('payment-modal-close').onclick = closePaymentModal;
       document.getElementById('payment-modal-back').onclick = closePaymentModal;
       document.getElementById('payment-success-enter').onclick = () => enterResearchWorkspace(checkoutToken);

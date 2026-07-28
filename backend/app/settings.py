@@ -75,6 +75,16 @@ class Settings(BaseSettings):
     binance_stream_base_url: str = "wss://stream.binance.com:9443"
     gdelt_doc_api: str = "https://api.gdeltproject.org/api/v2/doc/doc"
 
+    # Keep live research responsive without allowing every browser tab to fan
+    # out into a complete independent market-data request.  These defaults are
+    # deliberately conservative for small Docker hosts and can be tuned per
+    # deployment through environment variables.
+    market_snapshot_cache_seconds: float = 8.0
+    market_snapshot_cache_max_entries: int = 96
+    market_intelligence_max_concurrency: int = 8
+    background_jobs_enabled: bool = True
+    background_idle_check_seconds: int = 60
+
     default_account_size_usd: float = 1000.0
     default_risk_per_idea_pct: float = 0.5
     min_risk_reward: float = 1.5

@@ -255,9 +255,14 @@ async def autonomous_scanner_loop() -> None:
             if configuration["enabled"]:
                 await run_scan_cycle()
             else:
-                logger.info("Autonomous scan disabled in settings. Skipping.")
-                
-            # Sleep for the configured interval (checking every 10s if settings changed)
+                # When disabled, this loop used to query the database every ten
+                # seconds and emit a log line each time.  An idle scanner should
+                # have near-zero CPU, database and log volume.
+                await asyncio.sleep(max(15, settings.background_idle_check_seconds))
+                continue
+
+            # Sleep for the configured interval (checking periodically if
+            # settings changed while the scanner is actually enabled).
             interval = settings.scan_interval_seconds
             slept = 0
             while slept < interval:

@@ -13,6 +13,8 @@ Design principles:
 from __future__ import annotations
 
 import asyncio
+from collections import OrderedDict
+from copy import deepcopy
 import logging
 from time import monotonic
 from typing import Any
@@ -33,6 +35,16 @@ logger = logging.getLogger(__name__)
 
 _CACHE: dict[str, tuple[float, Any]] = {}
 
+# A complete intelligence snapshot is much more expensive than the individual
+# slow-source caches below: it opens several market-data requests at once.  A
+# short TTL is enough because the websocket supplies the current ticker/order
+# book independently.  The cache is bounded so a busy public deployment cannot
+# grow process memory simply by receiving many unique symbol requests.
+_SNAPSHOT_CACHE: OrderedDict[str, tuple[float, dict[str, Any]]] = OrderedDict()
+_SNAPSHOT_INFLIGHT: dict[str, asyncio.Task[dict[str, Any]]] = {}
+_SNAPSHOT_LOCK = asyncio.Lock()
+_FETCH_GATES: dict[int, asyncio.Semaphore] = {}
+
 DEFAULT_TTL = 30.0          # seconds for price-sensitive data
 SLOW_TTL = 120.0            # seconds for slow-moving data (macro, sentiment)
 NEWS_TTL = 300.0             # 5 minutes for news
@@ -51,6 +63,72 @@ def _cached(key: str, ttl: float) -> Any | None:
 
 def _store(key: str, value: Any) -> None:
     _CACHE[key] = (monotonic(), value)
+
+
+def _snapshot_key(symbol: str, timeframe: str, candle_limit: int) -> str:
+    return f"{symbol.upper().strip()}:{timeframe}:{max(60, min(int(candle_limit), 1000))}"
+
+
+def _fetch_gate(limit: int) -> asyncio.Semaphore:
+    """Return a process-local gate that bounds expensive fan-out fetches."""
+    bounded_limit = max(1, min(int(limit), 32))
+    gate = _FETCH_GATES.get(bounded_limit)
+    if gate is None:
+        gate = asyncio.Semaphore(bounded_limit)
+        _FETCH_GATES[bounded_limit] = gate
+    return gate
+
+
+async def fetch_market_intelligence_cached(
+    symbol: str,
+    timeframe: str,
+    settings: Settings,
+    candle_limit: int = 200,
+) -> dict[str, Any]:
+    """Return an isolated, short-lived intelligence snapshot.
+
+    Identical concurrent requests share one upstream fetch (single-flight).
+    Callers receive a deep copy because the analysis pipeline intentionally
+    replaces the snapshot's live candle/ticker/order-book values.
+    """
+    ttl = max(0.0, float(settings.market_snapshot_cache_seconds))
+    max_entries = max(8, min(int(settings.market_snapshot_cache_max_entries), 512))
+    key = _snapshot_key(symbol, timeframe, candle_limit)
+    now = monotonic()
+
+    async with _SNAPSHOT_LOCK:
+        cached = _SNAPSHOT_CACHE.get(key)
+        if cached and ttl and now - cached[0] <= ttl:
+            _SNAPSHOT_CACHE.move_to_end(key)
+            return deepcopy(cached[1])
+        if cached:
+            _SNAPSHOT_CACHE.pop(key, None)
+
+        task = _SNAPSHOT_INFLIGHT.get(key)
+        if task is None:
+            gate = _fetch_gate(settings.market_intelligence_max_concurrency)
+
+            async def build_snapshot() -> dict[str, Any]:
+                async with gate:
+                    result = await fetch_market_intelligence(symbol, timeframe, settings, candle_limit)
+                async with _SNAPSHOT_LOCK:
+                    _SNAPSHOT_CACHE[key] = (monotonic(), result)
+                    _SNAPSHOT_CACHE.move_to_end(key)
+                    while len(_SNAPSHOT_CACHE) > max_entries:
+                        _SNAPSHOT_CACHE.popitem(last=False)
+                return result
+
+            task = asyncio.create_task(build_snapshot())
+            _SNAPSHOT_INFLIGHT[key] = task
+
+    try:
+        result = await asyncio.shield(task)
+        return deepcopy(result)
+    finally:
+        if task.done():
+            async with _SNAPSHOT_LOCK:
+                if _SNAPSHOT_INFLIGHT.get(key) is task:
+                    _SNAPSHOT_INFLIGHT.pop(key, None)
 
 
 # ── Multi-timeframe candle map ───────────────────────────────────────────────

@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any
+import asyncio
+from contextlib import suppress
+from typing import Any, AsyncGenerator
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
@@ -11,7 +13,7 @@ from pydantic import BaseModel, Field
 
 from ..analysis_pipeline import run_full_analysis
 from ..data_sources.binance_public import BinancePublicClient, Candle
-from ..data_sources.data_aggregator import fetch_market_intelligence
+from ..data_sources.data_aggregator import fetch_market_intelligence_cached
 from ..data_sources.binance_ws import BinanceWSSubscriber
 from ..settings import get_settings
 from ..quant.research import list_hypotheses, validate_series
@@ -19,6 +21,14 @@ from ..auth import require_active_subscription, websocket_subscription
 from ..db.models import User
 from ..user_ai import UserAIConnectionError, ai_cache_identity, resolve_user_ai_config
 from ..rate_limit import enforce_rate_limit
+from ..research_capacity import (
+    RESEARCH_SLOT_HEARTBEAT_SECONDS,
+    ResearchCapacityExceeded,
+    acquire_research_slot,
+    heartbeat_research_slot,
+    research_capacity_view,
+    release_research_slot,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +39,30 @@ def _analysis_rate_limit(http_request: Request) -> None:
     # This protects external market-data work before the more specific AI
     # budget guard decides whether a model call may be made.
     enforce_rate_limit(http_request, "analysis", limit=12, window_seconds=60)
+
+
+async def _reserved_rest_research_slot(user: User = Depends(require_active_subscription)) -> AsyncGenerator[User, None]:
+    """Reserve capacity for the full lifetime of a one-shot research request."""
+    try:
+        lease = await acquire_research_slot(user=user, symbol="REST", timeframe="ONESHOT", channel="rest")
+    except ResearchCapacityExceeded as exc:
+        raise HTTPException(
+            status_code=429,
+            detail=str(exc),
+            headers={"Retry-After": "20"},
+        ) from exc
+    try:
+        yield user
+    finally:
+        await release_research_slot(lease.id)
+
+
+async def _maintain_websocket_research_slot(websocket: WebSocket, lease_id: str) -> None:
+    while True:
+        await asyncio.sleep(RESEARCH_SLOT_HEARTBEAT_SECONDS)
+        if not await heartbeat_research_slot(lease_id):
+            await websocket.close(code=4429, reason="Research capacity lease expired")
+            return
 
 
 class AnalyzeRequest(BaseModel):
@@ -56,8 +90,14 @@ async def validate_alpha(request: AlphaValidationRequest):
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+
+@router.get("/research/capacity")
+async def research_capacity(user: User = Depends(require_active_subscription)):
+    """Membership plan and active live-research leases for the current user."""
+    return await research_capacity_view(user)
+
 @router.post("/analyze", dependencies=[Depends(_analysis_rate_limit)])
-async def analyze(request: AnalyzeRequest, user: User = Depends(require_active_subscription)):
+async def analyze(request: AnalyzeRequest, user: User = Depends(_reserved_rest_research_slot)):
     settings = get_settings()
     symbol = request.symbol.upper().strip()
     client = BinancePublicClient(settings.binance_public_base_url)
@@ -65,7 +105,7 @@ async def analyze(request: AnalyzeRequest, user: User = Depends(require_active_s
     try:
         # Fetch one complete snapshot for the entire analysis. The snapshot
         # includes core data, higher timeframes, derivatives and context.
-        intelligence = await fetch_market_intelligence(
+        intelligence = await fetch_market_intelligence_cached(
             symbol, request.timeframe, settings, candle_limit=request.candle_limit
         )
         candles = intelligence.get("candles", [])
@@ -113,12 +153,30 @@ async def websocket_analyze(websocket: WebSocket):
     # JWT is the second requested subprotocol and is never reflected/logged.
     await websocket.accept(subprotocol="atc-auth")
     subscriber = None
+    research_lease = None
+    heartbeat_task = None
     try:
         config_msg = await websocket.receive_text()
         config = json.loads(config_msg)
         symbol = config.get("symbol", "BTCUSDT").upper().strip()
         timeframe = config.get("timeframe", "15m")
         use_ai = config.get("use_ai", True)
+
+        try:
+            research_lease = await acquire_research_slot(
+                user=user, symbol=symbol, timeframe=timeframe, channel="websocket"
+            )
+        except ResearchCapacityExceeded as exc:
+            await websocket.send_json({
+                "error": str(exc),
+                "code": "research_capacity_exceeded",
+                "plan_code": exc.plan_code,
+                "limit": exc.limit,
+                "active_slots": exc.active_slots,
+            })
+            await websocket.close(code=4429, reason="Research capacity reached")
+            return
+        heartbeat_task = asyncio.create_task(_maintain_websocket_research_slot(websocket, research_lease.id))
 
         settings = get_settings()
         try:
@@ -131,6 +189,10 @@ async def websocket_analyze(websocket: WebSocket):
         subscriber = BinanceWSSubscriber(symbol, timeframe, settings)
 
         last_ai_open_time = 0
+        # The subscriber supplies fresh price/book data.  Context data (higher
+        # timeframes, derivatives, news, macro) is shared briefly across tabs
+        # instead of triggering a full upstream fan-out on every websocket tick.
+        intelligence = None
 
         async for event in subscriber.start():
             raw_candles = event["candles"]
@@ -153,6 +215,11 @@ async def websocket_analyze(websocket: WebSocket):
             ticker = event["ticker"]
             order_book = event["order_book"]
 
+            if intelligence is None or event["type"] == "init" or bool(event.get("new_candle_closed")):
+                intelligence = await fetch_market_intelligence_cached(
+                    symbol, timeframe, settings, candle_limit=len(candles)
+                )
+
             payload, last_ai_open_time = await run_full_analysis(
                 symbol=symbol,
                 timeframe=timeframe,
@@ -164,6 +231,7 @@ async def websocket_analyze(websocket: WebSocket):
                 is_new_candle=bool(event.get("new_candle_closed")),
                 is_init_event=event["type"] == "init",
                 last_ai_open_time=last_ai_open_time,
+                market_intelligence=intelligence,
                 ai_override=ai_override,
                 ai_cache_key=ai_cache_identity(user.id, ai_override),
                 reconcile_signals=user.role == "admin",
@@ -179,3 +247,10 @@ async def websocket_analyze(websocket: WebSocket):
             await websocket.send_json({"error": str(e)})
         except Exception:
             pass
+    finally:
+        if heartbeat_task is not None:
+            heartbeat_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await heartbeat_task
+        if research_lease is not None:
+            await release_research_slot(research_lease.id)

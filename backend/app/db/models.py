@@ -106,6 +106,20 @@ class User(Base):
     subscriptions = relationship("Subscription", back_populates="user", cascade="all, delete-orphan")
 
 
+class ResearchSlot(Base):
+    """A short-lived, server-enforced concurrent live-research lease."""
+    __tablename__ = "research_slots"
+
+    id = Column(String(36), primary_key=True)
+    user_id = Column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    symbol = Column(String(32), nullable=False)
+    timeframe = Column(String(16), nullable=False)
+    channel = Column(String(16), nullable=False)
+    acquired_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    heartbeat_at = Column(DateTime(timezone=True), nullable=False)
+    expires_at = Column(DateTime(timezone=True), nullable=False, index=True)
+
+
 class UserAIConnection(Base):
     """A user's encrypted, provider-scoped AI connection.
 

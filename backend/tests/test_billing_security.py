@@ -5,8 +5,10 @@ from datetime import timedelta
 import asyncio
 from unittest.mock import AsyncMock, patch
 
+import httpx
 import pytest
 
+from app import billing
 from app.auth import utcnow
 from app.billing import PaymentProviderError, callback_configuration_error, nowpayments_api_base_url, payment_qr_data_uri, validate_nowpayments_payment_route
 from app.db.models import Payment, Subscription
@@ -55,6 +57,52 @@ def test_sandbox_uses_the_sandbox_api_without_a_custom_endpoint() -> None:
         assert nowpayments_api_base_url() == "https://sandbox-proxy.example/v1"
     finally:
         settings.nowpayments_sandbox, settings.nowpayments_api_base_url = original_sandbox, original_url
+
+
+def test_currency_picker_uses_only_merchant_checked_coins() -> None:
+    settings = get_settings()
+    original = settings.payment_provider, settings.nowpayments_api_key, settings.nowpayments_sandbox, settings.nowpayments_api_base_url
+    original_cache = billing._CURRENCY_CACHE
+    requested_urls: list[str] = []
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def get(self, url, *, headers):
+            requested_urls.append(url)
+            if url.endswith("/merchant/coins"):
+                return httpx.Response(200, json={"selectedCurrencies": ["BTC", "USDTERC20"]})
+            return httpx.Response(200, json=[
+                {"code": "BTC", "name": "Bitcoin", "ticker": "BTC", "network": "btc", "logo_url": "/images/coins/btc.svg"},
+                {"code": "USDTERC20", "name": "Tether USD", "ticker": "USDT", "network": "eth", "logo_url": "/images/coins/usdt.svg"},
+            ])
+
+    try:
+        settings.payment_provider = "nowpayments"
+        settings.nowpayments_api_key = "test-key"
+        settings.nowpayments_sandbox = True
+        settings.nowpayments_api_base_url = "https://api.nowpayments.io/v1"
+        billing._CURRENCY_CACHE = None
+        with patch("app.billing.httpx.AsyncClient", return_value=FakeClient()):
+            currencies = asyncio.run(billing.fetch_nowpayments_currencies())
+    finally:
+        settings.payment_provider, settings.nowpayments_api_key, settings.nowpayments_sandbox, settings.nowpayments_api_base_url = original
+        billing._CURRENCY_CACHE = original_cache
+
+    assert requested_urls == [
+        "https://api-sandbox.nowpayments.io/v1/merchant/coins",
+        "https://api-sandbox.nowpayments.io/v1/full-currencies",
+    ]
+    assert [{"code": item["code"], "label": item["label"]} for item in currencies] == [
+        {"code": "btc", "label": "Bitcoin"},
+        {"code": "usdterc20", "label": "USDT · Ethereum"},
+    ]
+    assert currencies[0]["logo_url"] == "https://nowpayments.io/images/coins/btc.svg"
+    assert currencies[1]["name"] == "Tether USD"
 
 
 def test_active_subscription_wins_over_newer_pending_checkout() -> None:

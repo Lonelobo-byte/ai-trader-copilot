@@ -9,7 +9,7 @@ from datetime import timedelta
 from io import BytesIO
 from time import monotonic
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import httpx
 import qrcode
@@ -74,8 +74,20 @@ def _currency_label(code: str) -> str:
     return labels.get(code, code.upper())
 
 
+def _nowpayments_logo_url(value: Any) -> str | None:
+    """Convert a provider logo path into a safe, usable public image URL."""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    return urljoin("https://nowpayments.io", value.strip())
+
+
 async def fetch_nowpayments_currencies() -> list[dict[str, str]]:
-    """Return only payment-capable, provider-enabled routes for the picker."""
+    """Return only currencies enabled in this merchant's Coin Settings.
+
+    ``/currencies`` and ``/full-currencies`` describe NOWPayments' global
+    catalog, not the coins enabled by this merchant. ``/merchant/coins`` is
+    the source of truth for the checkout picker on both live and sandbox.
+    """
     global _CURRENCY_CACHE
     api_url = nowpayments_api_base_url()
     if _CURRENCY_CACHE and _CURRENCY_CACHE[0] == api_url and monotonic() - _CURRENCY_CACHE[1] < 300:
@@ -85,38 +97,46 @@ async def fetch_nowpayments_currencies() -> list[dict[str, str]]:
         raise RuntimeError("Crypto checkout is not configured.")
     async with httpx.AsyncClient(timeout=15) as client:
         response = await client.get(
-            f"{api_url}/currencies",
+            f"{api_url}/merchant/coins",
             headers={"x-api-key": settings.nowpayments_api_key},
         )
-        detail_response = await client.get(
+        metadata_response = await client.get(
             f"{api_url}/full-currencies",
             headers={"x-api-key": settings.nowpayments_api_key},
         )
     if response.is_error:
-        raise PaymentProviderError(f"NOWPayments currency lookup failed ({response.status_code}).")
-    if detail_response.is_error:
-        raise PaymentProviderError(f"NOWPayments detailed currency lookup failed ({detail_response.status_code}).")
+        raise PaymentProviderError(f"NOWPayments merchant currency lookup failed ({response.status_code}).")
     body = response.json()
-    raw_codes = body.get("currencies", []) if isinstance(body, dict) else body
+    raw_codes = body.get("selectedCurrencies", []) if isinstance(body, dict) else None
     if not isinstance(raw_codes, list):
-        raise PaymentProviderError("NOWPayments returned an invalid currency catalog.")
-    detail_body = detail_response.json()
-    detail_rows = detail_body.get("currencies", detail_body) if isinstance(detail_body, dict) else detail_body
-    if not isinstance(detail_rows, list):
-        raise PaymentProviderError("NOWPayments returned an invalid detailed currency catalog.")
-    enabled_details = {
-        str(item.get("code")).strip().lower(): item
-        for item in detail_rows
-        if isinstance(item, dict) and item.get("enable") is True and str(item.get("code", "")).strip()
-    }
-    payment_codes = {str(code).strip().lower() for code in raw_codes if str(code).strip()}
-    codes = sorted(payment_codes.intersection(enabled_details))
+        raise PaymentProviderError("NOWPayments returned an invalid merchant currency catalog.")
+    codes = sorted({str(code).strip().lower() for code in raw_codes if isinstance(code, str) and code.strip()})
+    metadata_rows: list[Any] = []
+    if not metadata_response.is_error:
+        try:
+            metadata_body = metadata_response.json()
+            metadata_rows = metadata_body.get("currencies", metadata_body) if isinstance(metadata_body, dict) else metadata_body
+        except ValueError:
+            metadata_rows = []
+    details_by_code = {
+        str(item.get("code", "")).strip().lower(): item
+        for item in metadata_rows
+        if isinstance(item, dict) and str(item.get("code", "")).strip()
+    } if isinstance(metadata_rows, list) else {}
     currencies = []
     for code in codes:
-        details = enabled_details[code]
+        details = details_by_code.get(code, {})
         name = str(details.get("name") or _currency_label(code)).strip()
-        network = str(details.get("network") or "").strip()
-        currencies.append({"code": code, "label": f"{name} · {network}" if network else name})
+        ticker = str(details.get("ticker") or code).strip().upper()
+        network = str(details.get("network") or "").strip().upper()
+        currencies.append({
+            "code": code,
+            "label": _currency_label(code),
+            "name": name,
+            "ticker": ticker,
+            "network": network,
+            "logo_url": _nowpayments_logo_url(details.get("logo_url")),
+        })
     if not currencies:
         raise PaymentProviderError("NOWPayments currently has no available payment currencies.")
     _CURRENCY_CACHE = (api_url, monotonic(), currencies)

@@ -52,6 +52,31 @@ curl -fsS https://app.example.com/health
 The first start creates the PostgreSQL volume, runs Alembic migrations, and
 asks Caddy to obtain the TLS certificate. Do not expose port `5432`.
 
+## Performance and scale
+
+The default Docker command uses one web process, which is the best starting
+point for a low-RAM server. The application now shares short-lived market
+snapshots, limits simultaneous full intelligence fetches, and keeps a bounded
+in-memory cache; its default values are suitable for a 1–2 GB host.
+
+For a larger server, scale web processes only after observing CPU and memory.
+Keep `BACKGROUND_JOBS_ENABLED=true` in exactly one process. Set it to `false`
+for every additional web worker/replica, otherwise each process would run the
+same scanner, lifecycle monitor, and outcome tracker. Start with the following
+settings in `.env`:
+
+```text
+MARKET_SNAPSHOT_CACHE_SECONDS=8
+MARKET_SNAPSHOT_CACHE_MAX_ENTRIES=96
+MARKET_INTELLIGENCE_MAX_CONCURRENCY=8
+BACKGROUND_JOBS_ENABLED=true
+BACKGROUND_IDLE_CHECK_SECONDS=60
+```
+
+If market-data providers begin throttling requests, lower
+`MARKET_INTELLIGENCE_MAX_CONCURRENCY` to `4`; if the host has ample capacity,
+raise it cautiously, never above `32`.
+
 Useful operations:
 
 ```sh

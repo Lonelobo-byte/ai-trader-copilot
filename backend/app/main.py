@@ -53,11 +53,15 @@ async def lifespan(app: FastAPI):
         logger.exception("Failed to initialize database during lifespan startup.")
         raise
     
-    tasks = [
-        asyncio.create_task(signal_monitor_loop()),
-        asyncio.create_task(outcome_tracker_loop()),
-        asyncio.create_task(autonomous_scanner_loop()),
-    ]
+    tasks = []
+    if settings.background_jobs_enabled:
+        tasks = [
+            asyncio.create_task(signal_monitor_loop()),
+            asyncio.create_task(outcome_tracker_loop()),
+            asyncio.create_task(autonomous_scanner_loop()),
+        ]
+    else:
+        logger.info("Background jobs are disabled for this application process.")
     yield
     for t in tasks:
         t.cancel()

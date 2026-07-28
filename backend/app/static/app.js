@@ -45,9 +45,9 @@ function scheduleAccessTokenRefresh(token) {
   try {
     const payload = JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
     const delay = Math.max(5_000, payload.exp * 1000 - Date.now() - 60_000);
-    tokenRefreshTimer = setTimeout(() => { ensureFreshAccessToken().catch(() => {}); }, delay);
+    tokenRefreshTimer = setTimeout(() => { ensureFreshAccessToken().catch(() => { }); }, delay);
   } catch (_) {
-    ensureFreshAccessToken().catch(() => {});
+    ensureFreshAccessToken().catch(() => { });
   }
 }
 
@@ -73,6 +73,107 @@ let activeNewsScope = 'token';
 let lastReceivedNews = null;
 let isMacroAlertDismissed = false;
 let loaderInterval = null;
+let membershipCapacityPoll = null;
+
+const membershipCapacityTrigger = document.getElementById('membership-capacity-trigger');
+const membershipCardLayer = document.getElementById('membership-card-layer');
+const membershipCardClose = document.getElementById('membership-card-close');
+const membershipCardScrim = document.getElementById('membership-card-scrim');
+const membershipCardPlan = document.getElementById('membership-card-plan');
+const membershipCardStatus = document.getElementById('membership-card-status');
+const membershipCardExpiry = document.getElementById('membership-card-expiry-value');
+const membershipCardCapacity = document.getElementById('membership-card-capacity-value');
+const membershipCardCapacityFill = document.getElementById('membership-card-capacity-fill');
+const membershipCardCapacityCopy = document.getElementById('membership-card-capacity-copy');
+const membershipCardSlotList = document.getElementById('membership-card-slot-list');
+
+const membershipPlanLabels = {
+  monthly: 'Monthly analyst access',
+  quarterly: 'Quarterly analyst access',
+  half_yearly: 'Half-yearly analyst access',
+  annual: 'Annual analyst access',
+};
+
+function closeMembershipCapacityCard() {
+  if (!membershipCardLayer) return;
+  membershipCardLayer.hidden = true;
+  membershipCapacityTrigger?.setAttribute('aria-expanded', 'false');
+  if (membershipCapacityPoll) clearInterval(membershipCapacityPoll);
+  membershipCapacityPoll = null;
+}
+
+function renderMembershipCapacity(data) {
+  const limit = Number(data?.limit || 0);
+  const active = Number(data?.active_slots || 0);
+  const endsAt = data?.plan_ends_at ? new Date(data.plan_ends_at) : null;
+  const expiry = endsAt && !Number.isNaN(endsAt.getTime())
+    ? endsAt.toLocaleDateString(undefined, { day: '2-digit', month: 'short', year: 'numeric' })
+    : 'Managed locally';
+  if (membershipCardPlan) membershipCardPlan.textContent = membershipPlanLabels[data?.plan_code] || 'Research membership';
+  if (membershipCardStatus) membershipCardStatus.textContent = String(data?.status || 'active').replace(/_/g, ' ').toUpperCase();
+  if (membershipCardExpiry) membershipCardExpiry.textContent = expiry;
+  if (membershipCardCapacity) membershipCardCapacity.textContent = `${active} / ${limit}`;
+  if (membershipCardCapacityFill) membershipCardCapacityFill.style.width = `${limit ? Math.min(100, (active / limit) * 100) : 0}%`;
+  if (membershipCardCapacityCopy) membershipCardCapacityCopy.textContent = limit
+    ? `${active === limit ? 'All available slots are in use.' : `${limit - active} live research ${limit - active === 1 ? 'slot' : 'slots'} available.`}`
+    : 'Research capacity is unavailable.';
+  if (!membershipCardSlotList) return;
+  const slots = Array.isArray(data?.slots) ? data.slots : [];
+  membershipCardSlotList.replaceChildren();
+  if (!slots.length) {
+    const empty = document.createElement('p');
+    empty.className = 'membership-card-empty';
+    empty.textContent = 'No live research currently running.';
+    membershipCardSlotList.append(empty);
+    return;
+  }
+  slots.slice(0, 2).forEach((slot) => {
+    const row = document.createElement('div');
+    row.className = 'membership-card-slot';
+    const symbol = document.createElement('b');
+    symbol.textContent = slot.symbol || 'RESEARCH';
+    const timeframe = document.createElement('span');
+    timeframe.textContent = slot.timeframe || 'LIVE';
+    const channel = document.createElement('small');
+    channel.textContent = slot.channel === 'rest' ? 'ONE-SHOT' : 'LIVE';
+    row.append(symbol, timeframe, channel);
+    membershipCardSlotList.append(row);
+  });
+  if (slots.length > 2) {
+    const overflow = document.createElement('p');
+    overflow.className = 'membership-card-empty';
+    overflow.textContent = `+${slots.length - 2} more active research open ${slots.length - 2 === 1 ? 'slot' : 'slots'}`;
+    membershipCardSlotList.append(overflow);
+  }
+}
+
+async function loadMembershipCapacity() {
+  if (!membershipCardLayer) return;
+  try {
+    const response = await fetch('/research/capacity');
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || 'Could not load membership capacity.');
+    renderMembershipCapacity(data);
+  } catch (error) {
+    if (membershipCardPlan) membershipCardPlan.textContent = 'Membership status unavailable';
+    if (membershipCardStatus) membershipCardStatus.textContent = 'RETRY';
+    if (membershipCardCapacityCopy) membershipCardCapacityCopy.textContent = error.message || 'Could not load capacity.';
+  }
+}
+
+membershipCapacityTrigger?.addEventListener('click', async () => {
+  const isOpen = !membershipCardLayer?.hidden;
+  if (isOpen) return closeMembershipCapacityCard();
+  membershipCardLayer.hidden = false;
+  membershipCapacityTrigger.setAttribute('aria-expanded', 'true');
+  await loadMembershipCapacity();
+  membershipCapacityPoll = setInterval(loadMembershipCapacity, 20_000);
+});
+membershipCardClose?.addEventListener('click', closeMembershipCapacityCard);
+membershipCardScrim?.addEventListener('click', closeMembershipCapacityCard);
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && !membershipCardLayer?.hidden) closeMembershipCapacityCard();
+});
 
 // DOM Elements
 const configForm = document.getElementById('config-form');
@@ -244,7 +345,7 @@ document.addEventListener('keydown', event => {
 });
 
 function startAiConnectionControls() {
-  loadAiConnection({ quiet: true }).catch(() => {});
+  loadAiConnection({ quiet: true }).catch(() => { });
   if (new URLSearchParams(window.location.search).get('open') === 'ai-connection') {
     window.openAiConnectionModal?.();
   }
@@ -793,11 +894,14 @@ scannerEnableToggle.addEventListener('change', async () => {
 // restoring a session. The gate emits this event only after it has a valid
 // access token and has verified entitlement.
 activeScannerInterval = setInterval(() => {
-  if (window.atcAuthenticated) fetchScannerStatus();
-}, 10000);
-window.addEventListener('atc:authenticated', () => { applyScannerPermissions(); fetchScannerStatus(); });
+  if (window.atcAuthenticated && canManageScanner()) fetchScannerStatus();
+}, 30000);
+window.addEventListener('atc:authenticated', () => {
+  applyScannerPermissions();
+  if (canManageScanner()) fetchScannerStatus();
+});
 applyScannerPermissions();
-if (window.atcAuthenticated) fetchScannerStatus();
+if (window.atcAuthenticated && canManageScanner()) fetchScannerStatus();
 
 // ── Rendering dashboard logic ──────────────────────────────────────────────
 
@@ -1200,7 +1304,9 @@ async function startStream(symbol, timeframe, useAi) {
     try {
       const payload = JSON.parse(event.data);
       if (payload.error) {
-        logMsg(`Server Error: ${payload.error}`, 'error');
+        const capacityError = payload.code === 'research_capacity_exceeded';
+        logMsg(capacityError ? `Research capacity reached: ${payload.error}` : `Server Error: ${payload.error}`, 'error');
+        if (capacityError) window.showAppToast?.(payload.error, 'error');
         userIntentDisconnect = true;
         if (socket) {
           socket.close(1000, "Server error reported");
@@ -1719,203 +1825,203 @@ function renderDashboard(data) {
 
     renderCioMemorandum(data, ai, decision, confidence);
 
-// Helper to format agent narrative into clean, structured short-form blocks for popup dossier
-function formatAgentNarrative(rawText) {
-  if (!rawText) return '<p style="font-size: 0.78rem; color: var(--text-muted); font-style: italic;">No detailed narrative provided.</p>';
+    // Helper to format agent narrative into clean, structured short-form blocks for popup dossier
+    function formatAgentNarrative(rawText) {
+      if (!rawText) return '<p style="font-size: 0.78rem; color: var(--text-muted); font-style: italic;">No detailed narrative provided.</p>';
 
-  // Parse numbered sections (e.g. "1. Market Structure", "2. Order Flow", "3. Risk & Invalidation")
-  const rawSections = rawText.split(/(?=\b\d+\.\s+[A-Z])/g).filter(s => s.trim().length > 0);
+      // Parse numbered sections (e.g. "1. Market Structure", "2. Order Flow", "3. Risk & Invalidation")
+      const rawSections = rawText.split(/(?=\b\d+\.\s+[A-Z])/g).filter(s => s.trim().length > 0);
 
-  if (rawSections.length > 1) {
-    return rawSections.map(sec => {
-      const trimmed = sec.trim();
-      const match = trimmed.match(/^(\d+\.\s*[^:\n]+)([\s\S]*)$/);
-      if (match) {
-        const title = match[1].trim();
-        let body = match[2].trim();
+      if (rawSections.length > 1) {
+        return rawSections.map(sec => {
+          const trimmed = sec.trim();
+          const match = trimmed.match(/^(\d+\.\s*[^:\n]+)([\s\S]*)$/);
+          if (match) {
+            const title = match[1].trim();
+            let body = match[2].trim();
 
-        // Convert bullet points into clean line blocks
-        const lines = body.split('\n').filter(l => l.trim().length > 0);
-        const formattedBody = lines.map(line => {
-          const l = line.trim();
-          if (l.startsWith('- ') || l.startsWith('* ')) {
-            return `<li style="margin-bottom: 4px;">${l.substring(2)}</li>`;
-          }
-          return `<p style="margin: 0 0 6px 0; line-height: 1.5; color: var(--text-secondary);">${l}</p>`;
-        }).join('');
+            // Convert bullet points into clean line blocks
+            const lines = body.split('\n').filter(l => l.trim().length > 0);
+            const formattedBody = lines.map(line => {
+              const l = line.trim();
+              if (l.startsWith('- ') || l.startsWith('* ')) {
+                return `<li style="margin-bottom: 4px;">${l.substring(2)}</li>`;
+              }
+              return `<p style="margin: 0 0 6px 0; line-height: 1.5; color: var(--text-secondary);">${l}</p>`;
+            }).join('');
 
-        return `
+            return `
           <div style="background: rgba(0, 0, 0, 0.35); border-left: 4px solid var(--neon-blue); border-radius: 6px; padding: 12px 14px; margin-bottom: 10px; border-top: 1px solid rgba(255,255,255,0.04); border-right: 1px solid rgba(255,255,255,0.04); border-bottom: 1px solid rgba(255,255,255,0.04);">
             <strong style="color: #ffffff; font-size: 0.85rem; font-weight: 800; display: block; margin-bottom: 6px; letter-spacing: 0.3px;">${title}</strong>
             <div style="font-size: 0.78rem; color: var(--text-secondary); line-height: 1.55;">${formattedBody}</div>
           </div>
         `;
+          }
+          return `<div style="background: rgba(0, 0, 0, 0.25); border-radius: 6px; padding: 10px 12px; margin-bottom: 8px; font-size: 0.78rem; color: var(--text-secondary); line-height: 1.55;">${trimmed}</div>`;
+        }).join('');
       }
-      return `<div style="background: rgba(0, 0, 0, 0.25); border-radius: 6px; padding: 10px 12px; margin-bottom: 8px; font-size: 0.78rem; color: var(--text-secondary); line-height: 1.55;">${trimmed}</div>`;
-    }).join('');
-  }
 
-  // If marked.js is available and text is standard markdown
-  if (typeof marked !== 'undefined' && typeof marked.parse === 'function') {
-    try {
-      return `<div class="agent-narrative-parsed" style="font-size: 0.78rem; color: var(--text-secondary); line-height: 1.6;">${marked.parse(rawText)}</div>`;
-    } catch (e) {}
-  }
+      // If marked.js is available and text is standard markdown
+      if (typeof marked !== 'undefined' && typeof marked.parse === 'function') {
+        try {
+          return `<div class="agent-narrative-parsed" style="font-size: 0.78rem; color: var(--text-secondary); line-height: 1.6;">${marked.parse(rawText)}</div>`;
+        } catch (e) { }
+      }
 
-  return `<div style="background: rgba(0, 0, 0, 0.25); border-radius: 6px; padding: 10px 12px; font-size: 0.78rem; color: var(--text-secondary); line-height: 1.55;">${rawText}</div>`;
-}
+      return `<div style="background: rgba(0, 0, 0, 0.25); border-radius: 6px; padding: 10px 12px; font-size: 0.78rem; color: var(--text-secondary); line-height: 1.55;">${rawText}</div>`;
+    }
 
-function escapeDossierText(value) {
-  return String(value ?? '').replace(/[&<>'"]/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[character]);
-}
+    function escapeDossierText(value) {
+      return String(value ?? '').replace(/[&<>'"]/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[character]);
+    }
 
-function dossierList(items, emptyCopy) {
-  const rows = Array.isArray(items) ? items.filter(Boolean) : [];
-  return rows.length
-    ? `<ul class="dossier-list">${rows.map(item => `<li>${escapeDossierText(item)}</li>`).join('')}</ul>`
-    : `<p class="dossier-narrative">${escapeDossierText(emptyCopy)}</p>`;
-}
+    function dossierList(items, emptyCopy) {
+      const rows = Array.isArray(items) ? items.filter(Boolean) : [];
+      return rows.length
+        ? `<ul class="dossier-list">${rows.map(item => `<li>${escapeDossierText(item)}</li>`).join('')}</ul>`
+        : `<p class="dossier-narrative">${escapeDossierText(emptyCopy)}</p>`;
+    }
 
-// Global Agent Dossier Modal Controller
-window.openAgentDossierModal = function(title, dataJsonStr) {
-  const modal = document.getElementById('agent-dossier-modal');
-  if (!modal) return;
-  let data = {};
-  try {
-    data = typeof dataJsonStr === 'string' ? JSON.parse(decodeURIComponent(dataJsonStr)) : dataJsonStr;
-  } catch (e) {
-    data = {};
-  }
+    // Global Agent Dossier Modal Controller
+    window.openAgentDossierModal = function (title, dataJsonStr) {
+      const modal = document.getElementById('agent-dossier-modal');
+      if (!modal) return;
+      let data = {};
+      try {
+        data = typeof dataJsonStr === 'string' ? JSON.parse(decodeURIComponent(dataJsonStr)) : dataJsonStr;
+      } catch (e) {
+        data = {};
+      }
 
-  const agentDetailsMap = {
-    'Quant Research Engine': { icon: '∑', desc: 'Probability, Expected Value & Regime' },
-    'Market Microstructure Engine': { icon: '📊', desc: 'Depth, Flow, Liquidity & Execution Limits' },
-    'Derivatives Engine': { icon: '📈', desc: 'Funding, OI, Positioning & Coverage Gaps' },
-    'Macro Intelligence Engine': { icon: '🌐', desc: 'Rates, DXY, Liquidity & Event Risk' },
-    'Risk Committee': { icon: '🛡️', desc: 'EV, Drawdown, Exposure & Allocation Vetoes' },
-    'Adversarial Review Engine': { icon: '⚖️', desc: 'Contradictions, Failure Modes & Falsification' }
-  };
+      const agentDetailsMap = {
+        'Quant Research Engine': { icon: '∑', desc: 'Probability, Expected Value & Regime' },
+        'Market Microstructure Engine': { icon: '📊', desc: 'Depth, Flow, Liquidity & Execution Limits' },
+        'Derivatives Engine': { icon: '📈', desc: 'Funding, OI, Positioning & Coverage Gaps' },
+        'Macro Intelligence Engine': { icon: '🌐', desc: 'Rates, DXY, Liquidity & Event Risk' },
+        'Risk Committee': { icon: '🛡️', desc: 'EV, Drawdown, Exposure & Allocation Vetoes' },
+        'Adversarial Review Engine': { icon: '⚖️', desc: 'Contradictions, Failure Modes & Falsification' }
+      };
 
-  const details = agentDetailsMap[title] || { icon: '🤖', desc: 'Co-Pilot Analysis Role' };
-  const iconEl = document.getElementById('dossier-modal-icon');
-  const titleEl = document.getElementById('dossier-modal-title');
-  const subtitleEl = document.getElementById('dossier-modal-subtitle');
-  const badgeEl = document.getElementById('dossier-modal-badge');
-  const bodyEl = document.getElementById('dossier-modal-body');
+      const details = agentDetailsMap[title] || { icon: '🤖', desc: 'Co-Pilot Analysis Role' };
+      const iconEl = document.getElementById('dossier-modal-icon');
+      const titleEl = document.getElementById('dossier-modal-title');
+      const subtitleEl = document.getElementById('dossier-modal-subtitle');
+      const badgeEl = document.getElementById('dossier-modal-badge');
+      const bodyEl = document.getElementById('dossier-modal-body');
 
-  if (iconEl) {
-    iconEl.textContent = details.icon;
-    iconEl.classList.add('dossier-modal-icon-shell');
-  }
-  if (titleEl) titleEl.textContent = title;
-  if (subtitleEl) subtitleEl.textContent = details.desc;
+      if (iconEl) {
+        iconEl.textContent = details.icon;
+        iconEl.classList.add('dossier-modal-icon-shell');
+      }
+      if (titleEl) titleEl.textContent = title;
+      if (subtitleEl) subtitleEl.textContent = details.desc;
 
-  const bias = data.bias || (data.severity_score !== undefined ? `Severity: ${data.severity_score}/10` : data.status || '');
-  const convictionVal = data.confidence_pct !== undefined ? data.confidence_pct : (data.severity_score !== undefined ? data.severity_score * 10 : (data.approved_for_allocation ? 100 : 0));
+      const bias = data.bias || (data.severity_score !== undefined ? `Severity: ${data.severity_score}/10` : data.status || '');
+      const convictionVal = data.confidence_pct !== undefined ? data.confidence_pct : (data.severity_score !== undefined ? data.severity_score * 10 : (data.approved_for_allocation ? 100 : 0));
 
-  let badgeStyle = "background: rgba(255,255,255,0.05); color: var(--text-secondary);";
-  if (bias === "BULLISH") {
-    badgeStyle = "background: rgba(80, 205, 137, 0.2); color: #50cd89; border: 1px solid rgba(80, 205, 137, 0.5); font-weight: 800;";
-  } else if (bias === "BEARISH") {
-    badgeStyle = "background: rgba(241, 65, 108, 0.2); color: #f1416c; border: 1px solid rgba(241, 65, 108, 0.5); font-weight: 800;";
-  }
+      let badgeStyle = "background: rgba(255,255,255,0.05); color: var(--text-secondary);";
+      if (bias === "BULLISH") {
+        badgeStyle = "background: rgba(80, 205, 137, 0.2); color: #50cd89; border: 1px solid rgba(80, 205, 137, 0.5); font-weight: 800;";
+      } else if (bias === "BEARISH") {
+        badgeStyle = "background: rgba(241, 65, 108, 0.2); color: #f1416c; border: 1px solid rgba(241, 65, 108, 0.5); font-weight: 800;";
+      }
 
-  if (badgeEl) {
-    badgeEl.innerHTML = `
+      if (badgeEl) {
+        badgeEl.innerHTML = `
       <span class="dossier-status-badge" style="${badgeStyle}">${escapeDossierText(bias || 'NEUTRAL')}</span>
       <span class="dossier-status-badge" style="background: rgba(255,255,255,.05); color: var(--text-primary); border: 1px solid rgba(255,255,255,.1);">${escapeDossierText(convictionVal)}% CONFIDENCE</span>
     `;
-  }
-
-  // Extract narrative text
-  let narrativeText = data.narrative || data.analysis || data.contrarian_view || data.pre_mortem_critique || data.justification || data.details || data.critique || data.summary || '';
-  if (!narrativeText && Array.isArray(data.evidence)) {
-    const evidence = data.evidence.map(item => `- **${item.metric || 'Evidence'}:** ${JSON.stringify(item.value)} (${item.source || 'source unavailable'})`);
-    const contradictions = (data.contradictory_evidence || []).map(item => `- ${item}`);
-    const unknowns = (data.unknowns || []).map(item => `- ${item}`);
-    narrativeText = [
-      evidence.length ? `### Measured Evidence\n${evidence.join('\n')}` : '',
-      contradictions.length ? `### Contradictory Evidence\n${contradictions.join('\n')}` : '',
-      unknowns.length ? `### Unknowns\n${unknowns.join('\n')}` : '',
-    ].filter(Boolean).join('\n\n');
-  }
-
-  // If narrative is a generic placeholder or missing, extract matching section from lastReportMd
-  if ((!narrativeText || narrativeText.includes("Derived from") || narrativeText.length < 35) && window.lastReportMd) {
-    const titleIndexMap = {
-      'Market Structure Analyst': 1,
-      'Order Flow Specialist': 2,
-      'Derivatives Analyst': 3,
-      'Macro Strategist': 4,
-      'Sentiment Analyst': 5,
-      'Quant Analyst': 6,
-      'Risk Manager': 7,
-      "Devil's Advocate": 8,
-      "Pre-Mortem Analyst": 9
-    };
-    const titleKeywords = {
-      'Market Structure Analyst': ['market structure', 'structure'],
-      'Order Flow Specialist': ['order flow', 'flow'],
-      'Derivatives Analyst': ['derivatives', 'positioning'],
-      'Macro Strategist': ['macro', 'calendar'],
-      'Sentiment Analyst': ['sentiment', 'narrative'],
-      'Quant Analyst': ['quant'],
-      'Risk Manager': ['risk manager', 'risk'],
-      "Devil's Advocate": ['devil', 'advocate'],
-      "Pre-Mortem Analyst": ['pre-mortem', 'pre mortem', 'failure']
-    };
-
-    const targetIdx = titleIndexMap[title];
-    const sections = window.lastReportMd.split(/\n(?=#{1,4}\s+|\b\d+\.\s+)/g);
-    let foundSection = null;
-
-    if (targetIdx) {
-      const numRegex = new RegExp(`^(?:#{1,4}\\s*)?${targetIdx}\\.\\s+`);
-      for (const sec of sections) {
-        if (numRegex.test(sec.trim())) {
-          foundSection = sec.trim();
-          break;
-        }
       }
-    }
 
-    if (!foundSection) {
-      const keywords = titleKeywords[title] || [];
-      for (const sec of sections) {
-        const secLower = sec.toLowerCase();
-        if (keywords.some(kw => secLower.includes(kw))) {
-          foundSection = sec.strip ? sec.strip() : sec.trim();
-          break;
-        }
+      // Extract narrative text
+      let narrativeText = data.narrative || data.analysis || data.contrarian_view || data.pre_mortem_critique || data.justification || data.details || data.critique || data.summary || '';
+      if (!narrativeText && Array.isArray(data.evidence)) {
+        const evidence = data.evidence.map(item => `- **${item.metric || 'Evidence'}:** ${JSON.stringify(item.value)} (${item.source || 'source unavailable'})`);
+        const contradictions = (data.contradictory_evidence || []).map(item => `- ${item}`);
+        const unknowns = (data.unknowns || []).map(item => `- ${item}`);
+        narrativeText = [
+          evidence.length ? `### Measured Evidence\n${evidence.join('\n')}` : '',
+          contradictions.length ? `### Contradictory Evidence\n${contradictions.join('\n')}` : '',
+          unknowns.length ? `### Unknowns\n${unknowns.join('\n')}` : '',
+        ].filter(Boolean).join('\n\n');
       }
-    }
 
-    if (foundSection) narrativeText = foundSection;
-  }
+      // If narrative is a generic placeholder or missing, extract matching section from lastReportMd
+      if ((!narrativeText || narrativeText.includes("Derived from") || narrativeText.length < 35) && window.lastReportMd) {
+        const titleIndexMap = {
+          'Market Structure Analyst': 1,
+          'Order Flow Specialist': 2,
+          'Derivatives Analyst': 3,
+          'Macro Strategist': 4,
+          'Sentiment Analyst': 5,
+          'Quant Analyst': 6,
+          'Risk Manager': 7,
+          "Devil's Advocate": 8,
+          "Pre-Mortem Analyst": 9
+        };
+        const titleKeywords = {
+          'Market Structure Analyst': ['market structure', 'structure'],
+          'Order Flow Specialist': ['order flow', 'flow'],
+          'Derivatives Analyst': ['derivatives', 'positioning'],
+          'Macro Strategist': ['macro', 'calendar'],
+          'Sentiment Analyst': ['sentiment', 'narrative'],
+          'Quant Analyst': ['quant'],
+          'Risk Manager': ['risk manager', 'risk'],
+          "Devil's Advocate": ['devil', 'advocate'],
+          "Pre-Mortem Analyst": ['pre-mortem', 'pre mortem', 'failure']
+        };
 
-  // Extract telemetry fields for detailed grid
-  const ignoreKeys = new Set([
-    'bias', 'conviction', 'severity_score', 'narrative', 'analysis',
-    'contrarian_view', 'pre_mortem_critique', 'justification', 'details',
-    'critique', 'summary', 'error', 'status'
-  ]);
+        const targetIdx = titleIndexMap[title];
+        const sections = window.lastReportMd.split(/\n(?=#{1,4}\s+|\b\d+\.\s+)/g);
+        let foundSection = null;
 
-  const telemetryItems = [];
-  for (const [key, val] of Object.entries(data)) {
-    if (!ignoreKeys.has(key) && val !== null && val !== undefined && val !== '') {
-      const formattedKey = key.replace(/_/g, ' ').toUpperCase();
-      let formattedVal = val;
-      if (typeof val === 'object') formattedVal = JSON.stringify(val);
-      telemetryItems.push(`
+        if (targetIdx) {
+          const numRegex = new RegExp(`^(?:#{1,4}\\s*)?${targetIdx}\\.\\s+`);
+          for (const sec of sections) {
+            if (numRegex.test(sec.trim())) {
+              foundSection = sec.trim();
+              break;
+            }
+          }
+        }
+
+        if (!foundSection) {
+          const keywords = titleKeywords[title] || [];
+          for (const sec of sections) {
+            const secLower = sec.toLowerCase();
+            if (keywords.some(kw => secLower.includes(kw))) {
+              foundSection = sec.strip ? sec.strip() : sec.trim();
+              break;
+            }
+          }
+        }
+
+        if (foundSection) narrativeText = foundSection;
+      }
+
+      // Extract telemetry fields for detailed grid
+      const ignoreKeys = new Set([
+        'bias', 'conviction', 'severity_score', 'narrative', 'analysis',
+        'contrarian_view', 'pre_mortem_critique', 'justification', 'details',
+        'critique', 'summary', 'error', 'status'
+      ]);
+
+      const telemetryItems = [];
+      for (const [key, val] of Object.entries(data)) {
+        if (!ignoreKeys.has(key) && val !== null && val !== undefined && val !== '') {
+          const formattedKey = key.replace(/_/g, ' ').toUpperCase();
+          let formattedVal = val;
+          if (typeof val === 'object') formattedVal = JSON.stringify(val);
+          telemetryItems.push(`
         <div style="background: rgba(0,0,0,0.35); border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; padding: 8px 12px; display: flex; flex-direction: column; gap: 3px;">
           <span style="font-size: 0.6rem; color: var(--text-muted); font-weight: 700; letter-spacing: 0.5px;">${formattedKey}</span>
           <span style="font-size: 0.78rem; color: var(--neon-blue); font-family: var(--font-mono); font-weight: 600;">${formattedVal}</span>
         </div>
       `);
-    }
-  }
+        }
+      }
 
-  const telemetryGridHtml = telemetryItems.length > 0 ? `
+      const telemetryGridHtml = telemetryItems.length > 0 ? `
     <div style="margin-top: 1rem; padding-top: 0.75rem; border-top: 1px dashed rgba(255,255,255,0.1);">
       <div style="font-size: 0.72rem; font-weight: 800; color: var(--neon-blue); letter-spacing: 0.5px; text-transform: uppercase; margin-bottom: 0.5rem;">
         📊 Key Quantitative Metrics & Telemetry
@@ -1926,24 +2032,24 @@ window.openAgentDossierModal = function(title, dataJsonStr) {
     </div>
   ` : '';
 
-  if (bodyEl) {
-    bodyEl.innerHTML = `
+      if (bodyEl) {
+        bodyEl.innerHTML = `
       <div style="font-size: 0.72rem; font-weight: 800; color: var(--neon-blue); letter-spacing: 0.5px; text-transform: uppercase; margin-bottom: 0.6rem;">
         📋 Engine Evidence Dossier
       </div>
       ${formatAgentNarrative(narrativeText)}
       ${telemetryGridHtml}
     `;
-  }
+      }
 
-  if (bodyEl) {
-    const evidence = Array.isArray(data.evidence) ? data.evidence : [];
-    const evidenceRows = evidence.length ? evidence.map(item => `
+      if (bodyEl) {
+        const evidence = Array.isArray(data.evidence) ? data.evidence : [];
+        const evidenceRows = evidence.length ? evidence.map(item => `
       <div class="dossier-evidence-row">
         <div><span class="dossier-metric">${escapeDossierText(item.metric || 'Measured evidence')}</span><span class="dossier-value">${escapeDossierText(typeof item.value === 'object' ? JSON.stringify(item.value) : item.value)}</span></div>
         <div class="dossier-source">${escapeDossierText(item.source || 'Source unavailable')}</div>
       </div>`).join('') : '<p class="dossier-narrative">No measured evidence was returned by this engine.</p>';
-    bodyEl.innerHTML = `
+        bodyEl.innerHTML = `
       <div class="dossier-brief">
         <div class="dossier-summary">
           <section><h4 class="dossier-section-label">Executive summary</h4><p class="dossier-narrative">${escapeDossierText(narrativeText || 'This engine returned structured evidence without a narrative summary.')}</p></section>
@@ -1956,23 +2062,23 @@ window.openAgentDossierModal = function(title, dataJsonStr) {
           <section class="dossier-panel"><h4 class="dossier-section-label">Engine limitations</h4>${dossierList(data.limitations, 'No engine limitations were supplied.')}</section>
         </div>
       </div>`;
-    bodyEl.scrollTop = 0;
-  }
-  modal.style.display = 'flex';
-  animateModalIn(modal);
-};
+        bodyEl.scrollTop = 0;
+      }
+      modal.style.display = 'flex';
+      animateModalIn(modal);
+    };
 
-window.closeAgentDossierModal = function() {
-  const modal = document.getElementById('agent-dossier-modal');
-  if (modal) { modal.classList.remove('motion-open'); modal.style.display = 'none'; }
-};
+    window.closeAgentDossierModal = function () {
+      const modal = document.getElementById('agent-dossier-modal');
+      if (modal) { modal.classList.remove('motion-open'); modal.style.display = 'none'; }
+    };
 
-if (!window.agentDossierEscapeBound) {
-  document.addEventListener('keydown', event => {
-    if (event.key === 'Escape') window.closeAgentDossierModal?.();
-  });
-  window.agentDossierEscapeBound = true;
-}
+    if (!window.agentDossierEscapeBound) {
+      document.addEventListener('keydown', event => {
+        if (event.key === 'Escape') window.closeAgentDossierModal?.();
+      });
+      window.agentDossierEscapeBound = true;
+    }
 
     // Render independent evidence engines and control committees.
     if (ai.agent_reports && Object.values(ai.agent_reports).some(report => report && !report.error)) {
@@ -2211,15 +2317,15 @@ function renderMonitorEvidenceState(data, status, isPublished, isTerminalFailure
   const title = blocked ? 'Published lifecycle has reached a terminal state'
     : isPublished ? 'Published signal is under lifecycle control'
       : tacticalReady ? 'Primary-timeframe setup is ready for tactical review'
-      : tacticalCandidate ? 'Primary-timeframe scenario is awaiting measured proof'
-      : waitingForBreak ? 'Completed structure break awaited'
-        : 'Monitoring for a qualified causal alignment';
+        : tacticalCandidate ? 'Primary-timeframe scenario is awaiting measured proof'
+          : waitingForBreak ? 'Completed structure break awaited'
+            : 'Monitoring for a qualified causal alignment';
   const detail = blocked ? reason
     : isPublished ? 'Entry, stop, targets, and outcome controls are now active for this published signal.'
       : tacticalReady ? 'The setup is visible above, but only higher-timeframe alignment can upgrade it to institutional confirmation.'
-      : tacticalCandidate ? reason
-      : waitingForBreak ? 'The system will not publish early. It needs a completed candle through the relevant 20-candle structure level.'
-        : reason;
+        : tacticalCandidate ? reason
+          : waitingForBreak ? 'The system will not publish early. It needs a completed candle through the relevant 20-candle structure level.'
+            : reason;
 
   if (monitorEvidenceHero) monitorEvidenceHero.className = `monitor-evidence-hero ${state}`;
   if (monitorEvidenceState) monitorEvidenceState.textContent = `EVIDENCE STATE · ${stateCopy}`;
@@ -2231,10 +2337,10 @@ function renderMonitorEvidenceState(data, status, isPublished, isTerminalFailure
   if (monitorMissingDetail) monitorMissingDetail.textContent = tacticalReady
     ? 'This remains a tactical watch. It does not publish a trade signal until the higher timeframe confirms the same direction.'
     : tacticalCandidate
-    ? `${reason} This is a research watch only; it cannot publish a trade signal.`
-    : waitingForBreak
-    ? 'Wait for the current candle to close through the relevant structure level; an intrabar move is not confirmation.'
-    : reason;
+      ? `${reason} This is a research watch only; it cannot publish a trade signal.`
+      : waitingForBreak
+        ? 'Wait for the current candle to close through the relevant structure level; an intrabar move is not confirmation.'
+        : reason;
 
   if (monitorTradeLifecycle) monitorTradeLifecycle.classList.toggle('hidden', !isPublished);
   if (monitorWatchPlan) monitorWatchPlan.classList.toggle('hidden', isPublished);
@@ -2244,8 +2350,8 @@ function renderMonitorEvidenceState(data, status, isPublished, isTerminalFailure
   if (monitorWatchStepTwoDetail) monitorWatchStepTwoDetail.textContent = tacticalCandidate
     ? reason
     : waitingForBreak
-    ? 'A completed close through the relevant 20-candle structure level is required before any signal can be published.'
-    : reason;
+      ? 'A completed close through the relevant 20-candle structure level is required before any signal can be published.'
+      : reason;
 
   if (monitorGateStrip) {
     const controls = [
