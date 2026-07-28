@@ -9,14 +9,16 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import Any
+from sqlalchemy import select, text
 
 from app.brains.council import run_ai_council
 from app.brains.signal_builder import build_ai_driven_trade_setup, evaluate_ai_driven_approval
-from app.data_sources.data_aggregator import fetch_pair_discovery_data
-from app.db.database import AsyncSessionLocal
+from app.data_sources.data_aggregator import fetch_market_intelligence, fetch_pair_discovery_data
+from app.db.database import AsyncSessionLocal, engine
 from app.db.models import ScannerConfiguration, TradeSignal
-from app.signal_service import get_active_signal, ensure_signal_database
+from app.signal_service import _lock_signal_key, get_active_signal, ensure_signal_database
 from app.brains.signal_lifecycle import build_signal_seed
+from app.quant.live_confirmation import verify_main_signal_snapshot
 from app.settings import get_settings
 
 logger = logging.getLogger(__name__)
@@ -97,14 +99,26 @@ async def run_single_symbol_scan(symbol: str, timeframe: str, settings: Any) -> 
                 "reason": "Active signal already exists.",
             }
 
-        # Run full AI Council deliberation
-        cio_result = await run_ai_council(symbol, timeframe, settings)
+        # Run the council and the exact same completed-candle confirmation
+        # gate used by the main research workspace before anything can enter
+        # the shared signal ledger.
+        intelligence = await fetch_market_intelligence(symbol, timeframe, settings)
+        cio_result = await run_ai_council(symbol, timeframe, settings, intelligence=intelligence)
 
         # Build trade setup
         # The compact summary is for display; lifecycle context should use
         # the complete feature snapshot used by the council.
         features = cio_result.get("full_quant_features") or cio_result.get("quant_features", {})
         trade_setup = build_ai_driven_trade_setup(cio_result, features, settings)
+        direction_side = "LONG" if cio_result.get("decision") == "BUY_WATCH" else "SHORT" if cio_result.get("decision") == "SELL_WATCH" else None
+        confirmation_timeframes = {"1m": "5m", "5m": "1h", "15m": "4h", "1h": "1d", "4h": "1d", "1d": "1w"}
+        higher = (intelligence.get("multi_tf_candles", {}) or {}).get(confirmation_timeframes.get(timeframe), [])
+        cio_result["live_confirmation"] = verify_main_signal_snapshot(
+            symbol=symbol, timeframe=timeframe, side=direction_side,
+            candles=intelligence.get("candles", []), higher_candles=higher,
+            order_book=intelligence.get("order_book", {}), funding=intelligence.get("funding", {}),
+            derivatives=intelligence.get("derivatives", {}),
+        )
 
         # Evaluate approval
         approval = evaluate_ai_driven_approval(cio_result, trade_setup)
@@ -115,6 +129,15 @@ async def run_single_symbol_scan(symbol: str, timeframe: str, settings: Any) -> 
             # Prepare signal database and insert the new signal
             await ensure_signal_database()
             async with AsyncSessionLocal() as db:
+                await _lock_signal_key(db, symbol, timeframe)
+                existing = await db.scalar(
+                    select(TradeSignal)
+                    .where(TradeSignal.symbol == symbol, TradeSignal.timeframe == timeframe, TradeSignal.status.in_(("PENDING_ENTRY", "ACTIVE", "TP1_SECURED", "TP2_SECURED", "TP3_SECURED")))
+                    .order_by(TradeSignal.id.desc())
+                    .limit(1)
+                )
+                if existing:
+                    return {"symbol": symbol, "status": "SKIPPED", "reason": "An active signal was published by another worker."}
                 current_price = cio_result["current_price"]
                 market_context = {
                     "trend_status": features.get("trend", {}).get("primary", {}).get("status"),
@@ -178,15 +201,27 @@ async def run_scan_cycle() -> None:
         logger.warning("Scan cycle already in progress. Skipping.")
         return
 
+    # PostgreSQL advisory locks make scanner ownership explicit when a Docker
+    # deployment has more than one app process. Keep the connection open for
+    # the run because session-level advisory locks live on that connection.
+    lease_connection = None
+    if engine.dialect.name == "postgresql":
+        lease_connection = await engine.connect()
+        acquired = await lease_connection.scalar(text("SELECT pg_try_advisory_lock(hashtext('atc:autonomous-scanner'))"))
+        if not acquired:
+            await lease_connection.close()
+            logger.info("Another worker owns the autonomous scanner lease; skipping this cycle.")
+            return
+
     scanner_state["is_scanning"] = True
     scanner_state["last_scan_time"] = datetime.now(timezone.utc).isoformat()
     scanner_state["current_symbol"] = None
 
     settings = get_settings()
-    configuration = await get_scanner_configuration(settings)
-    timeframe = "15m"  # Standard default timeframe for scanning
 
     try:
+        configuration = await get_scanner_configuration(settings)
+        timeframe = "15m"  # Standard default timeframe for scanning
         # Determine symbols to scan
         symbols = list(configuration["watchlist"])
         scanner_state["watchlist"] = symbols
@@ -238,6 +273,11 @@ async def run_scan_cycle() -> None:
         interval = settings.scan_interval_seconds
         next_run = datetime.now(timezone.utc).timestamp() + interval
         scanner_state["next_scan_time"] = datetime.fromtimestamp(next_run, timezone.utc).isoformat()
+        if lease_connection is not None:
+            try:
+                await lease_connection.execute(text("SELECT pg_advisory_unlock(hashtext('atc:autonomous-scanner'))"))
+            finally:
+                await lease_connection.close()
 
 
 async def autonomous_scanner_loop() -> None:

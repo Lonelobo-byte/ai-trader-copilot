@@ -15,7 +15,7 @@ from sqlalchemy import select
 
 from app.brains.signal_lifecycle import TERMINAL_SIGNAL_STATUSES
 from app.db.database import AsyncSessionLocal
-from app.db.models import TradeSignal, AnalysisSession
+from app.db.models import TradeSignal
 
 logger = logging.getLogger(__name__)
 

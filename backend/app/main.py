@@ -38,8 +38,8 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     from .db.database import init_db
-    from .background_tasks import outcome_tracker_loop
     from .autonomous_scanner import autonomous_scanner_loop
+    from .radar_service import radar_warm_loop
 
     settings = get_settings()
     if settings.app_env.lower() not in {"local", "test", "development"} and not settings.auth_jwt_secret:
@@ -57,8 +57,8 @@ async def lifespan(app: FastAPI):
     if settings.background_jobs_enabled:
         tasks = [
             asyncio.create_task(signal_monitor_loop()),
-            asyncio.create_task(outcome_tracker_loop()),
             asyncio.create_task(autonomous_scanner_loop()),
+            asyncio.create_task(radar_warm_loop()),
         ]
     else:
         logger.info("Background jobs are disabled for this application process.")
@@ -69,6 +69,8 @@ async def lifespan(app: FastAPI):
         await asyncio.gather(*tasks, return_exceptions=True)
     except Exception:
         pass
+    from .data_sources.http_client import close_http_client
+    await close_http_client()
 
 
 app = FastAPI(title="Institutional Crypto Market Intelligence System", version="0.6.0", lifespan=lifespan)
@@ -95,6 +97,13 @@ async def unhandled_application_error(request: Request, exc: Exception):
 
 @app.middleware("http")
 async def log_request_time(request: Request, call_next):
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            if int(content_length) > max(1, int(_settings.max_request_body_bytes)):
+                return JSONResponse(status_code=413, content={"detail": "Request body is too large."})
+        except ValueError:
+            return JSONResponse(status_code=400, content={"detail": "Invalid Content-Length header."})
     start_time = time()
     response = await call_next(request)
     response.headers["X-Content-Type-Options"] = "nosniff"

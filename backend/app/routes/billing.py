@@ -35,6 +35,7 @@ logger = logging.getLogger(__name__)
 _ACTIVE_PROVIDER_STATUSES = {"waiting", "confirming", "sending", "partially_paid"}
 _TERMINAL_PROVIDER_STATUSES = {"finished", "confirmed", "failed", "expired", "refunded"}
 _CHECKOUT_LOCKS: dict[str, asyncio.Lock] = {}
+_MAX_CHECKOUT_LOCKS = 2_000
 
 
 class CheckoutRequest(BaseModel):
@@ -271,6 +272,12 @@ async def checkout(body: CheckoutRequest, request: Request, user: User = Depends
     # Lock the user row for the entire provider create-and-persist sequence.
     # The in-process lock protects SQLite/local runs, while FOR UPDATE makes
     # the same guarantee across Docker workers backed by PostgreSQL.
+    if len(_CHECKOUT_LOCKS) >= _MAX_CHECKOUT_LOCKS:
+        for stale_user, stale_lock in list(_CHECKOUT_LOCKS.items()):
+            if not stale_lock.locked():
+                _CHECKOUT_LOCKS.pop(stale_user, None)
+            if len(_CHECKOUT_LOCKS) < _MAX_CHECKOUT_LOCKS:
+                break
     lock = _CHECKOUT_LOCKS.setdefault(user.id, asyncio.Lock())
     async with lock:
         async with AsyncSessionLocal() as session:
@@ -341,13 +348,14 @@ async def checkout(body: CheckoutRequest, request: Request, user: User = Depends
 
 
 @router.get("/payment-status")
-async def payment_status(user: User = Depends(current_user)):
+async def payment_status(request: Request, user: User = Depends(current_user)):
     """Return the latest payment and recheck known provider transaction IDs.
 
     This endpoint is called after the hosted checkout redirects back.  It never
     trusts the redirect: activation happens only after a signed IPN followed by
     an authoritative NOWPayments payment-status response.
     """
+    enforce_rate_limit(request, f"payment_status:{user.id}", limit=18, window_seconds=60)
     async with AsyncSessionLocal() as session:
         payment = await session.scalar(select(Payment).where(Payment.user_id == user.id).order_by(Payment.created_at.desc()))
         if payment is None:
@@ -382,10 +390,10 @@ async def nowpayments_webhook(request: Request):
         logger.warning("NOWPayments webhook reconciliation delayed for %s: %s", provider_id, exc)
         raise HTTPException(status_code=503, detail="Payment verification is temporarily unavailable; retry will occur.") from exc
     async with AsyncSessionLocal() as session:
-        payment = await session.scalar(select(Payment).where(Payment.order_id == order_id))
+        payment = await session.scalar(select(Payment).where(Payment.order_id == order_id).with_for_update())
         if payment is None:
             raise HTTPException(status_code=404, detail="Payment order not found.")
-        subscription = await session.get(Subscription, payment.subscription_id)
+        subscription = await session.get(Subscription, payment.subscription_id, with_for_update=True)
         try:
             _apply_provider_status(payment, subscription, provider_payload)
         except ValueError as exc:

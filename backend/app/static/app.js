@@ -1825,52 +1825,6 @@ function renderDashboard(data) {
 
     renderCioMemorandum(data, ai, decision, confidence);
 
-    // Helper to format agent narrative into clean, structured short-form blocks for popup dossier
-    function formatAgentNarrative(rawText) {
-      if (!rawText) return '<p style="font-size: 0.78rem; color: var(--text-muted); font-style: italic;">No detailed narrative provided.</p>';
-
-      // Parse numbered sections (e.g. "1. Market Structure", "2. Order Flow", "3. Risk & Invalidation")
-      const rawSections = rawText.split(/(?=\b\d+\.\s+[A-Z])/g).filter(s => s.trim().length > 0);
-
-      if (rawSections.length > 1) {
-        return rawSections.map(sec => {
-          const trimmed = sec.trim();
-          const match = trimmed.match(/^(\d+\.\s*[^:\n]+)([\s\S]*)$/);
-          if (match) {
-            const title = match[1].trim();
-            let body = match[2].trim();
-
-            // Convert bullet points into clean line blocks
-            const lines = body.split('\n').filter(l => l.trim().length > 0);
-            const formattedBody = lines.map(line => {
-              const l = line.trim();
-              if (l.startsWith('- ') || l.startsWith('* ')) {
-                return `<li style="margin-bottom: 4px;">${l.substring(2)}</li>`;
-              }
-              return `<p style="margin: 0 0 6px 0; line-height: 1.5; color: var(--text-secondary);">${l}</p>`;
-            }).join('');
-
-            return `
-          <div style="background: rgba(0, 0, 0, 0.35); border-left: 4px solid var(--neon-blue); border-radius: 6px; padding: 12px 14px; margin-bottom: 10px; border-top: 1px solid rgba(255,255,255,0.04); border-right: 1px solid rgba(255,255,255,0.04); border-bottom: 1px solid rgba(255,255,255,0.04);">
-            <strong style="color: #ffffff; font-size: 0.85rem; font-weight: 800; display: block; margin-bottom: 6px; letter-spacing: 0.3px;">${title}</strong>
-            <div style="font-size: 0.78rem; color: var(--text-secondary); line-height: 1.55;">${formattedBody}</div>
-          </div>
-        `;
-          }
-          return `<div style="background: rgba(0, 0, 0, 0.25); border-radius: 6px; padding: 10px 12px; margin-bottom: 8px; font-size: 0.78rem; color: var(--text-secondary); line-height: 1.55;">${trimmed}</div>`;
-        }).join('');
-      }
-
-      // If marked.js is available and text is standard markdown
-      if (typeof marked !== 'undefined' && typeof marked.parse === 'function') {
-        try {
-          return `<div class="agent-narrative-parsed" style="font-size: 0.78rem; color: var(--text-secondary); line-height: 1.6;">${marked.parse(rawText)}</div>`;
-        } catch (e) { }
-      }
-
-      return `<div style="background: rgba(0, 0, 0, 0.25); border-radius: 6px; padding: 10px 12px; font-size: 0.78rem; color: var(--text-secondary); line-height: 1.55;">${rawText}</div>`;
-    }
-
     function escapeDossierText(value) {
       return String(value ?? '').replace(/[&<>'"]/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[character]);
     }
@@ -2014,8 +1968,8 @@ function renderDashboard(data) {
           if (typeof val === 'object') formattedVal = JSON.stringify(val);
           telemetryItems.push(`
         <div style="background: rgba(0,0,0,0.35); border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; padding: 8px 12px; display: flex; flex-direction: column; gap: 3px;">
-          <span style="font-size: 0.6rem; color: var(--text-muted); font-weight: 700; letter-spacing: 0.5px;">${formattedKey}</span>
-          <span style="font-size: 0.78rem; color: var(--neon-blue); font-family: var(--font-mono); font-weight: 600;">${formattedVal}</span>
+          <span style="font-size: 0.6rem; color: var(--text-muted); font-weight: 700; letter-spacing: 0.5px;">${escapeDossierText(formattedKey)}</span>
+          <span style="font-size: 0.78rem; color: var(--neon-blue); font-family: var(--font-mono); font-weight: 600;">${escapeDossierText(formattedVal)}</span>
         </div>
       `);
         }
@@ -2037,7 +1991,7 @@ function renderDashboard(data) {
       <div style="font-size: 0.72rem; font-weight: 800; color: var(--neon-blue); letter-spacing: 0.5px; text-transform: uppercase; margin-bottom: 0.6rem;">
         📋 Engine Evidence Dossier
       </div>
-      ${formatAgentNarrative(narrativeText)}
+      ${escapeDossierText(narrativeText || 'No detailed narrative provided.')}
       ${telemetryGridHtml}
     `;
       }
@@ -2086,9 +2040,11 @@ function renderDashboard(data) {
       councilAgentsGrid.classList.remove('is-empty');
       const agents = ai.agent_reports;
 
+      const dossierData = new Map();
       const createAgentCardHtml = (title, data, cssClass) => {
         if (!data || data.error) return '';
-        const encodedData = encodeURIComponent(JSON.stringify(data));
+        const dossierKey = crypto.randomUUID();
+        dossierData.set(dossierKey, data);
 
         const bias = data.bias || (data.severity_score !== undefined ? `Severity: ${data.severity_score}/10` : data.status || '');
 
@@ -2126,20 +2082,18 @@ function renderDashboard(data) {
         const details = agentDetailsMap[title] || { icon: '🤖', desc: 'Co-Pilot Analysis Role' };
         const icon = details.icon;
         const desc = details.desc;
-        const convictionVal = data.confidence_pct !== undefined ? data.confidence_pct : (data.severity_score !== undefined ? data.severity_score * 10 : (data.approved_for_allocation ? 100 : 0));
-        const biasHtml = bias ? `<span class="meta-badge" style="${badgeStyle}">${bias}</span>` : '';
-
-        const safeTitle = title.replace(/'/g, "\\'");
+        const convictionVal = Math.max(0, Math.min(100, Number(data.confidence_pct !== undefined ? data.confidence_pct : (data.severity_score !== undefined ? data.severity_score * 10 : (data.approved_for_allocation ? 100 : 0))) || 0));
+        const biasHtml = bias ? `<span class="meta-badge" style="${badgeStyle}">${escapeDossierText(bias)}</span>` : '';
 
         return `
-          <div class="agent-card ${cssClass}" style="position: relative; display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 1rem 1.25rem; min-height: 85px; cursor: pointer; transition: all 0.2s ease;" onclick="openAgentDossierModal('${safeTitle}', '${encodedData}')">
+          <button type="button" class="agent-card ${cssClass}" data-dossier-key="${dossierKey}" data-dossier-title="${escapeDossierText(title)}" style="position: relative; display: flex; width: 100%; border: 0; text-align: left; align-items: center; justify-content: space-between; gap: 1rem; padding: 1rem 1.25rem; min-height: 85px; cursor: pointer; transition: all 0.2s ease;">
             <div style="position: absolute; top: 0; left: 0; width: 5px; height: 5px; border-top: 1px solid rgba(255,255,255,0.12); border-left: 1px solid rgba(255,255,255,0.12); pointer-events: none;"></div>
             <div style="position: absolute; bottom: 0; right: 0; width: 5px; height: 5px; border-bottom: 1px solid rgba(255,255,255,0.12); border-right: 1px solid rgba(255,255,255,0.12); pointer-events: none;"></div>
             
             <div style="display: flex; flex-direction: column; gap: 0.25rem; flex-grow: 1;">
               <div style="display: flex; align-items: center; gap: 0.5rem;">
                 <span class="agent-icon" style="font-size: 1.15rem;">${icon}</span>
-                <span class="agent-name" style="font-size: 0.8rem; font-weight: 700; color: var(--text-primary);">${title}</span>
+                <span class="agent-name" style="font-size: 0.8rem; font-weight: 700; color: var(--text-primary);">${escapeDossierText(title)}</span>
               </div>
               <span class="agent-subtitle" style="font-size: 0.62rem; color: var(--text-muted); font-weight: 500; letter-spacing: 0.1px;">${desc}</span>
               <div style="margin-top: 0.35rem; display: flex; align-items: center; gap: 0.5rem;">
@@ -2155,7 +2109,7 @@ function renderDashboard(data) {
               </svg>
               <span class="font-mono" style="position: absolute; font-size: 0.6rem; font-weight: 700; color: #fff;">${convictionVal}%</span>
             </div>
-          </div>
+          </button>
         `;
       };
 
@@ -2166,6 +2120,11 @@ function renderDashboard(data) {
       councilAgentsGrid.innerHTML += createAgentCardHtml('Macro Intelligence Engine', agents.macro_intelligence_engine, 'macro');
       councilAgentsGrid.innerHTML += createAgentCardHtml('Risk Committee', agents.risk_committee, 'risk');
       councilAgentsGrid.innerHTML += createAgentCardHtml('Adversarial Review Engine', agents.adversarial_review_engine, 'devil');
+      councilAgentsGrid.querySelectorAll('[data-dossier-key]').forEach(card => {
+        card.addEventListener('click', () => window.openAgentDossierModal(
+          card.dataset.dossierTitle || 'Agent Dossier', dossierData.get(card.dataset.dossierKey) || {},
+        ));
+      });
     } else {
       councilAgentsGrid.classList.add('is-empty');
       councilAgentsGrid.innerHTML = `
@@ -2755,18 +2714,30 @@ function renderNewsList() {
     newsContainer.innerHTML = '';
     articles.forEach(art => {
       const li = document.createElement('li');
-      const feedClass = (art.feed || 'GDELT').toLowerCase();
-      const feedLabel = art.feed || 'GDELT';
-      li.innerHTML = `
-        <div style="display: flex; align-items: flex-start; gap: 0.35rem; margin-bottom: 0.25rem;">
-          <span class="feed-badge ${feedClass}">${feedLabel}</span>
-          <a href="${art.url}" target="_blank" rel="noopener noreferrer">${art.title}</a>
-        </div>
-        <div class="news-meta" style="padding-left: 2.75rem;">
-          <span>Source: ${art.source}</span>
-          <span>Date: ${art.date || 'Recent'}</span>
-        </div>
-      `;
+      const header = document.createElement('div');
+      header.style.cssText = 'display: flex; align-items: flex-start; gap: 0.35rem; margin-bottom: 0.25rem;';
+      const badge = document.createElement('span');
+      badge.className = 'feed-badge';
+      badge.textContent = String(art.feed || 'GDELT');
+      const link = document.createElement('a');
+      const rawUrl = String(art.url || '');
+      try {
+        const url = new URL(rawUrl, window.location.origin);
+        if (url.protocol === 'https:' || url.protocol === 'http:') link.href = url.href;
+      } catch (_) { /* leave an invalid provider URL non-clickable */ }
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      link.textContent = String(art.title || 'Untitled headline');
+      header.append(badge, link);
+      const meta = document.createElement('div');
+      meta.className = 'news-meta';
+      meta.style.paddingLeft = '2.75rem';
+      const source = document.createElement('span');
+      source.textContent = `Source: ${String(art.source || 'Unknown')}`;
+      const date = document.createElement('span');
+      date.textContent = `Date: ${String(art.date || 'Recent')}`;
+      meta.append(source, date);
+      li.append(header, meta);
       newsContainer.appendChild(li);
     });
   } else {

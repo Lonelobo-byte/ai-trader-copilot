@@ -5,21 +5,23 @@ calculated information coefficients (IC) / edge decay on historical databases.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from app.db.database import AsyncSessionLocal
-from app.db.models import AnalysisSession
+from app.db.models import TradeSignal
+from app.brains.signal_lifecycle import TERMINAL_SIGNAL_STATUSES
 from app.quant.research import list_hypotheses, validate_series
+from app.rate_limit import enforce_rate_limit
 
 router = APIRouter(prefix="/alpha", tags=["Alpha Research Engine"])
 
 
 class ValidationRequest(BaseModel):
-    feature: list[float] = Field(..., description="Array of feature measurements.")
-    future_returns: list[float] = Field(..., description="Aligned forward returns corresponding to each feature period.")
-    train_fraction: float = Field(0.7, description="Fraction of series to use for training.")
+    feature: list[float] = Field(..., min_length=8, max_length=10_000, description="Array of feature measurements.")
+    future_returns: list[float] = Field(..., min_length=8, max_length=10_000, description="Aligned forward returns corresponding to each feature period.")
+    train_fraction: float = Field(0.7, gt=0.5, lt=0.9, description="Fraction of series to use for training.")
 
 
 @router.get("/hypotheses")
@@ -29,12 +31,13 @@ def get_hypotheses():
 
 
 @router.post("/validate")
-def post_validate_series(req: ValidationRequest):
+def post_validate_series(req: ValidationRequest, request: Request):
     """Validate a custom features candidate series against future return lags."""
     try:
+        enforce_rate_limit(request, "alpha_validate", limit=10, window_seconds=60)
         return validate_series(req.feature, req.future_returns, train_fraction=req.train_fraction)
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail="The feature series could not be validated. Ensure both arrays are aligned numeric observations.") from exc
 
 
 @router.get("/report")
@@ -44,7 +47,7 @@ async def get_alpha_report():
     Calculates correlation coefficients, win rates by regime type, and edge stability.
     """
     async with AsyncSessionLocal() as session:
-        stmt = select(AnalysisSession).where(AnalysisSession.outcome.in_(["SUCCESS", "FAILURE"]))
+        stmt = select(TradeSignal).where(TradeSignal.status.in_(TERMINAL_SIGNAL_STATUSES))
         res = await session.execute(stmt)
         records = res.scalars().all()
 
@@ -65,32 +68,34 @@ async def get_alpha_report():
     regime_stats: dict[str, dict[str, int]] = {}
 
     for r in records:
-        success = 1.0 if r.outcome == "SUCCESS" else 0.0
+        success = 1.0 if r.status == "COMPLETED" else 0.0
         outcomes.append(success)
 
         # Extract order book imbalance
         imb = 0.0
-        if r.order_flow_analyst and isinstance(r.order_flow_analyst, dict):
-            imb = float(r.order_flow_analyst.get("imbalance", 0.0))
-        elif r.market_conditions and isinstance(r.market_conditions, dict):
-            imb = float(r.market_conditions.get("imbalance", 0.0))
+        context = r.context if isinstance(r.context, dict) else {}
+        review = r.ai_review if isinstance(r.ai_review, dict) else {}
+        order_book = ((review.get("full_quant_features") or review.get("quant_features") or {}).get("order_book") or {})
+        if order_book:
+            imb = float(order_book.get("imbalance", order_book.get("pressure", 0.0)) or 0.0)
         imbalances.append(imb)
 
         # Extract funding
-        fund = float(r.funding) if r.funding is not None else 0.0
+        derivatives = ((review.get("full_quant_features") or review.get("quant_features") or {}).get("derivatives") or {})
+        fund = float(derivatives.get("funding_rate") or 0.0)
         funding_rates.append(fund)
 
         # Extract trend alignment
-        trend_status = r.trend or "mixed"
+        trend_status = str(context.get("trend_status") or "mixed").lower()
         is_aligned = 1.0 if trend_status in ("bullish", "bearish") else 0.0
         trend_alignments.append(is_aligned)
 
         # Group by regime
-        reg = r.regime or "ranging"
+        reg = str(context.get("trend_status") or "unknown")
         if reg not in regime_stats:
             regime_stats[reg] = {"success": 0, "total": 0}
         regime_stats[reg]["total"] += 1
-        if r.outcome == "SUCCESS":
+        if r.status == "COMPLETED":
             regime_stats[reg]["success"] += 1
 
     import numpy as np

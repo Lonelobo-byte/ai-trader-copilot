@@ -34,6 +34,7 @@ logger = logging.getLogger(__name__)
 # ── In-memory cache ──────────────────────────────────────────────────────────
 
 _CACHE: dict[str, tuple[float, Any]] = {}
+_CACHE_MAX_ENTRIES = 512
 
 # A complete intelligence snapshot is much more expensive than the individual
 # slow-source caches below: it opens several market-data requests at once.  A
@@ -62,6 +63,11 @@ def _cached(key: str, ttl: float) -> Any | None:
 
 
 def _store(key: str, value: Any) -> None:
+    if len(_CACHE) >= _CACHE_MAX_ENTRIES and key not in _CACHE:
+        # Slow-source keys are naturally TTL-based; discard the oldest entry
+        # when a public symbol spray would otherwise grow this cache forever.
+        oldest = min(_CACHE, key=lambda item: _CACHE[item][0])
+        _CACHE.pop(oldest, None)
     _CACHE[key] = (monotonic(), value)
 
 

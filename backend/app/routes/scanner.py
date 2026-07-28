@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 from typing import List
 from fastapi import APIRouter, BackgroundTasks, Depends
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
 from app.auth import require_admin
 from app.autonomous_scanner import (
@@ -21,7 +21,15 @@ router = APIRouter(prefix="/scanner", tags=["scanner"])
 
 
 class WatchlistUpdate(BaseModel):
-    symbols: List[str]
+    symbols: List[str] = Field(min_length=1, max_length=25)
+
+    @field_validator("symbols")
+    @classmethod
+    def validate_symbols(cls, values: List[str]) -> List[str]:
+        cleaned = [value.upper().strip() for value in values]
+        if any(not value.isalnum() or not (5 <= len(value) <= 20) for value in cleaned):
+            raise ValueError("Symbols must be 5-20 alphanumeric market identifiers.")
+        return list(dict.fromkeys(cleaned))
 
 
 class ScannerToggle(BaseModel):
@@ -72,7 +80,7 @@ async def get_watchlist():
 @router.post("/watchlist")
 async def update_watchlist(data: WatchlistUpdate, _: User = Depends(require_admin)):
     """Update the scanner watchlist."""
-    symbols = [s.upper().strip() for s in data.symbols if s.strip()]
+    symbols = data.symbols
     config = await update_scanner_configuration(watchlist=symbols)
     logger.info(f"Watchlist updated to: {symbols}")
     return {"status": "success", "watchlist": config["watchlist"]}

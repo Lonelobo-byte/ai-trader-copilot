@@ -13,6 +13,9 @@ class Settings(BaseSettings):
     database_url: str = ""
     public_base_url: str = "http://localhost:8000"
     trusted_hosts: list[str] = ["localhost", "127.0.0.1", "testserver"]
+    # Enable only behind the controlled reverse proxy; it lets rate limiting
+    # identify the browser instead of the proxy container.
+    trusted_proxy_headers: bool = False
     subscription_enforcement_enabled: bool = True
     allow_public_signup: bool = True
     auth_jwt_secret: str = ""
@@ -83,7 +86,21 @@ class Settings(BaseSettings):
     market_snapshot_cache_max_entries: int = 96
     market_intelligence_max_concurrency: int = 8
     background_jobs_enabled: bool = True
+    # Set this on exactly one worker container. A database lease below prevents
+    # accidental duplicate job ownership if deployment config drifts.
+    background_worker_id: str = ""
+    max_request_body_bytes: int = 1_000_000
     background_idle_check_seconds: int = 60
+
+    # Shared Radar is market-wide rather than user-specific. These freshness
+    # targets keep popular short timeframes warm while slow pairs refresh only
+    # after someone has actually requested them.
+    radar_refresh_lease_seconds: int = 180
+    radar_demand_window_seconds: int = 180
+    radar_warm_check_seconds: int = 15
+    radar_fresh_5m_1h_seconds: int = 30
+    radar_fresh_15m_4h_seconds: int = 120
+    radar_fresh_1h_1d_seconds: int = 600
 
     default_account_size_usd: float = 1000.0
     default_risk_per_idea_pct: float = 0.5

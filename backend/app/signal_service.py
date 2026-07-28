@@ -4,7 +4,7 @@ import asyncio
 from datetime import datetime, timezone
 from typing import Any, Mapping
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from app.brains.signal_lifecycle import (
     OPEN_SIGNAL_STATUSES,
@@ -19,6 +19,7 @@ from app.db.models import TradeSignal
 
 
 _SIGNAL_LOCKS: dict[tuple[str, str], asyncio.Lock] = {}
+_MAX_SIGNAL_LOCKS = 2_000
 _DB_READY = False
 _DB_INIT_LOCK = asyncio.Lock()
 
@@ -98,6 +99,17 @@ async def get_active_signal(symbol: str, timeframe: str) -> TradeSignal | None:
         return result.scalar_one_or_none()
 
 
+async def _lock_signal_key(db: Any, symbol: str, timeframe: str) -> None:
+    """Serialize an active-signal transition across app processes.
+
+    SQLite development uses the caller's asyncio lock. PostgreSQL production
+    additionally uses a transaction-scoped advisory lock, so two containers
+    cannot both observe an empty ledger and publish the same signal.
+    """
+    if db.bind and db.bind.dialect.name == "postgresql":
+        await db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:key))"), {"key": f"trade-signal:{symbol}:{timeframe}"})
+
+
 async def reconcile_signal(
     *,
     symbol: str,
@@ -116,6 +128,12 @@ async def reconcile_signal(
 ) -> dict[str, Any]:
     """Advance the open signal or publish exactly one new, fully approved signal."""
     key = (symbol, timeframe)
+    if len(_SIGNAL_LOCKS) >= _MAX_SIGNAL_LOCKS:
+        for stale_key, stale_lock in list(_SIGNAL_LOCKS.items()):
+            if not stale_lock.locked():
+                _SIGNAL_LOCKS.pop(stale_key, None)
+            if len(_SIGNAL_LOCKS) < _MAX_SIGNAL_LOCKS:
+                break
     lock = _SIGNAL_LOCKS.setdefault(key, asyncio.Lock())
     market_context = {
         "trend_status": trend.get("status"),
@@ -123,9 +141,11 @@ async def reconcile_signal(
         "order_book_pressure": order_book.get("pressure"),
     }
     async with lock:
-        await ensure_signal_database()
-        async with AsyncSessionLocal() as db:
-            result = await db.execute(
+        try:
+            await ensure_signal_database()
+            async with AsyncSessionLocal() as db:
+                await _lock_signal_key(db, symbol, timeframe)
+                result = await db.execute(
                 select(TradeSignal)
                 .where(
                     TradeSignal.symbol == symbol,
@@ -135,63 +155,65 @@ async def reconcile_signal(
                 .order_by(TradeSignal.id.desc())
                 .limit(1)
             )
-            active = result.scalar_one_or_none()
-            if active:
-                old_status = active.status
-                old_stage = active.target_stage
-                updated = advance_signal(
+                active = result.scalar_one_or_none()
+                if active:
+                    old_status = active.status
+                    old_stage = active.target_stage
+                    updated = advance_signal(
                     _record_data(active), current_price=current_price, market_context=market_context,
                 )
-                _apply(active, updated)
-                await db.commit()
+                    _apply(active, updated)
+                    await db.commit()
                 
-                # Check for updates to trigger system notifications
-                from app.utils.alerts import trigger_system_notification
-                if old_status != active.status:
-                    trigger_system_notification(
+                    # Check for updates to trigger system notifications
+                    from app.utils.alerts import trigger_system_notification
+                    if old_status != active.status:
+                        trigger_system_notification(
                         f"Signal Update: {symbol} {timeframe}",
                         f"Status changed from {old_status} to {active.status} at price {current_price}",
                     )
-                elif old_stage != active.target_stage:
-                    trigger_system_notification(
+                    elif old_stage != active.target_stage:
+                        trigger_system_notification(
                         f"Signal Target Hit: {symbol} {timeframe}",
                         f"Advanced to TP{active.target_stage} at price {current_price}",
                     )
-                return _view(active)
+                    return _view(active)
 
-            approval = evaluate_signal_approval(
+                approval = evaluate_signal_approval(
                 decision=decision, trade_setup=trade_setup, risk_idea=risk_idea, trend=trend,
                 momentum=momentum, order_book=order_book, data_freshness=data_freshness,
                 liquidity=liquidity, ai_result=ai_result, current_price=current_price,
                 council_approval=council_approval,
             )
-            if not approval["approved"]:
-                latest = await db.execute(
+                if not approval["approved"]:
+                    latest = await db.execute(
                     select(TradeSignal)
                     .where(TradeSignal.symbol == symbol, TradeSignal.timeframe == timeframe)
                     .order_by(TradeSignal.id.desc())
                     .limit(1)
                 )
-                previous = latest.scalar_one_or_none()
-                return _view(previous if previous and previous.status in TERMINAL_SIGNAL_STATUSES else None, approval)
+                    previous = latest.scalar_one_or_none()
+                    return _view(previous if previous and previous.status in TERMINAL_SIGNAL_STATUSES else None, approval)
 
-            seed = build_signal_seed(
+                seed = build_signal_seed(
                 symbol=symbol, timeframe=timeframe, decision=decision, trade_setup=trade_setup,
                 approval=approval, current_price=current_price, context=market_context,
                 ai_review=ai_result or {},
             )
-            signal = TradeSignal(**seed)
-            db.add(signal)
-            await db.commit()
-            await db.refresh(signal)
+                signal = TradeSignal(**seed)
+                db.add(signal)
+                await db.commit()
+                await db.refresh(signal)
             
-            # Notify new signal
-            from app.utils.alerts import trigger_system_notification
-            trigger_system_notification(
+                # Notify new signal
+                from app.utils.alerts import trigger_system_notification
+                trigger_system_notification(
                 f"New Signal: {symbol} {timeframe}",
                 f"{signal.side} setup published. Entry Ref: {signal.entry_reference}, Stop: {signal.stop_initial}",
             )
-            return _view(signal)
+                return _view(signal)
+        finally:
+            pass
 
 
 async def cancel_signal(signal_id: int, reason: str = "Dismissed by operator.") -> dict[str, Any] | None:

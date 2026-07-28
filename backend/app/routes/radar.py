@@ -6,13 +6,12 @@ order or treats a price-derived indicator as the cause of a move.
 from __future__ import annotations
 
 import asyncio
-import copy
 import logging
 from time import time
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from pydantic import BaseModel, Field
 
 from ..data_sources.binance_public import Candle
 from ..auth import require_active_subscription
@@ -26,52 +25,42 @@ from ..quant.market_context import (
     build_vwap_context,
     score_market_context,
 )
-from ..quant.momentum_scanner import get_breakout_candidates
 from ..rate_limit import enforce_rate_limit
+from ..radar_service import SUPPORTED_PAIRS, read_radar_pair
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/quant", tags=["radar"])
 
-_RADAR_CACHE_TTL_SECONDS = 30.0
-_RADAR_CACHE: dict[tuple[str, str], tuple[float, list[dict[str, Any]]]] = {}
-_RADAR_LOCK = asyncio.Lock()
-_SUPPORTED_PAIRS = {("5m", "1h"), ("15m", "4h"), ("1h", "1d")}
-
-
 @router.get("/breakout-radar", response_model=list[dict[str, Any]])
-async def get_radar_breakouts(request: Request, ltf: str = "5m", htf: str = "1h", use_ai: bool = False):
-    """Return a cached causal evidence ranking for one supported timeframe pair."""
+async def get_radar_breakouts(request: Request, response: Response = None, ltf: str = "5m", htf: str = "1h", use_ai: bool = False):
+    """Return the shared demand-aware causal Radar snapshot for a pair."""
     enforce_rate_limit(request, "public_radar", limit=20, window_seconds=60)
     pair = (ltf, htf)
-    if pair not in _SUPPORTED_PAIRS:
+    if pair not in SUPPORTED_PAIRS:
         raise HTTPException(status_code=422, detail="Use one of the supported Radar pairs: 5m/1h, 15m/4h, or 1h/1d.")
     if use_ai:
         logger.info("Ignoring deprecated use_ai Radar parameter; causal deterministic ranking is always used.")
 
-    now = time()
-    cached = _RADAR_CACHE.get(pair)
-    if cached and now - cached[0] < _RADAR_CACHE_TTL_SECONDS:
-        return copy.deepcopy(cached[1])
     try:
-        async with _RADAR_LOCK:
-            cached = _RADAR_CACHE.get(pair)
-            now = time()
-            if cached and now - cached[0] < _RADAR_CACHE_TTL_SECONDS:
-                return copy.deepcopy(cached[1])
-            candidates = await get_breakout_candidates(ltf=ltf, htf=htf, use_ai=False)
-            _RADAR_CACHE[pair] = (now, candidates)
-            return copy.deepcopy(candidates)
+        shared = await read_radar_pair(ltf, htf)
+        if response is not None:
+            response.headers["X-Radar-Snapshot-State"] = shared.state
+        if response is not None and shared.captured_at:
+            response.headers["X-Radar-Snapshot-At"] = shared.captured_at
+        if response is not None and shared.next_refresh_at:
+            response.headers["X-Radar-Next-Refresh-At"] = shared.next_refresh_at
+        return shared.candidates
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:
         logger.exception("Radar scan failed.")
-        raise HTTPException(status_code=502, detail="Radar market-data scan failed. Please retry.") from exc
+        raise HTTPException(status_code=503, detail="Shared Radar snapshot is temporarily unavailable. Please retry shortly.") from exc
 
 
 class VerifySetupRequest(BaseModel):
-    symbol: str
-    ltf: str = "5m"
-    htf: str = "1h"
+    symbol: str = Field(min_length=5, max_length=20, pattern=r"^[A-Za-z0-9]+$")
+    ltf: str = Field(default="5m", pattern=r"^(5m|15m|1h)$")
+    htf: str = Field(default="1h", pattern=r"^(1h|4h|1d)$")
 
 
 def _number(value: Any, default: float = 0.0) -> float:
@@ -128,7 +117,7 @@ async def verify_setup(payload: VerifySetupRequest, request: Request, user: User
     settings = get_settings()
     symbol = payload.symbol.upper().strip()
     pair = (payload.ltf, payload.htf)
-    if pair not in _SUPPORTED_PAIRS:
+    if pair not in SUPPORTED_PAIRS:
         raise HTTPException(status_code=422, detail="Use one of the supported Radar pairs: 5m/1h, 15m/4h, or 1h/1d.")
     client = BinancePublicClient(settings.binance_futures_base_url, market="futures")
     try:

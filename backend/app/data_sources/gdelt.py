@@ -5,11 +5,13 @@ import time
 from typing import Any
 
 import httpx
+from .http_client import get_http_client
 
 logger = logging.getLogger(__name__)
 
 # In-memory cache for GDELT news to reduce rate-limit issues: {symbol: {"timestamp": float, "articles": list[dict]}}
 _news_cache: dict[str, dict[str, Any]] = {}
+_NEWS_CACHE_MAX_ENTRIES = 256
 CACHE_EXPIRY_SECONDS = 300  # 5 minutes cache for successful requests
 STALE_CACHE_EXPIRY_SECONDS = 1800  # 30 minutes stale cache fallback during errors/rate limits
 
@@ -48,8 +50,8 @@ async def fetch_raw_gdelt(
         "format": "json",
     }
     try:
-        async with httpx.AsyncClient(timeout=6.0) as client:
-            response = await client.get(gdelt_api_url, params=params)
+        client = await get_http_client()
+        response = await client.get(gdelt_api_url, params=params, timeout=6.0)
             
         if response.status_code == 429:
             logger.warning(f"GDELT news API rate limit hit (429) for {symbol}.")
@@ -126,6 +128,9 @@ async def fetch_gdelt_news(
         combined_articles.append(art)
         
     # Save to cache
+    if len(_news_cache) >= _NEWS_CACHE_MAX_ENTRIES and symbol not in _news_cache:
+        oldest = min(_news_cache, key=lambda item: _news_cache[item]["timestamp"])
+        _news_cache.pop(oldest, None)
     _news_cache[symbol] = {
         "timestamp": now,
         "articles": combined_articles
@@ -167,8 +172,8 @@ async def fetch_rss_news(symbol: str) -> list[dict[str, Any]]:
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
     }
     try:
-        async with httpx.AsyncClient(timeout=8.0) as client:
-            resp = await client.get(url, headers=headers)
+        client = await get_http_client()
+        resp = await client.get(url, headers=headers, timeout=8.0)
         if resp.status_code != 200:
             return []
             

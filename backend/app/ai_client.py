@@ -167,6 +167,7 @@ def build_async_ai_client(settings: Settings, override: AIRequestConfig | None =
 
 
 _UNSUPPORTED_RESPONSE_FORMAT_MODELS: set[str] = set()
+_MAX_UNSUPPORTED_RESPONSE_FORMAT_MODELS = 128
 
 
 async def safe_async_chat_completion(
@@ -212,6 +213,8 @@ async def safe_async_chat_completion(
                 logger.info(
                     f"Model '{model}' does not support response_format. Memorizing model to skip response_format on future calls."
                 )
+                if len(_UNSUPPORTED_RESPONSE_FORMAT_MODELS) >= _MAX_UNSUPPORTED_RESPONSE_FORMAT_MODELS:
+                    _UNSUPPORTED_RESPONSE_FORMAT_MODELS.clear()
                 _UNSUPPORTED_RESPONSE_FORMAT_MODELS.add(model)
                 current_kwargs.pop("response_format", None)
                 continue

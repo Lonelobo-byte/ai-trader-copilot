@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, JSON, DateTime, Boolean, ForeignKey, UniqueConstraint, func
+from sqlalchemy import Column, Integer, String, Float, JSON, DateTime, Boolean, ForeignKey, UniqueConstraint, Index, func
 from sqlalchemy.orm import relationship
 from .database import Base
 
@@ -52,6 +52,9 @@ class AnalysisSession(Base):
 
 class TradeSignal(Base):
     __tablename__ = "trade_signals"
+    __table_args__ = (
+        Index("ix_trade_signals_symbol_timeframe_status", "symbol", "timeframe", "status"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     symbol = Column(String, index=True, nullable=False)
@@ -213,6 +216,22 @@ class ScannerConfiguration(Base):
     enabled = Column(Boolean, nullable=False, default=False)
     discovery = Column(Boolean, nullable=False, default=False)
     watchlist = Column(JSON, nullable=False, default=list)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+
+class RadarSnapshot(Base):
+    """One shared, durable Radar snapshot per supported timeframe pair."""
+    __tablename__ = "radar_snapshots"
+
+    key = Column(String(32), primary_key=True)
+    ltf = Column(String(16), nullable=False)
+    htf = Column(String(16), nullable=False)
+    payload = Column(JSON, nullable=True)
+    captured_at = Column(DateTime(timezone=True), nullable=True, index=True)
+    last_requested_at = Column(DateTime(timezone=True), nullable=True, index=True)
+    demand_count = Column(Integer, nullable=False, default=0)
+    refreshing_until = Column(DateTime(timezone=True), nullable=True, index=True)
+    last_error = Column(String(500), nullable=True)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
 

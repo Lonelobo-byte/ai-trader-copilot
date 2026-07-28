@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 _ai_council_cache: dict[str, dict[str, Any]] = {}
 _ai_council_cache_candle: dict[str, int | None] = {}
 _ai_council_locks: dict[str, asyncio.Lock] = {}
+_AI_COUNCIL_CACHE_MAX_ENTRIES = 128
 
 
 def _council_lock(cache_key: str) -> asyncio.Lock:
@@ -36,6 +37,17 @@ def _council_lock(cache_key: str) -> asyncio.Lock:
         lock = asyncio.Lock()
         _ai_council_locks[cache_key] = lock
     return lock
+
+
+def _trim_council_cache() -> None:
+    """Bound per-user intra-candle cache state in long-lived workers."""
+    while len(_ai_council_cache) > _AI_COUNCIL_CACHE_MAX_ENTRIES:
+        stale_key = next(iter(_ai_council_cache))
+        _ai_council_cache.pop(stale_key, None)
+        _ai_council_cache_candle.pop(stale_key, None)
+        lock = _ai_council_locks.get(stale_key)
+        if lock is not None and not lock.locked():
+            _ai_council_locks.pop(stale_key, None)
 
 
 def _build_analysis_snapshot(
@@ -224,6 +236,7 @@ async def run_full_analysis(
                     features = cio_result.get("full_quant_features") or features
                     _ai_council_cache[cache_key] = cio_result
                     _ai_council_cache_candle[cache_key] = current_candle_open_time
+                    _trim_council_cache()
                     macro_blockout = cio_result["macro_blockout"]
                     historical_stats = cio_result["historical_stats"]
                 else:
@@ -479,7 +492,13 @@ async def run_full_analysis(
         "trade_setup": analysis_snapshot["execution"]["trade_setup"],
         "order_book_pressure": analysis_snapshot["execution"]["order_book_pressure"],
         "liquidity_sweep": analysis_snapshot["causal"]["liquidity_sweep"],
-        "risk_idea": cio_result,
+        # Keep this compatibility projection deliberately compact. The full
+        # committee dossier is already carried once in ``ai_analysis``.
+        "risk_idea": {
+            "decision": cio_result.get("decision"),
+            "confidence_pct": cio_result.get("confidence_pct"),
+            "live_confirmation": cio_result.get("live_confirmation"),
+        },
         "position_sizing_example": trade_setup.get("position"),
         "kelly_sizing": {
             "kelly_pct": 0.0,

@@ -1,6 +1,7 @@
 import logging
 from typing import Any
 import httpx
+from .http_client import get_http_client
 
 logger = logging.getLogger(__name__)
 
@@ -11,8 +12,8 @@ class BinanceFuturesClient:
 
     async def _get(self, path: str, params: dict[str, Any] | None = None) -> Any:
         url = f"{self.base_url}{path}"
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            response = await client.get(url, params=params)
+        client = await get_http_client()
+        response = await client.get(url, params=params, timeout=self.timeout)
         response.raise_for_status()
         return response.json()
 

@@ -21,6 +21,17 @@ PLAN_RESEARCH_LIMITS = {
 RESEARCH_SLOT_TTL_SECONDS = 75
 RESEARCH_SLOT_HEARTBEAT_SECONDS = 20
 _USER_CAPACITY_LOCKS: dict[str, asyncio.Lock] = {}
+_MAX_USER_CAPACITY_LOCKS = 5_000
+
+
+def _user_lock(user_id: str) -> asyncio.Lock:
+    if len(_USER_CAPACITY_LOCKS) >= _MAX_USER_CAPACITY_LOCKS:
+        for stale_id, stale_lock in list(_USER_CAPACITY_LOCKS.items()):
+            if not stale_lock.locked():
+                _USER_CAPACITY_LOCKS.pop(stale_id, None)
+            if len(_USER_CAPACITY_LOCKS) < _MAX_USER_CAPACITY_LOCKS:
+                break
+    return _USER_CAPACITY_LOCKS.setdefault(user_id, asyncio.Lock())
 
 
 class ResearchCapacityExceeded(RuntimeError):
@@ -66,7 +77,7 @@ async def acquire_research_slot(*, user: User, symbol: str, timeframe: str, chan
     lock closes SQLite/local races within a process; expired leases make an
     abandoned browser tab self-heal even when it cannot send a close frame.
     """
-    lock = _USER_CAPACITY_LOCKS.setdefault(user.id, asyncio.Lock())
+    lock = _user_lock(user.id)
     async with lock:
         now = utcnow()
         expiry = now + timedelta(seconds=RESEARCH_SLOT_TTL_SECONDS)
@@ -108,7 +119,7 @@ async def release_research_slot(lease_id: str) -> None:
 
 async def research_capacity_view(user: User) -> dict:
     """Return the authenticated user's plan and only their active leases."""
-    lock = _USER_CAPACITY_LOCKS.setdefault(user.id, asyncio.Lock())
+    lock = _user_lock(user.id)
     async with lock:
         now = utcnow()
         async with AsyncSessionLocal() as session:

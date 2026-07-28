@@ -1405,6 +1405,8 @@
       let radarScanReady = false;
       let refreshTimer = null;
       let secondsRemaining = 30;
+      let nextRadarRefreshAtMs = 0;
+      let isFetchingRadar = false;
 
       function setResearchButtonState(state = 'READY') {
         const button = document.getElementById('ai-radar-btn');
@@ -2060,7 +2062,15 @@
       }
 
       // Discovery is public and deterministic; detailed briefs stay protected.
+      function radarRefreshSeconds(ltf, htf) {
+        if (ltf === '1h' && htf === '1d') return 600;
+        if (ltf === '15m' && htf === '4h') return 120;
+        return 30;
+      }
+
       async function fetchBreakouts() {
+        if (isFetchingRadar) return;
+        isFetchingRadar = true;
         radarScanReady = false;
         setResearchButtonState('SCANNING');
         showRadarEvidenceLoading();
@@ -2075,6 +2085,22 @@
             throw new Error(errData.detail || 'API query failed.');
           }
           rawBreakouts = await response.json();
+          const snapshotState = response.headers.get('X-Radar-Snapshot-State');
+          const snapshotAt = response.headers.get('X-Radar-Snapshot-At');
+          const nextRefreshAt = response.headers.get('X-Radar-Next-Refresh-At');
+          const parsedRefreshAt = nextRefreshAt ? Date.parse(nextRefreshAt) : NaN;
+          if (Number.isFinite(parsedRefreshAt)) {
+            nextRadarRefreshAtMs = parsedRefreshAt;
+            secondsRemaining = Math.max(0, Math.ceil((nextRadarRefreshAtMs - Date.now()) / 1000));
+          } else {
+            nextRadarRefreshAtMs = Date.now() + radarRefreshSeconds(ltf, htf) * 1000;
+            secondsRemaining = radarRefreshSeconds(ltf, htf);
+          }
+          if (snapshotState === 'STALE_REFRESHING') {
+            refreshText.textContent = 'Showing the last shared snapshot while one market refresh runs…';
+          } else if (snapshotAt) {
+            refreshText.textContent = `Shared market snapshot · ${new Date(snapshotAt).toLocaleTimeString()}`;
+          }
           radarScanReady = true;
           clearResearchBriefs();
           renderTable();
@@ -2092,10 +2118,13 @@
           setResearchButtonState();
           showResearchBriefNotice('Radar scan unavailable', 'Public market discovery could not complete. Check the market-data connection, then let Radar retry.', 'SCAN FAILED');
         } finally {
+          isFetchingRadar = false;
           stopRadarEvidenceLoading();
           spinner.style.display = 'none';
           spinner.classList.remove('is-active');
-          secondsRemaining = 30;
+          if (!nextRadarRefreshAtMs) {
+            nextRadarRefreshAtMs = Date.now() + radarRefreshSeconds(ltf, htf) * 1000;
+          }
         }
       }
 
@@ -2171,11 +2200,11 @@
       // Timing scanning loops
       function startTimer() {
         refreshTimer = setInterval(() => {
-          secondsRemaining--;
+          secondsRemaining = Math.max(0, Math.ceil((nextRadarRefreshAtMs - Date.now()) / 1000));
           if (secondsRemaining <= 0) {
             fetchBreakouts();
           } else {
-            refreshText.textContent = `Next scan in ${secondsRemaining}s`;
+            refreshText.textContent = `Refreshs in ${secondsRemaining}s`;
           }
         }, 1000);
       }

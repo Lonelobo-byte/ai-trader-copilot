@@ -6,6 +6,7 @@ from time import time
 from typing import Any
 
 import httpx
+from .http_client import get_http_client
 
 logger = logging.getLogger(__name__)
 
@@ -101,30 +102,30 @@ class BinancePublicClient:
     async def _get(self, path: str, params: dict[str, Any]) -> Any:
         current_path = path.replace("/api/v3/", "/fapi/v1/") if self.market == "futures" else path
         url = f"{self.base_url}{current_path}"
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            try:
-                response = await client.get(url, params=params)
-                response.raise_for_status()
-                return response.json()
-            except httpx.HTTPStatusError as exc:
-                if self.market == "spot" and exc.response is not None and exc.response.status_code == 400:
-                    futures_base_url = "https://fapi.binance.com"
-                    futures_path = path.replace("/api/v3/", "/fapi/v1/")
-                    futures_url = f"{futures_base_url}{futures_path}"
-                    try:
-                        futures_resp = await client.get(futures_url, params=params)
-                        if futures_resp.status_code == 200:
-                            self.market = "futures"
-                            self.base_url = futures_base_url
-                            self.is_futures_mode = True
-                            logger.info(
-                                f"Symbol '{params.get('symbol')}' returned 400 on Binance Spot. "
-                                f"Automatically fell back to Binance Futures."
-                            )
-                            return futures_resp.json()
-                    except Exception:
-                        pass
-                raise
+        client = await get_http_client()
+        try:
+            response = await client.get(url, params=params, timeout=self.timeout)
+            response.raise_for_status()
+            return response.json()
+        except httpx.HTTPStatusError as exc:
+            if self.market == "spot" and exc.response is not None and exc.response.status_code == 400:
+                futures_base_url = "https://fapi.binance.com"
+                futures_path = path.replace("/api/v3/", "/fapi/v1/")
+                futures_url = f"{futures_base_url}{futures_path}"
+                try:
+                    futures_resp = await client.get(futures_url, params=params, timeout=self.timeout)
+                    if futures_resp.status_code == 200:
+                        self.market = "futures"
+                        self.base_url = futures_base_url
+                        self.is_futures_mode = True
+                        logger.info(
+                            f"Symbol '{params.get('symbol')}' returned 400 on Binance Spot. "
+                            f"Automatically fell back to Binance Futures."
+                        )
+                        return futures_resp.json()
+                except Exception:
+                    pass
+            raise
 
     async def klines(self, symbol: str, interval: str = "15m", limit: int = 200, **kwargs) -> list[Candle]:
         interval_seconds(interval)

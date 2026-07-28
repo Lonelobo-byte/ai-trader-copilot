@@ -456,6 +456,13 @@ async def run_backtest(
     if total_trades == 0:
         return {
             "status": "completed",
+            "methodology": {
+                "mode": "historical_research_only",
+                "entry_model": "decision is made on a completed candle; the setup is evaluated from the following candle.",
+                "intrabar_precedence": "When stop and target are both reached inside one OHLC candle, stop loss is assumed first.",
+                "cost_model": "Fixed fee and slippage assumptions are deducted on both entry and exit.",
+                "limitations": ["No exchange queue position, partial fill, funding payment, or order-book replay is simulated."],
+            },
             "symbol": symbol,
             "timeframe": timeframe,
             "total_candles": total_candles,
@@ -505,6 +512,13 @@ async def run_backtest(
 
     return {
         "status": "completed",
+        "methodology": {
+            "mode": "historical_research_only",
+            "entry_model": "decision is made on a completed candle; the setup is evaluated from the following candle.",
+            "intrabar_precedence": "When stop and target are both reached inside one OHLC candle, stop loss is assumed first.",
+            "cost_model": "Fixed fee and slippage assumptions are deducted on both entry and exit.",
+            "limitations": ["No exchange queue position, partial fill, funding payment, or order-book replay is simulated."],
+        },
         "symbol": symbol,
         "timeframe": timeframe,
         "total_candles": total_candles,

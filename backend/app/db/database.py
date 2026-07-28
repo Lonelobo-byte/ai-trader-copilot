@@ -27,6 +27,7 @@ async def init_db():
     from .models import (
         AnalysisSession, TradeSignal, User, UserAIConnection, Subscription,
         Payment, RefreshToken, AuditEvent, ScannerConfiguration, PlatformAIUsage,
+        ResearchSlot, RadarSnapshot,
     )
     try:
         async with engine.begin() as conn:

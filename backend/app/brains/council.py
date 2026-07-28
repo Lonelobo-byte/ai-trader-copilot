@@ -37,6 +37,7 @@ logger = logging.getLogger(__name__)
 # Avoid repeatedly calling a judge-model slug that the provider has declared
 # unavailable. Transient rate limits and transport failures are not cached.
 _PERMANENT_CIO_MODEL_FAILURES: dict[str, str] = {}
+_MAX_PERMANENT_MODEL_FAILURES = 128
 
 
 # ── Agent runner ─────────────────────────────────────────────────────────────
@@ -128,6 +129,8 @@ async def _run_institutional_cio(
     result = await _call_agent(prompt, user, settings, task="judge", agent_name="institutional_cio", ai_override=ai_override)
     error = str(result.get("error", ""))
     if error and ("404" in error or "unavailable" in error.lower() or "not found" in error.lower()):
+        if len(_PERMANENT_CIO_MODEL_FAILURES) >= _MAX_PERMANENT_MODEL_FAILURES and model not in _PERMANENT_CIO_MODEL_FAILURES:
+            _PERMANENT_CIO_MODEL_FAILURES.pop(next(iter(_PERMANENT_CIO_MODEL_FAILURES)), None)
         _PERMANENT_CIO_MODEL_FAILURES[model] = error
     return result
 
@@ -330,38 +333,34 @@ async def _fetch_historical_stats(
 ) -> dict[str, Any]:
     """Query the DB for similar historical setups (RAG)."""
     try:
-        from app.db.database import AsyncSessionLocal, init_db
-        from app.db.models import AnalysisSession
-        from app.brains.ai_analysis import compute_session_similarity
+        from app.db.database import AsyncSessionLocal
+        from app.db.models import TradeSignal
+        from app.brains.signal_lifecycle import TERMINAL_SIGNAL_STATUSES
         from sqlalchemy import select
 
         async with AsyncSessionLocal() as db:
-            stmt = select(AnalysisSession).where(
-                AnalysisSession.outcome.in_(["SUCCESS", "FAILURE"])
+            # The live product writes TradeSignal records, not legacy
+            # AnalysisSession rows. Keep this bounded so council calls do not
+            # load the full lifetime ledger into memory.
+            stmt = (
+                select(TradeSignal)
+                .where(TradeSignal.symbol == symbol, TradeSignal.status.in_(TERMINAL_SIGNAL_STATUSES))
+                .order_by(TradeSignal.closed_at.desc(), TradeSignal.id.desc())
+                .limit(200)
             )
             res = await db.execute(stmt)
-            sessions = res.scalars().all()
+            signals = res.scalars().all()
 
-            if not sessions:
+            if not signals:
                 return {"similar_setups_count": 0, "historical_win_rate": 50.0}
 
-            regime = features.get("volatility", {}).get("regime", "RANGING")
             trend = features.get("trend", {}).get("primary", {}).get("status", "sideways_or_mixed")
-            funding = features.get("derivatives", {}).get("funding_rate", 0.0)
-            oi = features.get("derivatives", {}).get("open_interest", 0.0)
-
-            scored = []
-            for s in sessions:
-                sim = compute_session_similarity(
-                    s, symbol, trend, funding, oi, "HOLD", regime
-                )
-                scored.append((sim, s))
-
-            scored.sort(key=lambda x: x[0], reverse=True)
-            top = [s for _, s in scored[:20]]
+            # Regime is durable in the signal context. Prefer comparable
+            # contexts, then use the most recent bounded sample as fallback.
+            top = [s for s in signals if (s.context or {}).get("trend_status") == trend][:20] or signals[:20]
             count = len(top)
             if count > 0:
-                wins = sum(1 for s in top if s.outcome == "SUCCESS")
+                wins = sum(1 for s in top if s.status == "COMPLETED")
                 win_rate = (wins / count) * 100
             else:
                 win_rate = 50.0

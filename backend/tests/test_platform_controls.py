@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi import HTTPException
@@ -12,6 +12,7 @@ from app.autonomous_scanner import get_scanner_configuration, update_scanner_con
 from app.billing import PLANS
 from app.db.models import User
 from app.routes.radar import get_radar_breakouts
+from app.radar_service import read_radar_pair
 from app.settings import get_settings
 
 
@@ -61,9 +62,22 @@ async def test_platform_mutations_require_an_admin_role() -> None:
 async def test_radar_discovery_is_public_without_a_subscription_dependency() -> None:
     request = Request({"type": "http", "method": "GET", "path": "/quant/breakout-radar", "headers": [], "client": ("127.0.0.1", 9000)})
     expected = [{"symbol": "BTCUSDT", "score": 77}]
-    with patch("app.routes.radar.get_breakout_candidates", return_value=expected):
+    with patch("app.radar_service.get_breakout_candidates", return_value=expected):
         result = await get_radar_breakouts(request, ltf="5m", htf="1h")
     assert result == expected
+
+
+@pytest.mark.asyncio
+async def test_radar_snapshot_is_shared_between_visitors() -> None:
+    """A second visitor reads the durable shared snapshot without a new scan."""
+    expected = [{"symbol": "BTCUSDT", "score": 77}]
+    with patch("app.radar_service.get_breakout_candidates", new=AsyncMock(return_value=expected)) as scan:
+        first = await read_radar_pair("1h", "1d")
+        second = await read_radar_pair("1h", "1d")
+    assert first.candidates == expected
+    assert second.candidates == expected
+    assert first.next_refresh_at == second.next_refresh_at
+    assert scan.await_count == 1
 
 
 def test_new_plan_prices_and_launch_savings_are_exposed_from_one_source() -> None:

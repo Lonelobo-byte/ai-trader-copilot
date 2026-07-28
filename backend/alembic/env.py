@@ -14,7 +14,7 @@ sys.path.insert(0, str(BACKEND_DIR))
 
 from app.db.database import Base, DATABASE_URL
 # Ensure all models are registered on Base
-from app.db.models import AnalysisSession, TradeSignal, User, UserAIConnection, Subscription, Payment, RefreshToken, AuditEvent, ResearchSlot  # noqa: F401
+from app.db.models import AnalysisSession, TradeSignal, User, UserAIConnection, Subscription, Payment, RefreshToken, AuditEvent, ResearchSlot, RadarSnapshot  # noqa: F401
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
