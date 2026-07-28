@@ -326,6 +326,7 @@ def compute_quant_features(
     macro = intelligence.get("macro", {})
     sentiment = intelligence.get("sentiment", {})
     calendar = intelligence.get("calendar", [])
+    multi_venue = intelligence.get("multi_venue", {}) or {}
 
     closed = completed_candles(candles) if candles else []
     closes = [c.close for c in closed] if closed else []
@@ -401,10 +402,11 @@ def compute_quant_features(
     # Keep all candle-derived evidence on completed bars. The ticker/order
     # book may be live, but a partially formed OHLCV bar is not stable enough
     # for a directional decision.
-    micro = analyze_microstructure(order_book, closed) if closed else {}
+    micro = analyze_microstructure(order_book, closed, multi_venue=multi_venue)
 
     # Trade flow from recent trades
     whale_trades = {"whale_buy_count": 0, "whale_sell_count": 0, "whale_buy_volume": 0.0, "whale_sell_volume": 0.0, "whale_bias": "NEUTRAL"}
+    trade_flow_available = False
     if recent_trades:
         buy_trades = [t for t in recent_trades if not t.get("isBuyerMaker")]
         sell_trades = [t for t in recent_trades if t.get("isBuyerMaker")]
@@ -412,6 +414,7 @@ def compute_quant_features(
         sell_vol = sum(float(t.get("qty", 0)) for t in sell_trades)
         total_vol = buy_vol + sell_vol
         trade_flow_ratio = (buy_vol / total_vol) if total_vol > 0 else 0.5
+        trade_flow_available = total_vol > 0
 
         # Whale / large trade detection — orders > 2 std above mean size
         all_qtys = [float(t.get("qty", 0)) for t in recent_trades if float(t.get("qty", 0)) > 0]
@@ -579,7 +582,9 @@ def compute_quant_features(
             "volume_ratio": round(vol_ratio, 2),
         },
         "microstructure": micro,
+        "multi_venue": multi_venue,
         "trade_flow": {
+            "available": trade_flow_available,
             "buy_ratio": round(trade_flow_ratio, 4),
             "bias": "BUYING" if trade_flow_ratio > 0.55 else (
                 "SELLING" if trade_flow_ratio < 0.45 else "NEUTRAL"

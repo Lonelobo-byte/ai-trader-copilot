@@ -5,6 +5,7 @@ import httpx
 from typing import List, Dict, Any, Tuple, Set
 
 from app.data_sources.binance_public import Candle
+from app.data_sources.multi_venue_ws import get_multi_venue_snapshot
 from app.indicators.liquidity import detect_liquidity_sweep
 from app.indicators.structure import (
     classify_market_phase,
@@ -197,6 +198,7 @@ async def _fetch_live_confirmation(client: httpx.AsyncClient, symbol: str) -> Di
         "funding_rate": _float((premium or {}).get("lastFundingRate")),
         "oi_change_pct": round(oi_change_pct, 3) if oi_change_pct is not None else None,
         "taker_buy_sell_ratio": _float(taker_latest.get("buySellRatio"), 1.0) if taker_latest else None,
+        "multi_venue": get_multi_venue_snapshot(symbol),
     }
 
 
@@ -906,7 +908,7 @@ def _candidate_from_causal_context(
         # No depth history has been captured at this stage.  A candle's
         # taker volume is not mislabeled as an order-book imbalance.
         "microstructure": {"available": False},
-        "trade_flow": {"buy_ratio": 0.5, "bias": "UNAVAILABLE"},
+        "trade_flow": {"available": False, "buy_ratio": None, "bias": "UNAVAILABLE"},
         "volatility_context": build_volatility_context(candles),
         "volume_profile": build_volume_profile(candles),
         "vwap_context": build_vwap_context(candles),
@@ -979,8 +981,10 @@ def _refresh_causal_context_from_live(candidate: dict[str, Any], live: dict[str,
     candles = candidate.get("_candles")
     if not isinstance(features, dict) or not isinstance(candles, list):
         return
-    ratio = _float(live.get("taker_buy_sell_ratio"), 1.0)
-    buy_ratio = ratio / (1.0 + ratio) if ratio > 0 else 0.5
+    ratio_raw = live.get("taker_buy_sell_ratio")
+    ratio = _float(ratio_raw) if ratio_raw is not None else None
+    ratio_value = ratio if ratio is not None else 1.0
+    buy_ratio = ratio_value / (1.0 + ratio_value) if ratio is not None and ratio_value > 0 else None
     price_change = _float(candidate.get("price_change_pct"))
     derivatives = {
         "funding_rate": live.get("funding_rate"),
@@ -989,8 +993,8 @@ def _refresh_causal_context_from_live(candidate: dict[str, Any], live: dict[str,
             "oi_change_pct": live.get("oi_change_pct"),
         },
         "taker_volume": {
-            "cvd_trend": "CVD_BULLISH" if ratio >= 1.02 else "CVD_BEARISH" if ratio <= 0.98 else "CVD_NEUTRAL",
-            "aggression": "BUYER_AGGRESSIVE" if ratio >= 1.02 else "SELLER_AGGRESSIVE" if ratio <= 0.98 else "NEUTRAL",
+            "cvd_trend": "UNAVAILABLE" if ratio is None else "CVD_BULLISH" if ratio >= 1.02 else "CVD_BEARISH" if ratio <= 0.98 else "CVD_NEUTRAL",
+            "aggression": "UNAVAILABLE" if ratio is None else "BUYER_AGGRESSIVE" if ratio >= 1.02 else "SELLER_AGGRESSIVE" if ratio <= 0.98 else "NEUTRAL",
         },
     }
     features["positioning"] = classify_positioning(candles, derivatives)
@@ -1000,8 +1004,9 @@ def _refresh_causal_context_from_live(candidate: dict[str, Any], live: dict[str,
         "spread_bps": live.get("spread_bps"),
     }
     features["trade_flow"] = {
+        "available": buy_ratio is not None,
         "buy_ratio": buy_ratio,
-        "bias": "BUYING" if buy_ratio > 0.55 else "SELLING" if buy_ratio < 0.45 else "NEUTRAL",
+        "bias": "UNAVAILABLE" if buy_ratio is None else "BUYING" if buy_ratio > 0.55 else "SELLING" if buy_ratio < 0.45 else "NEUTRAL",
     }
     context = score_market_context(features)
     direction = {"LONG": "BULLISH", "SHORT": "BEARISH"}.get(context["direction"], "NEUTRAL")

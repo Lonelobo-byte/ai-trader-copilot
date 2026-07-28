@@ -36,7 +36,9 @@ def build_quantitative_assessment(
                 "funding_oi_strength": float(squeeze.get("strength") or 50.0),
             }
         )
-    microstructure = analyze_microstructure(order_book, candles)
+    microstructure = analyze_microstructure(
+        order_book, candles, multi_venue=context_features.get("multi_venue", {})
+    )
     regime = classify_market_state(statistics, microstructure)
     probability = forecast_distribution(
         statistics, microstructure, regime, symbol=symbol, timeframe=timeframe,

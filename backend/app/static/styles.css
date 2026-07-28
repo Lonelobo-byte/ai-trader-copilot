@@ -1905,7 +1905,7 @@ input:checked+.slider:before {
 
 .monitor-gate-strip {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(92px, 1fr));
   gap: .35rem;
   margin-bottom: .7rem;
 }
@@ -1954,6 +1954,15 @@ input:checked+.slider:before {
 
 .monitor-gate-chip.awaited strong {
   color: var(--neon-gold);
+}
+
+.monitor-gate-chip.blocked {
+  border-color: rgba(255, 90, 113, .3);
+  background: rgba(255, 90, 113, .06);
+}
+
+.monitor-gate-chip.blocked strong {
+  color: var(--neon-red, #ff5a71);
 }
 
 .monitor-watch-plan {

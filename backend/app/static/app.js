@@ -1421,6 +1421,7 @@ function useAnalysisSnapshot(payload) {
     trade_setup: execution.trade_setup || {},
     signal_monitor: execution.signal_monitor || {},
     live_confirmation: execution.live_confirmation || {},
+    multi_venue: execution.multi_venue || {},
     gates: {
       ...(payload.gates || {}),
       data_freshness: execution.data_freshness || {},
@@ -2350,15 +2351,26 @@ function renderMonitorEvidenceState(data, status, isPublished, isTerminalFailure
 
   if (monitorGateStrip) {
     const publicationCoverage = data.publication_coverage || data.live_confirmation?.publication_coverage || data.gates?.live_confirmation?.publication_coverage || {};
+    const venueEvidence = data.multi_venue_evidence || {};
+    const venueState = venueEvidence.status
+      ? String(venueEvidence.status).toUpperCase()
+      : 'CHECKING';
+
     const controls = [
       ['Structure', waitingForBreak ? 'AWAITED' : monitorControlState(reason, ['structure', 'break'], isPublished ? 'CONFIRMED' : 'MONITORING')],
       ['Liquidity', monitorControlState(reason, ['liquid', 'spread', 'depth'], isPublished ? 'CONFIRMED' : 'OBSERVED')],
       ['Order flow', monitorControlState(reason, ['flow', 'taker', 'order book'], isPublished ? 'CONFIRMED' : 'OBSERVED')],
+      ['Venue flow', venueState],
       ['Positioning', monitorControlState(reason, ['open interest', 'funding', 'position'], isPublished ? 'CONFIRMED' : 'OBSERVED')],
       ['Publication data', publicationCoverage.ready === true ? 'READY' : publicationCoverage.ready === false ? 'PARTIAL' : 'CHECKING'],
       ['Macro', monitorControlState(reason, ['macro', 'calendar'], isPublished ? 'CONFIRMED' : 'CLEAR')],
     ];
-    monitorGateStrip.innerHTML = controls.map(([label, value]) => `<span class="monitor-gate-chip ${value === 'CONFIRMED' || value === 'CLEAR' || value === 'READY' ? 'verified' : value === 'AWAITED' || value === 'PARTIAL' ? 'awaited' : ''}"><b>${label}</b><strong>${value}</strong></span>`).join('');
+    const verifiedStates = new Set(['CONFIRMED', 'CLEAR', 'READY', 'SUPPORTIVE']);
+    const awaitedStates = new Set(['AWAITED', 'PARTIAL', 'UNAVAILABLE', 'MIXED', 'NEUTRAL', 'CHECKING']);
+    monitorGateStrip.innerHTML = controls.map(([label, value]) => {
+      const className = verifiedStates.has(value) ? 'verified' : awaitedStates.has(value) ? 'awaited' : value === 'OPPOSED' ? 'blocked' : '';
+      return `<span class="monitor-gate-chip ${className}"><b>${label}</b><strong>${value}</strong></span>`;
+    }).join('');
   }
   return { state, stateCopy };
 }

@@ -258,10 +258,25 @@ def score_market_context(features: dict[str, Any]) -> dict[str, Any]:
     if positioning.get("delta_divergence") == "BULLISH_DELTA_DIVERGENCE": positioning_score += 0.7
     components["positioning"] = {"available": bool(positioning.get("available")), "score": positioning_score, "weight": 0.23, "bias": _direction(positioning_score, 0.15), "evidence": positioning.get("state", "UNKNOWN")}
 
-    depth = _number(micro.get("depth_imbalance"))
-    buy_ratio = _number(trade_flow.get("buy_ratio"), 0.5)
-    flow_score = 0.55 * depth + 0.45 * ((buy_ratio - 0.5) * 2.0)
-    components["order_flow"] = {"available": bool(micro.get("available")), "score": flow_score, "weight": 0.23, "bias": _direction(flow_score, 0.08), "evidence": {"depth_imbalance": depth, "buy_ratio": buy_ratio}}
+    depth_available = bool(micro.get("available")) and micro.get("depth_imbalance") is not None
+    trade_available = bool(trade_flow.get("available")) and trade_flow.get("buy_ratio") is not None
+    depth = _number(micro.get("depth_imbalance")) if depth_available else None
+    buy_ratio = _number(trade_flow.get("buy_ratio")) if trade_available else None
+    if depth_available and trade_available:
+        flow_score = 0.55 * depth + 0.45 * ((buy_ratio - 0.5) * 2.0)
+    elif depth_available:
+        flow_score = depth
+    elif trade_available:
+        flow_score = (buy_ratio - 0.5) * 2.0
+    else:
+        flow_score = 0.0
+    components["order_flow"] = {
+        "available": depth_available or trade_available,
+        "score": flow_score,
+        "weight": 0.23,
+        "bias": _direction(flow_score, 0.08),
+        "evidence": {"depth_imbalance": depth, "buy_ratio": buy_ratio},
+    }
 
     vol_state = volatility.get("state", "UNKNOWN")
     components["volatility"] = {"available": bool(volatility.get("available")), "score": 0.15 if vol_state == "EXPANSION" else 0.05 if vol_state == "COMPRESSION" else 0.0, "weight": 0.04, "bias": "NEUTRAL", "evidence": vol_state}

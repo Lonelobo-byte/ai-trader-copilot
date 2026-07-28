@@ -27,6 +27,7 @@ from app.data_sources.macro import fetch_macro_data
 from app.data_sources.sentiment import fetch_sentiment_snapshot
 from app.data_sources.calendar import fetch_economic_events
 from app.data_sources.global_liquidity import fetch_global_liquidity_index
+from app.data_sources.multi_venue_ws import get_multi_venue_snapshot
 from app.settings import Settings
 
 logger = logging.getLogger(__name__)
@@ -84,6 +85,36 @@ def _fetch_gate(limit: int) -> asyncio.Semaphore:
         _FETCH_GATES[bounded_limit] = gate
     return gate
 
+def attach_live_multi_venue_snapshot(
+    intelligence: dict[str, Any], symbol: str, settings: Settings
+) -> dict[str, Any]:
+    """Attach the latest process-local public-feed evidence without I/O.
+
+    Cached REST/context snapshots may be several seconds old. The shared hub
+    is read in O(1) here so every analysis tick gets current feed health and
+    evidence without opening another upstream connection.
+    """
+    try:
+        snapshot = get_multi_venue_snapshot(symbol, settings)
+    except Exception as exc:
+        logger.warning("Multi-venue snapshot unavailable for %s: %s", symbol, exc)
+        snapshot = {
+            "available": False,
+            "status": "UNAVAILABLE",
+            "symbol": symbol.upper().strip(),
+            "reason": "multi_venue_snapshot_error",
+            "venues": {},
+        }
+    intelligence["multi_venue"] = snapshot
+    meta = intelligence.setdefault("meta", {})
+    available = [item for item in meta.get("sources_available", []) if item != "multi_venue_ws"]
+    failed = [item for item in meta.get("sources_failed", []) if item != "multi_venue_ws"]
+    (available if snapshot.get("available") else failed).append("multi_venue_ws")
+    meta["sources_available"] = available
+    meta["sources_failed"] = failed
+    meta["total_sources"] = len(available) + len(failed)
+    return intelligence
+
 
 async def fetch_market_intelligence_cached(
     symbol: str,
@@ -106,7 +137,7 @@ async def fetch_market_intelligence_cached(
         cached = _SNAPSHOT_CACHE.get(key)
         if cached and ttl and now - cached[0] <= ttl:
             _SNAPSHOT_CACHE.move_to_end(key)
-            return deepcopy(cached[1])
+            return attach_live_multi_venue_snapshot(deepcopy(cached[1]), symbol, settings)
         if cached:
             _SNAPSHOT_CACHE.pop(key, None)
 
@@ -129,7 +160,7 @@ async def fetch_market_intelligence_cached(
 
     try:
         result = await asyncio.shield(task)
-        return deepcopy(result)
+        return attach_live_multi_venue_snapshot(deepcopy(result), symbol, settings)
     finally:
         if task.done():
             async with _SNAPSHOT_LOCK:
@@ -444,7 +475,7 @@ async def fetch_market_intelligence(
         f"in {elapsed_ms}ms"
     )
 
-    return intelligence
+    return attach_live_multi_venue_snapshot(intelligence, symbol, settings)
 
 
 async def fetch_pair_discovery_data(settings: Settings) -> dict[str, Any]:

@@ -18,7 +18,10 @@ from app.brains.signal_builder import build_ai_driven_trade_setup, evaluate_ai_d
 from app.quant.feature_engine import compute_quant_features
 from app.quant.live_confirmation import verify_main_signal_snapshot
 from app.signal_service import reconcile_signal
-from app.data_sources.data_aggregator import fetch_market_intelligence
+from app.data_sources.data_aggregator import (
+    attach_live_multi_venue_snapshot,
+    fetch_market_intelligence,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -104,6 +107,7 @@ def _build_analysis_snapshot(
         },
         "execution": {
             "order_book_pressure": features.get("order_book", {}),
+            "multi_venue": intelligence.get("multi_venue", {}) or features.get("multi_venue", {}),
             "derivatives": {
                 "taker_buy_sell_volume": derivatives.get("taker_volume", {}),
                 "oi_history": derivatives.get("oi_history", {}),
@@ -163,6 +167,7 @@ async def run_full_analysis(
         intel = await fetch_market_intelligence(symbol, timeframe, settings)
     else:
         intel = market_intelligence
+    intel = attach_live_multi_venue_snapshot(intel, symbol, settings)
     # The explicit route arguments remain authoritative for streaming callers.
     intel["candles"], intel["ticker"], intel["order_book"] = candles, ticker, order_book_raw
     features = compute_quant_features(intel)
@@ -329,6 +334,10 @@ async def run_full_analysis(
     # publishing monitor, while remaining unable to write the shared ledger.
     # Only genuine historical replays skip this live-only gate.
     if not historical_replay:
+        # Council work can take seconds. Refresh the zero-I/O shared snapshot
+        # immediately before the live gate so an expired book cannot veto or
+        # confirm the final setup.
+        intel = attach_live_multi_venue_snapshot(intel, symbol, settings)
         confirmation_timeframes = {
             "1m": "5m", "5m": "1h", "15m": "4h", "1h": "1d", "4h": "1d", "1d": "1w",
         }
@@ -339,6 +348,7 @@ async def run_full_analysis(
             symbol=symbol, timeframe=timeframe, side=direction_side, candles=candles,
             higher_candles=higher_candles, order_book=order_book_raw,
             funding=intel.get("funding", {}) or {}, derivatives=intel.get("derivatives", {}) or {},
+            multi_venue=intel.get("multi_venue", {}) or {},
         )
     if cio_result.get("institutional_dossier"):
         from app.institutional.committee import build_investment_memo, render_investment_memo
@@ -409,6 +419,9 @@ async def run_full_analysis(
     # lower-confidence research watch; it cannot create or alter a signal.
     signal_monitor["confirmation_scenarios"] = (cio_result.get("live_confirmation") or {}).get("scenarios", {})
     signal_monitor["publication_coverage"] = (cio_result.get("live_confirmation") or {}).get("publication_coverage", {})
+    signal_monitor["multi_venue_evidence"] = (
+        ((cio_result.get("live_confirmation") or {}).get("live_evidence") or {}).get("cross_venue_evidence", {})
+    )
     signal_monitor["candidate_setup"] = {
         "side": trade_setup.get("side", "NEUTRAL"),
         "entry": trade_setup.get("entry", {}),
@@ -491,6 +504,7 @@ async def run_full_analysis(
         },
         "signal_monitor": analysis_snapshot["execution"]["signal_monitor"],
         "trade_setup": analysis_snapshot["execution"]["trade_setup"],
+        "multi_venue": analysis_snapshot["execution"]["multi_venue"],
         "order_book_pressure": analysis_snapshot["execution"]["order_book_pressure"],
         "liquidity_sweep": analysis_snapshot["causal"]["liquidity_sweep"],
         # Keep this compatibility projection deliberately compact. The full

@@ -8,17 +8,56 @@ def _levels_notional(levels: list[list[float]], depth: int) -> float:
     return sum(float(price) * float(size) for price, size in levels[:depth])
 
 
-def analyze_microstructure(order_book: dict[str, Any], candles: list[Any], depth: int = 20) -> dict[str, Any]:
+def _multi_venue_summary(multi_venue: dict[str, Any] | None) -> dict[str, Any]:
+    data = multi_venue if isinstance(multi_venue, dict) else {}
+    venues: dict[str, Any] = {}
+    for venue, payload in (data.get("venues") or {}).items():
+        order_book = payload.get("order_book") or {}
+        trade_flow = payload.get("trade_flow") or {}
+        venues[venue] = {
+            "available": bool(payload.get("available")),
+            "health": payload.get("health", "UNAVAILABLE"),
+            "age_seconds": payload.get("age_seconds"),
+            "spread_bps": order_book.get("spread_bps"),
+            "depth_imbalance": order_book.get("depth_imbalance"),
+            "persistent_imbalance": order_book.get("persistent_imbalance"),
+            "trade_flow_available": bool(trade_flow.get("available")),
+            "signed_trade_flow": trade_flow.get("signed_flow"),
+            "aggressive_buy_ratio": trade_flow.get("aggressive_buy_ratio"),
+        }
+    return {
+        "available": bool(data.get("available")),
+        "status": data.get("status", "UNAVAILABLE"),
+        "fresh_venue_count": int(data.get("fresh_venue_count") or 0),
+        "flow_venue_count": int(data.get("flow_venue_count") or 0),
+        "flow_confirmed": bool(data.get("flow_confirmed")),
+        "flow_consensus": data.get("flow_consensus", "UNAVAILABLE"),
+        "flow_score": data.get("flow_score"),
+        "depth_score": data.get("depth_score"),
+        "price_dispersion_bps": data.get("price_dispersion_bps"),
+        "observed_liquidations": data.get("observed_liquidations") or {
+            "available": False,
+            "observed": False,
+        },
+        "venues": venues,
+    }
+
+
+def analyze_microstructure(
+    order_book: dict[str, Any], candles: list[Any], depth: int = 20,
+    multi_venue: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Create execution-quality features without inferring a deterministic side.
 
-    Binance kline taker volumes are an aggregated trade-flow proxy.  True queue
-    position/absorption requires incremental order-book and trade streams; the
-    response explicitly labels this proxy so it is not overstated.
+    Binance kline taker volumes remain the historically calibrated proxy. The
+    sequence-checked Bybit/Coinbase streams are exposed separately so their
+    failure or absence can never be mistaken for neutral evidence.
     """
+    cross_venue = _multi_venue_summary(multi_venue)
     bids = order_book.get("bids", [])[:depth]
     asks = order_book.get("asks", [])[:depth]
     if not bids or not asks:
-        return {"available": False, "reason": "Bid/ask depth unavailable."}
+        return {"available": False, "reason": "Bid/ask depth unavailable.", "incremental_public_feeds": cross_venue}
 
     best_bid, best_ask = float(bids[0][0]), float(asks[0][0])
     mid = (best_bid + best_ask) / 2 if best_bid + best_ask else 0.0
@@ -52,8 +91,9 @@ def analyze_microstructure(order_book: dict[str, Any], candles: list[Any], depth
         "signed_trade_flow": round(signed_flow, 4),
         "absorption_proxy": round(absorption, 4),
         "liquidity_quality": "thin" if spread_bps > 15 else "normal" if total_depth else "unavailable",
+        "incremental_public_feeds": cross_venue,
         "limitations": [
-            "Order-book values are a snapshot; queue changes require incremental depth capture.",
+            "Primary Binance depth is a snapshot; healthy Bybit/Coinbase fields use incremental public books.",
             "Absorption is an aggregated taker-flow proxy, not exchange-level order attribution.",
         ],
     }

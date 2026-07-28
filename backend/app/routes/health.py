@@ -4,6 +4,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from ..ai_client import ai_is_configured, get_model_for_task
+from ..data_sources.multi_venue_ws import get_multi_venue_hub
 from ..settings import get_settings
 
 router = APIRouter()
@@ -19,6 +20,40 @@ def health():
         "ai_provider": settings.ai_provider,
         "ai_configured": ai_is_configured(settings),
         "version": "0.6.0",
+    }
+
+
+@router.get("/health/market-data")
+async def public_market_data_health():
+    """Expose optional public-feed readiness without leaking credentials."""
+    settings = get_settings()
+    if not settings.multi_venue_ws_enabled:
+        return {"enabled": False, "status": "DISABLED", "symbols": {}}
+    hub = get_multi_venue_hub(settings)
+    symbols = {}
+    for symbol in hub.symbols:
+        snapshot = hub.snapshot(symbol)
+        symbols[symbol] = {
+            "status": snapshot.get("status", "UNAVAILABLE"),
+            "fresh_venue_count": snapshot.get("fresh_venue_count", 0),
+            "flow_venue_count": snapshot.get("flow_venue_count", 0),
+            "flow_confirmed": bool(snapshot.get("flow_confirmed")),
+            "venue_health": {
+                venue: payload.get("health", "UNAVAILABLE")
+                for venue, payload in (snapshot.get("venues") or {}).items()
+            },
+        }
+    states = [item["status"] for item in symbols.values()]
+    status = "HEALTHY" if states and all(item == "HEALTHY" for item in states) else (
+        "DEGRADED" if any(item in {"HEALTHY", "DEGRADED"} for item in states) else "STARTING_OR_UNAVAILABLE"
+    )
+    return {
+        "enabled": True,
+        "status": status,
+        "symbols": symbols,
+        "subscribed_symbols": list(hub.symbols),
+        "quarantined_subscriptions": hub.quarantined_subscriptions,
+        "metrics": dict(hub.metrics),
     }
 
 

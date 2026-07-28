@@ -14,7 +14,11 @@ from sqlalchemy import select, text
 
 from app.brains.council import run_ai_council
 from app.brains.signal_builder import build_ai_driven_trade_setup, evaluate_ai_driven_approval
-from app.data_sources.data_aggregator import fetch_market_intelligence, fetch_pair_discovery_data
+from app.data_sources.data_aggregator import (
+    attach_live_multi_venue_snapshot,
+    fetch_market_intelligence,
+    fetch_pair_discovery_data,
+)
 from app.db.database import AsyncSessionLocal, engine
 from app.db.models import ScannerConfiguration, ScannerObservation, TradeSignal
 from app.signal_service import _lock_signal_key, get_active_signal, ensure_signal_database
@@ -201,6 +205,10 @@ async def run_single_symbol_scan(symbol: str, timeframe: str, settings: Any) -> 
         # the shared signal ledger.
         intelligence = await fetch_market_intelligence(symbol, timeframe, settings)
         cio_result = await run_ai_council(symbol, timeframe, settings, intelligence=intelligence)
+        # Council work can outlive the feed freshness window. Refresh the
+        # process-shared evidence immediately before the publication gate so
+        # stale flow cannot confirm or veto a signal.
+        intelligence = attach_live_multi_venue_snapshot(intelligence, symbol, settings)
 
         # Build trade setup
         # The compact summary is for display; lifecycle context should use
@@ -215,6 +223,7 @@ async def run_single_symbol_scan(symbol: str, timeframe: str, settings: Any) -> 
             candles=intelligence.get("candles", []), higher_candles=higher,
             order_book=intelligence.get("order_book", {}), funding=intelligence.get("funding", {}),
             derivatives=intelligence.get("derivatives", {}),
+            multi_venue=intelligence.get("multi_venue", {}) or {},
         )
 
         # Evaluate approval

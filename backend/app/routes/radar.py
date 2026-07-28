@@ -12,6 +12,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
+from ..data_sources.multi_venue_ws import get_multi_venue_snapshot
 
 from ..data_sources.binance_public import Candle
 from ..auth import require_active_subscription, utcnow
@@ -150,12 +151,23 @@ async def verify_setup(payload: VerifySetupRequest, request: Request, user: User
         "bos": events["bos"],
         "choch": events["choch"],
     }
+    multi_venue = get_multi_venue_snapshot(symbol, settings)
+    flow_confirmed = bool(multi_venue.get("flow_confirmed"))
+    flow_score = float(multi_venue.get("flow_score") or 0.0)
+    trade_flow = {
+        "available": flow_confirmed,
+        "buy_ratio": (flow_score + 1.0) / 2.0 if flow_confirmed else None,
+        "bias": multi_venue.get("flow_consensus", "UNAVAILABLE") if flow_confirmed else "UNAVAILABLE",
+        "source": "bybit_coinbase_public_ws" if flow_confirmed else None,
+    }
+
     features = {
         "market_structure": structure,
         "liquidity_map": liquidity,
         "sweep": detect_liquidity_sweep(candles_ltf),
         "microstructure": microstructure,
-        "trade_flow": {"buy_ratio": 0.5, "bias": "UNAVAILABLE"},
+        "trade_flow": trade_flow,
+        "multi_venue": multi_venue,
         "positioning": {"available": False, "state": "UNKNOWN"},
         "volatility_context": build_volatility_context(candles_ltf),
         "volume_profile": build_volume_profile(candles_ltf),
@@ -167,6 +179,11 @@ async def verify_setup(payload: VerifySetupRequest, request: Request, user: User
     verdict = "REVIEW_CANDIDATE" if context["status"] == "SETUP_CANDIDATE" else "WATCH_ONLY"
     limitations = list(context.get("limitations", []))
     limitations.append("Price×OI, funding and aggressive taker flow require the Radar live-confirmation snapshot; they are unavailable in this single-symbol review request.")
+    if flow_confirmed:
+        limitations[-1] = "Price x OI and funding require the Radar live-confirmation snapshot; qualified public cross-venue flow is included."
+    else:
+        limitations[-1] = "Price x OI, funding and qualified public cross-venue flow are unavailable and are not treated as neutral evidence."
+
     return {
         "symbol": symbol,
         "verdict": verdict,
@@ -176,6 +193,7 @@ async def verify_setup(payload: VerifySetupRequest, request: Request, user: User
         "confidence_label": "Causal evidence score, not a probability of profit.",
         "evaluation_mode": "causal_manual_review",
         "market_context": context,
+        "multi_venue": multi_venue,
         "liquidity_map": liquidity,
         "positioning": features["positioning"],
         "volatility_context": features["volatility_context"],

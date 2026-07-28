@@ -1708,6 +1708,7 @@
           const volatility = item.volatility_context || {};
           const coverage = item.coverage || context.coverage || {};
           const flow = components.order_flow || {};
+          const venueFlow = item.advanced_confirmation?.cross_venue_evidence || {};
           const isLong = item.direction === 'BULLISH';
           const directionClass = isLong ? 'bullish' : item.direction === 'BEARISH' ? 'bearish' : 'neutral';
           const scoreClass = item.score >= 70 ? 'score-high' : item.score >= 55 ? 'score-medium' : 'score-low';
@@ -1722,7 +1723,7 @@
               <td><span class="direction-badge ${directionClass}">${label(structure.phase)} · ${label(volatility.state)}</span></td>
               <td class="value-mono">${poolText(item.target_pool)}</td>
               <td class="value-mono">${label(positioning.state)}${positioning.oi_change_pct !== undefined ? ` · ${Number(positioning.oi_change_pct).toFixed(2)}%` : ''}</td>
-              <td class="value-mono">${label(flow.bias || 'UNAVAILABLE')}</td>
+              <td class="value-mono">${label(flow.bias || 'UNAVAILABLE')}<span style="display:block;margin-top:3px;font-size:.58rem;color:var(--text-muted)">Bybit + Coinbase: ${label(venueFlow.status || 'PENDING')}</span></td>
               <td class="value-mono">${coverage.available_domains || 0}/${coverage.required_domains || 4} domains</td>
               <td>${state}</td>
               <td><div class="radar-action-group"><button class="action-btn-sm" type="button" onclick="verifySetupWithAI('${item.symbol}')">Review</button><a class="action-btn-sm research-btn" href="index.html?symbol=${encodeURIComponent(item.symbol)}" target="_blank" rel="noopener" title="Open ${item.symbol} research in a new tab">Research ↗</a></div></td>
