@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+import asyncio
 from decimal import Decimal, InvalidOperation
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -15,10 +16,12 @@ from ..billing import (
     PaymentProviderError,
     callback_configuration_error,
     complete_subscription,
+    fetch_nowpayments_currencies,
     fetch_nowpayments_invoice_payments,
-    create_nowpayments_invoice,
+    create_nowpayments_payment,
     fetch_nowpayments_payment,
     plan_details,
+    payment_qr_data_uri,
     verify_nowpayments_ipn,
 )
 from ..db.database import AsyncSessionLocal
@@ -31,10 +34,12 @@ logger = logging.getLogger(__name__)
 
 _ACTIVE_PROVIDER_STATUSES = {"waiting", "confirming", "sending", "partially_paid"}
 _TERMINAL_PROVIDER_STATUSES = {"finished", "confirmed", "failed", "expired", "refunded"}
+_CHECKOUT_LOCKS: dict[str, asyncio.Lock] = {}
 
 
 class CheckoutRequest(BaseModel):
     plan_code: str
+    pay_currency: str
 
 
 @router.get("/plans")
@@ -42,10 +47,31 @@ async def plans():
     currency = get_settings().billing_currency.upper()
     return {
         "currency": currency,
-        "plans": [{"code": code, "amount": item["amount"], "days": item["days"]} for code, item in PLANS.items()],
+        "plans": [
+            {
+                "code": code,
+                "amount": item["amount"],
+                "days": item["days"],
+                "list_amount": item.get("list_amount", item["amount"]),
+                "savings_pct": max(0, round((1 - item["amount"] / item.get("list_amount", item["amount"])) * 100)),
+                "savings_basis": "launch_price",
+            }
+            for code, item in PLANS.items()
+        ],
         "checkout_available": callback_configuration_error() is None,
         "checkout_message": callback_configuration_error(),
     }
+
+
+@router.get("/payment-currencies")
+async def payment_currencies(request: Request, user: User = Depends(current_user)):
+    """Authenticated, rate-limited proxy for NOWPayments' live token catalog."""
+    enforce_rate_limit(request, "payment_currencies", limit=20, window_seconds=60)
+    try:
+        return {"currencies": await fetch_nowpayments_currencies()}
+    except (PaymentProviderError, RuntimeError) as exc:
+        logger.warning("Could not load NOWPayments currency catalog: %s", exc)
+        raise HTTPException(status_code=502, detail="NOWPayments could not load the available payment currencies. Please try again shortly.") from exc
 
 
 def _subscription_view(subscription: Subscription | None) -> dict | None:
@@ -72,10 +98,65 @@ def _payment_view(payment: Payment | None, subscription: Subscription | None) ->
         "order_id": payment.order_id,
         "provider_invoice_id": payment.provider_invoice_id,
         "provider_payment_id": payment.provider_payment_id,
+        "pay_currency": payment.pay_currency,
+        "pay_amount": payment.pay_amount,
+        "pay_address": payment.payment_address,
+        "payment_address": payment.payment_address,
+        "confirmations": payment.confirmations,
+        "payment_expires_at": (payment.raw_payload or {}).get("expiration_estimate_date"),
+        "network": (payment.raw_payload or {}).get("network"),
+        "payment_extra_id": (payment.raw_payload or {}).get("payment_extra_id"),
         "transaction_hash": payment.transaction_hash,
         "subscription": _subscription_view(subscription),
         "awaiting_provider_callback": payment.provider_payment_id is None and payment.status in {"waiting", "confirming"},
     }
+
+
+def _checkout_view(payment: Payment, subscription: Subscription, *, reused: bool, verification_pending: bool = False) -> dict:
+    """Only expose payment instructions belonging to the authenticated order."""
+    payload = payment.raw_payload or {}
+    plan = plan_details(subscription.plan_code)
+    address = payment.payment_address or payload.get("pay_address")
+    pay_amount = payment.pay_amount or payload.get("pay_amount")
+    pay_currency = payment.pay_currency or payload.get("pay_currency")
+    if address and pay_amount and pay_currency:
+        return {
+            "payment_id": payment.id,
+            "provider_payment_id": payment.provider_payment_id,
+            "order_id": payment.order_id,
+            "plan_code": subscription.plan_code,
+            "plan_days": plan["days"],
+            "plan_amount": plan["amount"],
+            "price_currency": payment.currency.upper(),
+            "payment_status": payment.status,
+            "pay_address": address,
+            "pay_amount": str(pay_amount),
+            "pay_currency": str(pay_currency).upper(),
+            "network": payload.get("network"),
+            "payment_extra_id": payload.get("payment_extra_id"),
+            "expires_at": payload.get("expiration_estimate_date"),
+            "qr_data_uri": payment_qr_data_uri(str(address)),
+            "reused": reused,
+            "verification_pending": verification_pending,
+        }
+    # Old hosted-invoice records have no selected currency or address. Retain a
+    # one-time resume path instead of silently creating a second charge.
+    invoice_url = payload.get("invoice_url")
+    if invoice_url:
+        return {
+            "payment_id": payment.id,
+            "provider_invoice_id": payment.provider_invoice_id,
+            "order_id": payment.order_id,
+            "plan_code": subscription.plan_code,
+            "plan_days": plan["days"],
+            "plan_amount": plan["amount"],
+            "price_currency": payment.currency.upper(),
+            "legacy_hosted_checkout": True,
+            "invoice_url": invoice_url,
+            "reused": True,
+            "verification_pending": verification_pending,
+        }
+    raise HTTPException(status_code=409, detail="The existing payment cannot be resumed safely. Contact support with this order reference: " + payment.order_id)
 
 
 def _provider_payload_is_expected(payment: Payment, payload: dict) -> bool:
@@ -177,52 +258,56 @@ async def checkout(body: CheckoutRequest, request: Request, user: User = Depends
     if configuration_error:
         raise HTTPException(status_code=503, detail=configuration_error)
 
-    # Do not let a double-click or refresh create multiple live invoices for
-    # the same user.  Reconcile the existing provider record first: terminal
-    # invoices are released, while a still-pending payment remains reusable.
-    async with AsyncSessionLocal() as session:
-        existing = await session.scalar(
-            select(Payment)
-            .join(Subscription, Payment.subscription_id == Subscription.id)
-            .where(Payment.user_id == user.id, Subscription.status == "pending", Payment.status.in_(_ACTIVE_PROVIDER_STATUSES))
-            .order_by(Payment.created_at.desc())
-        )
-        if existing:
-            subscription = await session.get(Subscription, existing.subscription_id)
-            reconciled = await _reconcile_pending_payment(existing, subscription)
-            if reconciled:
-                session.add(AuditEvent(id=str(uuid.uuid4()), user_id=user.id, event_type="payment_checkout_reconciled", metadata_json={"order_id": existing.order_id, "status": existing.status}))
-                await session.commit()
-            if existing.status not in _ACTIVE_PROVIDER_STATUSES:
-                existing = None
-        if existing:
-            invoice_url = (existing.raw_payload or {}).get("invoice_url")
-            if invoice_url:
-                # A transient provider lookup failure must never force a second
-                # invoice.  Reopen the exact hosted invoice instead; the
-                # provider remains authoritative for its eventual status.
-                return {"payment_id": existing.id, "provider_invoice_id": existing.provider_invoice_id, "provider_payment_id": existing.provider_payment_id, "invoice_url": invoice_url, "order_id": existing.order_id, "reused": True, "verification_pending": not reconciled}
-            if not reconciled:
-                raise HTTPException(status_code=409, detail="Your existing payment could not be verified and its secure checkout link is unavailable. Contact support with this order reference: " + existing.order_id)
-            raise HTTPException(status_code=409, detail="A verified NOWPayments payment is still pending, but its checkout URL is unavailable. Contact support with this order reference: " + existing.order_id)
+    # Lock the user row for the entire provider create-and-persist sequence.
+    # The in-process lock protects SQLite/local runs, while FOR UPDATE makes
+    # the same guarantee across Docker workers backed by PostgreSQL.
+    lock = _CHECKOUT_LOCKS.setdefault(user.id, asyncio.Lock())
+    async with lock:
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                await session.scalar(select(User).where(User.id == user.id).with_for_update())
+                existing = await session.scalar(
+                    select(Payment)
+                    .join(Subscription, Payment.subscription_id == Subscription.id)
+                    .where(Payment.user_id == user.id, Subscription.status == "pending", Payment.status.in_(_ACTIVE_PROVIDER_STATUSES))
+                    .order_by(Payment.created_at.desc())
+                    .with_for_update()
+                )
+                reconciled = False
+                if existing:
+                    subscription = await session.get(Subscription, existing.subscription_id, with_for_update=True)
+                    reconciled = await _reconcile_pending_payment(existing, subscription)
+                    if reconciled:
+                        session.add(AuditEvent(id=str(uuid.uuid4()), user_id=user.id, event_type="payment_checkout_reconciled", metadata_json={"order_id": existing.order_id, "status": existing.status}))
+                    if existing.status not in _ACTIVE_PROVIDER_STATUSES:
+                        existing = None
+                if existing:
+                    return _checkout_view(existing, subscription, reused=True, verification_pending=not reconciled)
 
-    # Only genuine creation attempts consume the checkout quota.  Reopening a
-    # pending invoice and reconciling an older payment are idempotent actions.
-    enforce_rate_limit(request, "checkout", limit=5, window_seconds=15 * 60)
-    subscription_id, payment_id, order_id = str(uuid.uuid4()), str(uuid.uuid4()), f"atc-{uuid.uuid4().hex}"
-    try:
-        invoice = await create_nowpayments_invoice(order_id, body.plan_code)
-    except PaymentProviderError as exc:
-        logger.warning("NOWPayments checkout failed: %s", exc)
-        raise HTTPException(status_code=502, detail="NOWPayments could not create an invoice. Verify your API credentials and try again.") from exc
-    async with AsyncSessionLocal() as session:
-        subscription = Subscription(id=subscription_id, user_id=user.id, plan_code=body.plan_code, status="pending")
-        # An invoice can create one or more provider payment IDs. Bind the first
-        # signed IPN ID, rather than incorrectly treating the invoice ID as one.
-        payment = Payment(id=payment_id, user_id=user.id, subscription_id=subscription_id, provider="nowpayments", provider_invoice_id=str(invoice["id"]), provider_payment_id=None, order_id=order_id, status="waiting", amount=plan["amount"], currency=get_settings().billing_currency, raw_payload=invoice)
-        session.add_all([subscription, payment])
-        await session.commit()
-    return {"payment_id": payment_id, "provider_invoice_id": str(invoice["id"]), "invoice_url": invoice.get("invoice_url"), "order_id": order_id}
+                # Only genuine creation attempts consume checkout quota.
+                enforce_rate_limit(request, "checkout", limit=5, window_seconds=15 * 60)
+                subscription_id, payment_id, order_id = str(uuid.uuid4()), str(uuid.uuid4()), f"atc-{uuid.uuid4().hex}"
+                try:
+                    provider_payment = await create_nowpayments_payment(order_id, body.plan_code, body.pay_currency)
+                except ValueError as exc:
+                    raise HTTPException(status_code=422, detail=str(exc)) from exc
+                except PaymentProviderError as exc:
+                    logger.warning("NOWPayments checkout failed: %s", exc)
+                    raise HTTPException(status_code=502, detail="NOWPayments could not create payment instructions. Verify your API credentials and try again.") from exc
+                subscription = Subscription(id=subscription_id, user_id=user.id, plan_code=body.plan_code, status="pending")
+                payment = Payment(
+                    id=payment_id, user_id=user.id, subscription_id=subscription_id,
+                    provider="nowpayments", provider_invoice_id=None,
+                    provider_payment_id=str(provider_payment["payment_id"]), order_id=order_id,
+                    status=str(provider_payment["payment_status"]).lower(),
+                    amount=plan["amount"], currency=get_settings().billing_currency,
+                    pay_currency=str(provider_payment["pay_currency"]),
+                    pay_amount=str(provider_payment["pay_amount"]),
+                    payment_address=str(provider_payment["pay_address"]),
+                    raw_payload=provider_payment,
+                )
+                session.add_all([subscription, payment])
+                return _checkout_view(payment, subscription, reused=False)
 
 
 @router.get("/payment-status")

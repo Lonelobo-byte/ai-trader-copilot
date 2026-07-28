@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
@@ -14,6 +14,8 @@ from app.db.models import AnalysisSession
 from app.ml.model import train_walk_forward_model, get_weights_filepath
 from app.quant.backtest import run_backtest
 from app.settings import get_settings
+from app.auth import require_admin
+from app.db.models import User
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/quant", tags=["Quantitative Operations"])
@@ -54,7 +56,7 @@ async def post_backtest(req: BacktestRequest):
 
 
 @router.post("/train")
-async def post_train_model(req: TrainRequest):
+async def post_train_model(req: TrainRequest, _: User = Depends(require_admin)):
     """Perform walk-forward model training on historical klines and update model weights."""
     settings = get_settings()
     client = BinancePublicClient(settings.binance_public_base_url)

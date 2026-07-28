@@ -67,15 +67,77 @@
       <p>Unlock the full analyst workstation. Payment activation occurs only after verified provider confirmation.</p>
       <button type="button" id="plan-back" class="membership-back">← Back to account</button>
       <div id="plan-options" class="plan-options"></div>
-      <div id="checkout-progress" class="checkout-progress" hidden aria-live="polite">
-        <div class="checkout-progress-copy"><span class="checkout-progress-spinner" aria-hidden="true"></span><span
-            id="checkout-progress-text">Securing checkout…</span></div>
-        <div class="checkout-progress-track" role="progressbar" aria-label="Creating secure checkout"><span></span>
-        </div>
-      </div>
       <div id="plan-error" class="plan-error" aria-live="polite"></div>
       <div class="membership-footer"><span>◇</span> Powered by secure crypto checkout · No private keys stored</div>
     </div>
+  </div>
+
+  <div id="payment-modal" class="payment-modal-overlay" hidden aria-hidden="true">
+    <section class="payment-modal-card" role="dialog" aria-modal="true" aria-labelledby="payment-modal-title">
+      <div class="payment-modal-accent"></div>
+      <header class="payment-modal-header">
+        <div>
+          <span class="payment-modal-eyebrow">NOWPAYMENTS · SECURE PAYMENT ROUTE</span>
+          <h2 id="payment-modal-title">Complete your subscription</h2>
+        </div>
+        <button id="payment-modal-close" class="payment-modal-close" type="button"
+          aria-label="Close payment workspace">×</button>
+      </header>
+      <div class="payment-modal-body">
+        <aside class="payment-order-panel">
+          <span class="payment-panel-label">Selected access</span>
+          <h3 id="payment-plan-name">Annual</h3>
+          <p id="payment-plan-note">Full analyst workstation access.</p>
+          <div class="payment-order-row"><span>Duration</span><strong id="payment-plan-duration">365 days</strong></div>
+          <div class="payment-order-row payment-order-total"><span>Total</span><strong id="payment-plan-price">USD
+              55.99</strong></div>
+          <div id="payment-order-reference" class="payment-order-reference" hidden></div>
+          <div class="payment-security-note"><span>✓</span>
+            <p>Payment details come directly from NOWPayments. No private keys or wallet access are requested.</p>
+          </div>
+          <button id="payment-modal-back" type="button" class="payment-modal-back">← Return to plan selection</button>
+        </aside>
+        <section class="payment-workspace">
+          <div id="payment-setup" class="payment-setup">
+            <span class="payment-panel-label">Choose payment route</span>
+            <h3>Pay with crypto, securely.</h3>
+            <p>Select the asset and network you will use. We will generate a fixed, provider-issued payment instruction.
+            </p>
+            <label class="payment-field-label" for="payment-currency">Search asset or network</label>
+            <input id="payment-currency" class="payment-currency-select" list="payment-currency-options"
+              autocomplete="off" placeholder="Loading supported assets…">
+            <datalist id="payment-currency-options"></datalist>
+            <button id="payment-create" type="button" class="payment-create-button">Generate secure payment
+              <span>→</span></button>
+            <p class="payment-setup-footnote">You remain on this page. Access unlocks only after verified network
+              confirmation.</p>
+          </div>
+          <div id="payment-loading" class="payment-loading" hidden><span class="payment-loading-orbit"></span><strong
+              id="payment-loading-title">Securing provider payment route</strong><small
+              id="payment-loading-copy">Creating a fixed-rate payment instruction…</small></div>
+          <div id="payment-instructions" class="payment-instructions" hidden>
+            <div class="payment-status-line"><span id="payment-status-dot" class="payment-status-dot"></span><span
+                id="payment-status-copy">Awaiting payment</span><span id="payment-expiry" class="payment-expiry"></span>
+            </div>
+            <div class="payment-qr-shell"><img id="payment-qr" alt="Payment address QR code"></div>
+            <div class="payment-send-amount"><span>Exact amount to send</span><strong id="payment-amount">—</strong>
+            </div>
+            <div class="payment-address-block"><span id="payment-network-label">Wallet address</span>
+              <div><code id="payment-address">—</code><button id="payment-copy" type="button"
+                  aria-label="Copy payment address">Copy</button></div><small id="payment-extra-id" hidden></small>
+            </div>
+            <div class="payment-status-rail">
+              <div class="payment-rail-step is-active"><i></i><span>Awaiting<br>payment</span></div><b></b>
+              <div class="payment-rail-step"><i></i><span>Network<br>confirmation</span></div><b></b>
+              <div class="payment-rail-step"><i></i><span>Access<br>unlocked</span></div>
+            </div>
+            <p id="payment-instruction-message" class="payment-instruction-message">Send the exact amount using the
+              selected network. We will confirm it automatically.</p>
+          </div>
+          <div id="payment-legacy" class="payment-legacy" hidden></div>
+        </section>
+      </div>
+    </section>
   </div>
 
   <div id="app-toast-region" class="app-toast-region" aria-live="polite" aria-atomic="true"></div>
@@ -872,20 +934,21 @@
       let register = false;
       let paymentPollTimer = null;
       let checkoutInProgress = false;
-      const setCheckoutProgress = (active, planName = '', status = '') => {
-        const progress = document.getElementById('checkout-progress');
-        const progressText = document.getElementById('checkout-progress-text');
-        if (!progress || !progressText) return;
-        progress.hidden = !active;
-        progress.classList.toggle('is-active', active);
-        progressText.textContent = active ? (status || `Securing ${planName || 'your'} checkout…`) : 'Securing checkout…';
-      };
-      const unlock = (token) => {
+      let selectedPlan = null;
+      let checkoutToken = '';
+      let availablePaymentCurrencies = new Set();
+      const paymentModal = document.getElementById('payment-modal');
+      const paymentSetup = document.getElementById('payment-setup');
+      const paymentLoading = document.getElementById('payment-loading');
+      const paymentInstructions = document.getElementById('payment-instructions');
+      const paymentLegacy = document.getElementById('payment-legacy');
+      const unlock = (token, role = 'member') => {
         gate.style.display = 'none';
         window.atcAuthenticated = true;
-        window.dispatchEvent(new CustomEvent('atc:authenticated', { detail: { token } }));
+        window.atcUserRole = role;
+        window.dispatchEvent(new CustomEvent('atc:authenticated', { detail: { token, role } }));
       };
-      const showLogin = (message = '') => { picker.hidden = true; shell.hidden = false; form.style.display = 'block'; error.textContent = message; };
+      const showLogin = (message = '') => { paymentModal?.setAttribute('hidden', ''); picker.hidden = true; shell.hidden = false; form.style.display = 'block'; error.textContent = message; };
       planBack.onclick = () => {
         if (checkoutInProgress) return;
         if (paymentPollTimer) clearTimeout(paymentPollTimer);
@@ -893,11 +956,167 @@
         history.replaceState({}, '', '/dashboard');
         showLogin();
       };
+      const closePaymentModal = () => {
+        paymentModal.hidden = true;
+        paymentModal.setAttribute('aria-hidden', 'true');
+        paymentModal.classList.remove('motion-open');
+      };
+      const setPaymentWorkspace = (state) => {
+        paymentSetup.hidden = state !== 'setup';
+        paymentLoading.hidden = state !== 'loading';
+        paymentInstructions.hidden = state !== 'instructions';
+        paymentLegacy.hidden = state !== 'legacy';
+      };
+      const formatExpiry = (value) => {
+        const date = value ? new Date(value) : null;
+        if (!date || Number.isNaN(date.getTime())) return '';
+        const minutes = Math.max(0, Math.ceil((date.getTime() - Date.now()) / 60000));
+        return minutes ? `Expires in ${minutes} min` : 'Payment window expired';
+      };
+      const setPaymentRail = (status) => {
+        const normalized = String(status || 'waiting').toLowerCase();
+        const steps = [...document.querySelectorAll('.payment-rail-step')];
+        steps.forEach(step => step.classList.remove('is-active', 'is-complete'));
+        if (normalized === 'finished' || normalized === 'confirmed') {
+          steps[0]?.classList.add('is-complete'); steps[1]?.classList.add('is-complete'); steps[2]?.classList.add('is-active');
+        } else if (normalized === 'confirming' || normalized === 'sending') {
+          steps[0]?.classList.add('is-complete'); steps[1]?.classList.add('is-active');
+        } else {
+          steps[0]?.classList.add('is-active');
+        }
+      };
+      const renderPaymentInstructions = (payment) => {
+        if (payment.plan_code) {
+          const labels = { monthly: 'Monthly', quarterly: 'Quarterly', half_yearly: 'Half-yearly', annual: 'Annual' };
+          document.getElementById('payment-plan-name').textContent = labels[payment.plan_code] || payment.plan_code;
+          if (payment.plan_days) document.getElementById('payment-plan-duration').textContent = `${payment.plan_days} days`;
+          if (payment.plan_amount) document.getElementById('payment-plan-price').textContent = `${payment.price_currency || 'USD'} ${payment.plan_amount}`;
+        }
+        if (payment.legacy_hosted_checkout) {
+          setPaymentWorkspace('legacy');
+          const title = document.createElement('strong');
+          title.textContent = 'Existing secure checkout';
+          const message = document.createElement('p');
+          message.textContent = 'This payment began before the in-page workspace. To prevent duplicate charges, resume the original provider checkout.';
+          const link = document.createElement('a');
+          link.href = payment.invoice_url;
+          link.target = '_blank';
+          link.rel = 'noopener';
+          link.textContent = 'Open existing NOWPayments checkout ↗';
+          paymentLegacy.replaceChildren(title, message, link);
+          return;
+        }
+        setPaymentWorkspace('instructions');
+        document.getElementById('payment-order-reference').hidden = false;
+        document.getElementById('payment-order-reference').textContent = `Order reference · ${payment.order_id}`;
+        if (payment.qr_data_uri) document.getElementById('payment-qr').src = payment.qr_data_uri;
+        if (payment.pay_amount && payment.pay_currency) document.getElementById('payment-amount').textContent = `${payment.pay_amount} ${payment.pay_currency}`;
+        if (payment.pay_address) document.getElementById('payment-address').textContent = payment.pay_address;
+        if (payment.network || payment.pay_currency) document.getElementById('payment-network-label').textContent = payment.network ? `Wallet address · ${payment.network}` : `Wallet address · ${payment.pay_currency}`;
+        const extra = document.getElementById('payment-extra-id');
+        extra.hidden = !payment.payment_extra_id;
+        extra.textContent = payment.payment_extra_id ? `Memo / destination tag: ${payment.payment_extra_id}` : '';
+        const status = String(payment.payment_status || payment.status || 'waiting').toLowerCase();
+        const statusCopy = { waiting: 'Awaiting payment', confirming: 'Network confirming', sending: 'Settlement in progress', partially_paid: 'Partial payment detected', finished: 'Payment verified', confirmed: 'Payment verified' }[status] || 'Payment update received';
+        document.getElementById('payment-status-copy').textContent = statusCopy;
+        document.getElementById('payment-status-dot').className = `payment-status-dot status-${status}`;
+        document.getElementById('payment-expiry').textContent = formatExpiry(payment.expires_at || payment.payment_expires_at);
+        document.getElementById('payment-instruction-message').textContent = status === 'partially_paid'
+          ? 'A partial payment was detected. Complete the exact provider amount to continue.'
+          : status === 'confirming' || status === 'sending'
+            ? 'Payment detected. Waiting for verified provider confirmation…'
+            : 'Send the exact amount using the selected network. We will confirm it automatically.';
+        setPaymentRail(status);
+      };
+      const openPaymentModal = (plan, currency, token) => {
+        selectedPlan = plan;
+        checkoutToken = token;
+        document.getElementById('payment-plan-name').textContent = ({ monthly: 'Monthly', quarterly: 'Quarterly', half_yearly: 'Half-yearly', annual: 'Annual' })[plan.code] || plan.code;
+        document.getElementById('payment-plan-duration').textContent = `${plan.days} days`;
+        document.getElementById('payment-plan-price').textContent = `${currency} ${plan.amount}`;
+        document.getElementById('payment-plan-note').textContent = `${plan.days} days of full analyst workstation access.`;
+        document.getElementById('payment-order-reference').hidden = true;
+        const selector = document.getElementById('payment-currency');
+        selector.value = '';
+        selector.disabled = true;
+        paymentModal.hidden = false;
+        paymentModal.setAttribute('aria-hidden', 'false');
+        requestAnimationFrame(() => paymentModal.classList.add('motion-open'));
+      };
+      const loadPaymentCurrencies = async (plan, currency, token) => {
+        openPaymentModal(plan, currency, token);
+        document.getElementById('payment-loading-title').textContent = 'Loading supported payment assets';
+        document.getElementById('payment-loading-copy').textContent = 'Fetching the current NOWPayments token catalog…';
+        setPaymentWorkspace('loading');
+        try {
+          const response = await fetch('/billing/payment-currencies', { headers: { 'Authorization': `Bearer ${token}` } });
+          const data = await response.json();
+          if (!response.ok) throw new Error(data.detail || 'Could not load payment currencies.');
+          const currencies = Array.isArray(data.currencies) ? data.currencies : [];
+          if (!currencies.length) throw new Error('No payment currencies are available right now.');
+          availablePaymentCurrencies = new Set(currencies.map(item => item.code));
+          const options = document.getElementById('payment-currency-options');
+          options.replaceChildren(...currencies.map(item => new Option(item.label, item.code)));
+          const selector = document.getElementById('payment-currency');
+          selector.disabled = false;
+          selector.placeholder = 'e.g. USDT, BTC, SOL…';
+          setPaymentWorkspace('setup');
+        } catch (err) {
+          closePaymentModal();
+          document.getElementById('plan-error').textContent = err.message || 'Could not load payment currencies.';
+        }
+      };
+      const createPaymentInstructions = async () => {
+        if (!selectedPlan || checkoutInProgress) return;
+        const payCurrency = document.getElementById('payment-currency').value.trim().toLowerCase();
+        if (!availablePaymentCurrencies.has(payCurrency)) {
+          const selector = document.getElementById('payment-currency');
+          selector.setCustomValidity('Choose a supported asset from the list.');
+          selector.reportValidity();
+          selector.setCustomValidity('');
+          selector.focus();
+          return;
+        }
+        checkoutInProgress = true;
+        document.getElementById('payment-loading-title').textContent = 'Securing provider payment route';
+        document.getElementById('payment-loading-copy').textContent = 'Creating a fixed-rate payment instruction…';
+        setPaymentWorkspace('loading');
+        try {
+          const response = await fetch('/billing/checkout', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${checkoutToken}` },
+            body: JSON.stringify({ plan_code: selectedPlan.code, pay_currency: payCurrency })
+          });
+          const raw = await response.text();
+          let payment = {};
+          try { payment = raw ? JSON.parse(raw) : {}; } catch { payment = { detail: raw || `Checkout failed with HTTP ${response.status}.` }; }
+          if (!response.ok) throw new Error(payment.detail || 'Checkout is unavailable.');
+          renderPaymentInstructions(payment);
+          checkoutInProgress = false;
+          if (!payment.legacy_hosted_checkout) waitForPayment(checkoutToken);
+        } catch (err) {
+          checkoutInProgress = false;
+          setPaymentWorkspace('setup');
+          document.getElementById('plan-error').textContent = err.message || 'Could not create payment instructions.';
+        }
+      };
+      document.getElementById('payment-create').onclick = createPaymentInstructions;
+      document.getElementById('payment-modal-close').onclick = closePaymentModal;
+      document.getElementById('payment-modal-back').onclick = closePaymentModal;
+      paymentModal.addEventListener('click', event => { if (event.target === paymentModal && !checkoutInProgress) closePaymentModal(); });
+      document.addEventListener('keydown', event => { if (event.key === 'Escape' && !paymentModal.hidden && !checkoutInProgress) closePaymentModal(); });
+      document.getElementById('payment-copy').onclick = async () => {
+        const address = document.getElementById('payment-address').textContent;
+        try { await navigator.clipboard.writeText(address); } catch (_) {
+          const input = document.createElement('textarea'); input.value = address; document.body.append(input); input.select(); document.execCommand('copy'); input.remove();
+        }
+        document.getElementById('payment-copy').textContent = 'Copied';
+        setTimeout(() => { document.getElementById('payment-copy').textContent = 'Copy'; }, 1600);
+      };
       const showPlans = async (token) => {
         shell.hidden = true; picker.hidden = false;
         const options = document.getElementById('plan-options'), planError = document.getElementById('plan-error');
         checkoutInProgress = false;
-        setCheckoutProgress(false);
         try {
           const response = await fetch('/billing/plans'); const data = await response.json();
           if (!data.checkout_available) { planError.textContent = data.checkout_message || 'Checkout is temporarily unavailable.'; return; }
@@ -917,41 +1136,24 @@
             button.innerHTML = `
               ${featured ? '<span class="plan-card-badge">Most popular</span>' : ''}
               <span class="plan-card-top">
-                <span><span class="plan-card-name">${planLabels[plan.code] || plan.code.replace(/_/g, ' ')}</span><span class="plan-card-note">${planNotes[plan.code] || 'Premium platform access'}</span></span>
+                <span>
+                  <span class="plan-name-row">
+                    <span class="plan-card-name">${planLabels[plan.code] || plan.code.replace(/_/g, ' ')}</span>
+                    ${plan.savings_pct ? `<span class="plan-savings-pill${featured ? ' plan-savings-pill-featured' : ''}">SAVE ${plan.savings_pct}%</span>` : ''}
+                  </span>
+                  <span class="plan-card-note">${planNotes[plan.code] || 'Premium platform access'}</span>
+                </span>
                 <span class="plan-card-radio" aria-hidden="true"></span>
               </span>
               <span class="plan-card-price"><strong>${data.currency} ${plan.amount}</strong><small>${plan.code === 'monthly' ? '/ month' : `/ ${plan.days} days`}</small></span>
+              ${plan.savings_pct ? `<span class="plan-list-price">Was ${data.currency} ${plan.list_amount}</span>` : ''}
               <span class="plan-card-value">${featured ? 'Priority value plan' : `${plan.days} days of full access`}</span>`;
-            button.onclick = async () => {
+            button.onclick = () => {
               if (checkoutInProgress) return;
-              const checkoutStartedAt = performance.now();
-              checkoutInProgress = true;
               options.querySelectorAll('.plan-card').forEach(card => card.classList.remove('is-selected'));
-              button.classList.add('is-selected', 'is-loading');
-              options.querySelectorAll('.plan-card').forEach(card => { card.disabled = true; });
-              setCheckoutProgress(true, planLabels[plan.code] || plan.code);
-              planError.textContent = ''; try {
-                const checkout = await fetch('/billing/checkout', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` }, body: JSON.stringify({ plan_code: plan.code }) });
-                const raw = await checkout.text();
-                let invoice = {};
-                try { invoice = raw ? JSON.parse(raw) : {}; }
-                catch { invoice = { detail: raw || `Checkout failed with HTTP ${checkout.status}.` }; }
-                if (!checkout.ok) throw new Error(invoice.detail || 'Checkout is unavailable.');
-                if (!invoice.invoice_url) throw new Error('Checkout did not return an invoice URL.');
-                setCheckoutProgress(true, planLabels[plan.code] || plan.code, 'Checkout ready. Opening secure payment…');
-                // Let the browser paint the locked, animated handoff before navigating away.
-                const minimumHandoffMs = 700;
-                const remainingHandoffMs = minimumHandoffMs - (performance.now() - checkoutStartedAt);
-                if (remainingHandoffMs > 0) {
-                  await new Promise(resolve => window.setTimeout(resolve, remainingHandoffMs));
-                }
-                window.location.assign(invoice.invoice_url);
-              } catch (err) {
-                checkoutInProgress = false;
-                setCheckoutProgress(false);
-                planError.textContent = err.message;
-                options.querySelectorAll('.plan-card').forEach(card => { card.disabled = false; card.classList.remove('is-loading'); });
-              }
+              button.classList.add('is-selected');
+              planError.textContent = '';
+              loadPaymentCurrencies(plan, data.currency, token);
             };
             return button;
           }));
@@ -969,6 +1171,11 @@
             if (paymentPollTimer) clearTimeout(paymentPollTimer);
             history.replaceState({}, '', '/dashboard');
             return unlock(token);
+          }
+          if (d.payment && !paymentModal.hidden) renderPaymentInstructions(d.payment);
+          if (['failed', 'expired', 'refunded'].includes(String(d.payment?.status || '').toLowerCase())) {
+            document.getElementById('payment-instruction-message').textContent = 'This payment is no longer active. Return to plan selection to create a new payment route.';
+            return;
           }
           if (attempts >= 30) {
             planError.textContent = 'Payment is still being confirmed. Refresh this page in a few minutes; access will unlock after verified confirmation.';
@@ -994,7 +1201,7 @@
           // The server is the entitlement authority.  In local/test mode it
           // may deliberately grant access with subscription enforcement off;
           // production still returns false until NOWPayments is verified.
-          if (d.access_granted) return unlock(token);
+          if (d.access_granted) return unlock(token, d.role);
           if (new URLSearchParams(location.search).get('payment') === 'success') {
             await showPlans(token);
             return waitForPayment(token);

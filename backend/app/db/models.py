@@ -189,3 +189,24 @@ class AuditEvent(Base):
     ip_address = Column(String(64), nullable=True)
     metadata_json = Column(JSON, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class ScannerConfiguration(Base):
+    """The single durable configuration for platform-wide autonomous scans."""
+    __tablename__ = "scanner_configuration"
+
+    id = Column(Integer, primary_key=True, default=1)
+    enabled = Column(Boolean, nullable=False, default=False)
+    discovery = Column(Boolean, nullable=False, default=False)
+    watchlist = Column(JSON, nullable=False, default=list)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+
+class PlatformAIUsage(Base):
+    """Conservative, persistent reservation ledger for platform AI spend."""
+    __tablename__ = "platform_ai_usage"
+
+    period_key = Column(String(7), primary_key=True)
+    reserved_calls = Column(Integer, nullable=False, default=0)
+    reserved_cost_usd = Column(Float, nullable=False, default=0.0)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)

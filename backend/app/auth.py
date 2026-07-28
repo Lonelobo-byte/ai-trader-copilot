@@ -117,6 +117,13 @@ async def require_active_subscription(user: User = Depends(current_user)) -> Use
     return user
 
 
+async def require_admin(user: User = Depends(current_user)) -> User:
+    """Restrict platform-wide mutations to an explicitly bootstrapped admin."""
+    if user.role != "admin":
+        raise HTTPException(status_code=403, detail="Administrator access is required for this platform-wide action.")
+    return user
+
+
 async def websocket_subscription(websocket: WebSocket) -> User | None:
     try:
         # Browser WebSockets cannot set Authorization headers.  Carry the

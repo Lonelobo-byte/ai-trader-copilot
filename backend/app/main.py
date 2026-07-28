@@ -51,6 +51,7 @@ async def lifespan(app: FastAPI):
         await init_db()
     except Exception:
         logger.exception("Failed to initialize database during lifespan startup.")
+        raise
     
     tasks = [
         asyncio.create_task(signal_monitor_loop()),
@@ -121,7 +122,9 @@ app.include_router(signals_router, dependencies=premium_dependencies)
 app.include_router(alpha_router, dependencies=premium_dependencies)
 app.include_router(quant_ops_router, dependencies=premium_dependencies)
 app.include_router(scanner_router, dependencies=premium_dependencies)
-app.include_router(radar_router, dependencies=premium_dependencies)
+# Radar discovery is intentionally public; detailed single-symbol research
+# remains protected at the endpoint level.
+app.include_router(radar_router)
 app.include_router(performance_router, dependencies=premium_dependencies)
 
 

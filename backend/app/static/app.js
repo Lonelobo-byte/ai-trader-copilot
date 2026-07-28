@@ -571,6 +571,15 @@ function formatVolume(num) {
 }
 
 let scannerStatusInitialized = false;
+const canManageScanner = () => window.atcUserRole === 'admin';
+
+function applyScannerPermissions() {
+  const disabled = !canManageScanner();
+  [scannerEnableToggle, scannerDiscoveryToggle, triggerScanBtn, addPairBtn, newPairInput].forEach(node => {
+    if (node) node.disabled = disabled;
+  });
+  if (disabled && triggerScanBtn) triggerScanBtn.title = 'Platform-wide scanner controls are restricted to administrators.';
+}
 
 // ── Autonomous Scanner Integration ──────────────────────────────────────────
 
@@ -628,9 +637,11 @@ async function fetchScannerStatus() {
         });
 
         // Remove tag handler
-        tag.querySelector('.remove-btn').addEventListener('click', (e) => {
+        const removeButton = tag.querySelector('.remove-btn');
+        removeButton.hidden = !canManageScanner();
+        removeButton.addEventListener('click', (e) => {
           e.stopPropagation();
-          removeWatchlistPair(sym);
+          if (canManageScanner()) removeWatchlistPair(sym);
         });
 
         watchlistTagsContainer.appendChild(tag);
@@ -663,6 +674,7 @@ async function fetchScannerStatus() {
 }
 
 async function addWatchlistPair(symbol) {
+  if (!canManageScanner()) return;
   const sym = symbol.toUpperCase().trim();
   if (!sym) return;
   try {
@@ -690,6 +702,7 @@ async function addWatchlistPair(symbol) {
 }
 
 async function removeWatchlistPair(symbol) {
+  if (!canManageScanner()) return;
   try {
     const statusResp = await fetch('/scanner/watchlist');
     const { watchlist } = await statusResp.json();
@@ -710,6 +723,7 @@ async function removeWatchlistPair(symbol) {
 
 // Manual scan run trigger
 triggerScanBtn.addEventListener('click', async () => {
+  if (!canManageScanner()) return;
   try {
     triggerScanBtn.disabled = true;
     logMsg("Watchlist manual scan triggered...", "system");
@@ -736,6 +750,7 @@ newPairInput.addEventListener('keypress', (e) => {
 
 // Watchlist Discovery toggles UI responses
 scannerDiscoveryToggle.addEventListener('change', async () => {
+  if (!canManageScanner()) return;
   const isChecked = scannerDiscoveryToggle.checked;
   logMsg(`Updating AI pair discovery state: ${isChecked ? "ON" : "OFF"}...`, 'system');
   try {
@@ -755,6 +770,7 @@ scannerDiscoveryToggle.addEventListener('change', async () => {
 });
 
 scannerEnableToggle.addEventListener('change', async () => {
+  if (!canManageScanner()) return;
   const isChecked = scannerEnableToggle.checked;
   logMsg(`Updating background scanner state: ${isChecked ? "ON" : "OFF"}...`, 'system');
   try {
@@ -779,7 +795,8 @@ scannerEnableToggle.addEventListener('change', async () => {
 activeScannerInterval = setInterval(() => {
   if (window.atcAuthenticated) fetchScannerStatus();
 }, 10000);
-window.addEventListener('atc:authenticated', fetchScannerStatus);
+window.addEventListener('atc:authenticated', () => { applyScannerPermissions(); fetchScannerStatus(); });
+applyScannerPermissions();
 if (window.atcAuthenticated) fetchScannerStatus();
 
 // ── Rendering dashboard logic ──────────────────────────────────────────────

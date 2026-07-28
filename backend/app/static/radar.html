@@ -1333,147 +1333,14 @@
         headers.set('Authorization', `Bearer ${token}`);
         return radarOriginalFetch(url, { ...options, headers, credentials: 'same-origin' });
       }
-      function showRadarAuthRequired(message) {
-        refreshText.textContent = message;
-        const status = document.getElementById('radar-status');
-        if (status) status.querySelector('.text').textContent = 'Sign in required';
+      function publicRadarFetch(url, options = {}) {
+        // Discovery is public. An existing token may be attached, but Radar
+        // never refreshes or requires a session just to render market context.
+        const headers = new Headers(options.headers || {});
+        const token = radarAccessToken();
+        if (token) headers.set('Authorization', `Bearer ${token}`);
+        return radarOriginalFetch(url, { ...options, headers, credentials: 'same-origin' });
       }
-      async function reconcileRadarMembership() {
-        try {
-          const token = await ensureRadarAccessToken();
-          const response = await radarOriginalFetch('/billing/payment-status', {
-            headers: { 'Authorization': `Bearer ${token}` }, credentials: 'same-origin'
-          });
-          if (!response.ok) return false;
-          const payload = await response.json();
-          return payload?.payment?.subscription?.active === true;
-        } catch (_) {
-          return false;
-        }
-      }
-      async function radarAccessGranted() {
-        try {
-          const token = await ensureRadarAccessToken();
-          const response = await radarOriginalFetch('/billing/me', {
-            headers: { 'Authorization': `Bearer ${token}` }, credentials: 'same-origin'
-          });
-          if (!response.ok) return false;
-          const payload = await response.json();
-          return payload?.access_granted === true;
-        } catch (_) {
-          return false;
-        }
-      }
-      function showRadarMembershipRequired() {
-        refreshText.textContent = 'Membership activation is required before Radar can scan.';
-        const status = document.getElementById('radar-status');
-        if (status) status.querySelector('.text').textContent = 'Membership required';
-        showResearchBriefNotice('Radar access requires an active membership', 'If you just completed a NOWPayments checkout, Radar checked the verified provider status once. Return to the dashboard payment screen to continue waiting for confirmation or start a new checkout after a failed payment is released.', 'ACCESS REQUIRED');
-      }
-
-      // AI Radar Cooldown Manager (Hardened 5-minute / 300s limit)
-      const AI_COOLDOWN_MS = 5 * 60 * 1000; // 300,000 ms = 5 minutes
-      let isFetchingAI = false;
-
-      function updateAICooldownUI() {
-        const aiBtn = document.getElementById('ai-radar-btn');
-        if (!aiBtn) return;
-
-        // If currently in-flight evaluating, don't overwrite evaluating badge
-        if (isFetchingAI) return;
-
-        const cooldownUntil = parseInt(localStorage.getItem('ai_radar_cooldown_until') || '0', 10);
-        const remaining = cooldownUntil - Date.now();
-
-        if (remaining > 0) {
-          const mins = Math.floor(remaining / 60000);
-          const secs = Math.floor((remaining % 60000) / 1000);
-          const formatted = `${mins}:${secs < 10 ? '0' : ''}${secs}`;
-          aiBtn.disabled = true;
-          aiBtn.style.opacity = '0.7';
-          aiBtn.style.cursor = 'not-allowed';
-          aiBtn.innerHTML = `
-            <span>🤖 Run AI Scoring</span>
-            <span style="background: rgba(241, 65, 108, 0.25); color: #f1416c; border: 1px solid rgba(241, 65, 108, 0.6); font-family: var(--font-mono); font-size: 0.75rem; font-weight: 800; padding: 2px 7px; border-radius: 6px; box-shadow: 0 0 8px rgba(241, 65, 108, 0.3); letter-spacing: 0.5px;">⏳ ${formatted}</span>
-          `;
-        } else {
-          aiBtn.disabled = false;
-          aiBtn.style.opacity = '1';
-          aiBtn.style.cursor = 'pointer';
-          aiBtn.innerHTML = `
-            <span>🤖 Run AI Scoring on Top 3</span>
-            <span style="background: rgba(80, 205, 137, 0.2); color: #50cd89; border: 1px solid rgba(80, 205, 137, 0.5); font-family: var(--font-mono); font-size: 0.7rem; font-weight: 700; padding: 2px 6px; border-radius: 6px;">READY</span>
-          `;
-        }
-      }
-
-      // Fetch records (default: 0 AI calls for background/automatic scans)
-      async function fetchBreakouts(useAi = false) {
-        const aiBtn = document.getElementById('ai-radar-btn');
-
-        if (useAi) {
-          if (isFetchingAI || (aiBtn && aiBtn.disabled)) {
-            return; // Block repeat clicks while evaluating or during cooldown
-          }
-
-          const cooldownUntil = parseInt(localStorage.getItem('ai_radar_cooldown_until') || '0', 10);
-          if (cooldownUntil > Date.now()) {
-            updateAICooldownUI();
-            return;
-          }
-
-          isFetchingAI = true;
-          spinner.style.display = 'block';
-          refreshText.textContent = "Running AI scoring on top candidates...";
-          if (aiBtn) {
-            aiBtn.disabled = true;
-            aiBtn.style.opacity = '0.65';
-            aiBtn.style.cursor = 'not-allowed';
-            aiBtn.innerHTML = `
-              <span>🤖 Run AI Scoring</span>
-              <span style="background: rgba(157, 78, 221, 0.3); color: #e0aaff; border: 1px solid rgba(157, 78, 221, 0.6); font-family: var(--font-mono); font-size: 0.7rem; font-weight: 800; padding: 2px 7px; border-radius: 6px; box-shadow: 0 0 8px rgba(157, 78, 221, 0.3);">⏳ EVALUATING...</span>
-            `;
-          }
-        } else {
-          spinner.style.display = 'block';
-          refreshText.textContent = "Scanning market (Quant Mode)...";
-        }
-
-        const [ltf, htf] = (scanModeSelect.value || '5m,1h').split(',');
-
-        try {
-          const response = await premiumRadarFetch(`/quant/breakout-radar?ltf=${ltf}&htf=${htf}&use_ai=${useAi}`);
-          if (!response.ok) {
-            const errData = await response.json().catch(() => ({}));
-            if (response.status === 429) {
-              const detail = errData.detail || '';
-              const match = detail.match(/(\d+)s/);
-              const secs = match ? parseInt(match[1], 10) : 300;
-              localStorage.setItem('ai_radar_cooldown_until', (Date.now() + secs * 1000).toString());
-              alert(detail || "AI Radar scan is on 5-minute cooldown.");
-            }
-            throw new Error(errData.detail || 'API query failed.');
-          }
-          rawBreakouts = await response.json();
-
-          if (useAi) {
-            // Set 5-minute cooldown in localStorage upon successful AI scan
-            localStorage.setItem('ai_radar_cooldown_until', (Date.now() + AI_COOLDOWN_MS).toString());
-          }
-
-          renderTable();
-          updateSummary();
-        } catch (error) {
-          console.error("Error loading breakout data:", error);
-          if (/sign in|unauthorized|401/i.test(error.message || '')) showRadarAuthRequired('Sign in is required before Radar can scan.');
-        } finally {
-          if (useAi) isFetchingAI = false;
-          spinner.style.display = 'none';
-          secondsRemaining = 30;
-          updateAICooldownUI();
-        }
-      }
-
       // Render breakout records
       function renderTable() {
         stopRadarEvidenceLoading();
@@ -2015,8 +1882,8 @@
         }
       }
 
-      // This final definition keeps automatic scans deterministic; research is an explicit, separate action.
-      async function fetchBreakouts(retriedAfterPaymentCheck = false) {
+      // Discovery is public and deterministic; detailed briefs stay protected.
+      async function fetchBreakouts() {
         radarScanReady = false;
         setResearchButtonState('SCANNING');
         showRadarEvidenceLoading();
@@ -2025,7 +1892,7 @@
         refreshText.textContent = 'Scanning causal market evidence...';
         const [ltf, htf] = (scanModeSelect.value || '5m,1h').split(',');
         try {
-          const response = await premiumRadarFetch(`/quant/breakout-radar?ltf=${ltf}&htf=${htf}`);
+          const response = await publicRadarFetch(`/quant/breakout-radar?ltf=${ltf}&htf=${htf}`);
           if (!response.ok) {
             const errData = await response.json().catch(() => ({}));
             throw new Error(errData.detail || 'API query failed.');
@@ -2044,17 +1911,9 @@
         } catch (error) {
           rawBreakouts = [];
           radarScanReady = false;
-          if (/active subscription|subscription is required|403/i.test(error.message || '') && !retriedAfterPaymentCheck) {
-            refreshText.textContent = 'Checking verified payment status…';
-            if (await reconcileRadarMembership()) return fetchBreakouts(true);
-            setResearchButtonState();
-            showRadarMembershipRequired();
-            return;
-          }
           console.error('Error loading Radar data:', error);
           setResearchButtonState();
-          showResearchBriefNotice('Radar scan unavailable', 'Research briefs cannot be built until a live Radar scan succeeds. Check your session or market-data connection, then let Radar retry.', 'SCAN FAILED');
-          if (/sign in|unauthorized|401/i.test(error.message || '')) showRadarAuthRequired('Sign in is required before Radar can scan.');
+          showResearchBriefNotice('Radar scan unavailable', 'Public market discovery could not complete. Check the market-data connection, then let Radar retry.', 'SCAN FAILED');
         } finally {
           stopRadarEvidenceLoading();
           spinner.style.display = 'none';
@@ -2144,29 +2003,15 @@
         }, 1000);
       }
 
-      // Load only after the token is present or safely refreshed. This avoids
-      // the misleading initial 401 that a standalone Radar page used to log.
       async function startRadar() {
         try {
-          // A standalone Radar tab can inherit a valid-looking but stale
-          // sessionStorage token from a restarted backend. Refresh before the
-          // initial protected call so the browser never emits a spurious 401.
-          await ensureRadarAccessToken(true);
-          if (!await radarAccessGranted()) {
-            await reconcileRadarMembership();
-            if (!await radarAccessGranted()) {
-              showRadarMembershipRequired();
-              return;
-            }
-          }
           await fetchBreakouts();
           startTimer();
         } catch (error) {
           rawBreakouts = [];
           radarScanReady = false;
           setResearchButtonState();
-          showResearchBriefNotice('Radar session required', 'Research briefs need a successful live Radar scan. Sign in again, then return here and Radar will load the current contexts.', 'SIGN IN REQUIRED');
-          showRadarAuthRequired(error.message || 'Please sign in to use Radar.');
+          showResearchBriefNotice('Radar scan unavailable', 'Public market discovery could not complete. Radar will retry automatically.', 'SCAN FAILED');
         }
       }
       startRadar();

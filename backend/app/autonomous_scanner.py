@@ -14,7 +14,7 @@ from app.brains.council import run_ai_council
 from app.brains.signal_builder import build_ai_driven_trade_setup, evaluate_ai_driven_approval
 from app.data_sources.data_aggregator import fetch_pair_discovery_data
 from app.db.database import AsyncSessionLocal
-from app.db.models import TradeSignal
+from app.db.models import ScannerConfiguration, TradeSignal
 from app.signal_service import get_active_signal, ensure_signal_database
 from app.brains.signal_lifecycle import build_signal_seed
 from app.settings import get_settings
@@ -33,6 +33,55 @@ scanner_state: dict[str, Any] = {
     "discovered_pairs": [],
     "active_signals_count": 0,
 }
+
+
+async def get_scanner_configuration(settings: Any | None = None) -> dict[str, Any]:
+    """Load the durable scanner settings, seeding them once from environment defaults."""
+    settings = settings or get_settings()
+    async with AsyncSessionLocal() as db:
+        config = await db.get(ScannerConfiguration, 1)
+        if config is None:
+            config = ScannerConfiguration(
+                id=1,
+                enabled=bool(settings.autonomous_scan_enabled),
+                discovery=bool(settings.autonomous_pair_discovery),
+                watchlist=list(settings.watchlist),
+            )
+            db.add(config)
+            await db.commit()
+            await db.refresh(config)
+        return {
+            "enabled": bool(config.enabled),
+            "discovery": bool(config.discovery),
+            "watchlist": list(config.watchlist or []),
+            "updated_at": config.updated_at.isoformat() if config.updated_at else None,
+        }
+
+
+async def update_scanner_configuration(
+    *, enabled: bool | None = None, discovery: bool | None = None, watchlist: list[str] | None = None,
+) -> dict[str, Any]:
+    """Persist an admin-approved global scanner change and update local status."""
+    settings = get_settings()
+    await get_scanner_configuration(settings)
+    async with AsyncSessionLocal() as db:
+        config = await db.get(ScannerConfiguration, 1, with_for_update=True)
+        if enabled is not None:
+            config.enabled = enabled
+        if discovery is not None:
+            config.discovery = discovery
+        if watchlist is not None:
+            config.watchlist = list(watchlist)
+        await db.commit()
+        await db.refresh(config)
+    snapshot = {
+        "enabled": bool(config.enabled),
+        "discovery": bool(config.discovery),
+        "watchlist": list(config.watchlist or []),
+        "updated_at": config.updated_at.isoformat() if config.updated_at else None,
+    }
+    scanner_state["watchlist"] = snapshot["watchlist"]
+    return snapshot
 
 
 async def run_single_symbol_scan(symbol: str, timeframe: str, settings: Any) -> dict[str, Any] | None:
@@ -134,15 +183,16 @@ async def run_scan_cycle() -> None:
     scanner_state["current_symbol"] = None
 
     settings = get_settings()
+    configuration = await get_scanner_configuration(settings)
     timeframe = "15m"  # Standard default timeframe for scanning
 
     try:
         # Determine symbols to scan
-        symbols = list(settings.watchlist)
+        symbols = list(configuration["watchlist"])
         scanner_state["watchlist"] = symbols
 
         # Fetch discovered pairs if enabled
-        if settings.autonomous_pair_discovery:
+        if configuration["discovery"]:
             logger.info("Running autonomous pair discovery...")
             discovery_data = await fetch_pair_discovery_data(settings)
             
@@ -201,7 +251,8 @@ async def autonomous_scanner_loop() -> None:
     while True:
         try:
             settings = get_settings()
-            if settings.autonomous_scan_enabled:
+            configuration = await get_scanner_configuration(settings)
+            if configuration["enabled"]:
                 await run_scan_cycle()
             else:
                 logger.info("Autonomous scan disabled in settings. Skipping.")
@@ -214,7 +265,8 @@ async def autonomous_scanner_loop() -> None:
                 slept += 10
                 # Re-load settings to check if disabled/interval changed
                 settings = get_settings()
-                if not settings.autonomous_scan_enabled or settings.scan_interval_seconds != interval:
+                configuration = await get_scanner_configuration(settings)
+                if not configuration["enabled"] or settings.scan_interval_seconds != interval:
                     break
         except asyncio.CancelledError:
             logger.info("Autonomous Scanner loop cancelled.")

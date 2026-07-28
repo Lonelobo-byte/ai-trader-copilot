@@ -6,7 +6,7 @@ import logging
 from typing import Any
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field
 
 from ..analysis_pipeline import run_full_analysis
@@ -18,10 +18,17 @@ from ..quant.research import list_hypotheses, validate_series
 from ..auth import require_active_subscription, websocket_subscription
 from ..db.models import User
 from ..user_ai import UserAIConnectionError, ai_cache_identity, resolve_user_ai_config
+from ..rate_limit import enforce_rate_limit
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def _analysis_rate_limit(http_request: Request) -> None:
+    # This protects external market-data work before the more specific AI
+    # budget guard decides whether a model call may be made.
+    enforce_rate_limit(http_request, "analysis", limit=12, window_seconds=60)
 
 
 class AnalyzeRequest(BaseModel):
@@ -49,7 +56,7 @@ async def validate_alpha(request: AlphaValidationRequest):
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-@router.post("/analyze")
+@router.post("/analyze", dependencies=[Depends(_analysis_rate_limit)])
 async def analyze(request: AnalyzeRequest, user: User = Depends(require_active_subscription)):
     settings = get_settings()
     symbol = request.symbol.upper().strip()
@@ -90,6 +97,9 @@ async def analyze(request: AnalyzeRequest, user: User = Depends(require_active_s
         market_intelligence=intelligence,
         ai_override=ai_override,
         ai_cache_key=ai_cache_identity(user.id, ai_override),
+        # Shared signal publication is a platform operation. Subscriber
+        # analysis remains research-only and cannot alter the global ledger.
+        reconcile_signals=user.role == "admin",
     )
     return payload
 
@@ -156,6 +166,7 @@ async def websocket_analyze(websocket: WebSocket):
                 last_ai_open_time=last_ai_open_time,
                 ai_override=ai_override,
                 ai_cache_key=ai_cache_identity(user.id, ai_override),
+                reconcile_signals=user.role == "admin",
             )
             payload["type"] = event["type"]
             await websocket.send_json(payload)

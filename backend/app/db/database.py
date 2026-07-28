@@ -24,7 +24,10 @@ class Base(AsyncAttrs, DeclarativeBase):
 
 async def init_db():
     # Import models to guarantee registration with Base.metadata before creation
-    from .models import AnalysisSession, User, UserAIConnection, Subscription, Payment, RefreshToken, AuditEvent
+    from .models import (
+        AnalysisSession, TradeSignal, User, UserAIConnection, Subscription,
+        Payment, RefreshToken, AuditEvent, ScannerConfiguration, PlatformAIUsage,
+    )
     try:
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)

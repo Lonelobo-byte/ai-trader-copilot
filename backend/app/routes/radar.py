@@ -11,10 +11,12 @@ import logging
 from time import time
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from ..data_sources.binance_public import Candle
+from ..auth import require_active_subscription
+from ..db.models import User
 from ..indicators.liquidity import detect_liquidity_sweep
 from ..indicators.structure import classify_market_phase, find_swing_points
 from ..quant.market_context import (
@@ -25,6 +27,7 @@ from ..quant.market_context import (
     score_market_context,
 )
 from ..quant.momentum_scanner import get_breakout_candidates
+from ..rate_limit import enforce_rate_limit
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/quant", tags=["radar"])
@@ -36,8 +39,9 @@ _SUPPORTED_PAIRS = {("5m", "1h"), ("15m", "4h"), ("1h", "1d")}
 
 
 @router.get("/breakout-radar", response_model=list[dict[str, Any]])
-async def get_radar_breakouts(ltf: str = "5m", htf: str = "1h", use_ai: bool = False):
+async def get_radar_breakouts(request: Request, ltf: str = "5m", htf: str = "1h", use_ai: bool = False):
     """Return a cached causal evidence ranking for one supported timeframe pair."""
+    enforce_rate_limit(request, "public_radar", limit=20, window_seconds=60)
     pair = (ltf, htf)
     if pair not in _SUPPORTED_PAIRS:
         raise HTTPException(status_code=422, detail="Use one of the supported Radar pairs: 5m/1h, 15m/4h, or 1h/1d.")
@@ -111,7 +115,7 @@ def _observable_structure_events(candles: list[Candle]) -> dict[str, dict[str, A
 
 
 @router.post("/verify-setup")
-async def verify_setup(payload: VerifySetupRequest):
+async def verify_setup(payload: VerifySetupRequest, request: Request, user: User = Depends(require_active_subscription)):
     """Return an auditable causal research brief for one contract.
 
     The endpoint deliberately reports missing positioning/order-flow domains
@@ -120,6 +124,7 @@ async def verify_setup(payload: VerifySetupRequest):
     from ..data_sources.binance_public import BinancePublicClient
     from ..settings import get_settings
 
+    enforce_rate_limit(request, f"radar_research:{user.id}", limit=12, window_seconds=60)
     settings = get_settings()
     symbol = payload.symbol.upper().strip()
     pair = (payload.ltf, payload.htf)

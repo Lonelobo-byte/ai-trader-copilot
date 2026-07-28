@@ -21,7 +21,8 @@ from typing import Any
 from app.data_sources.data_aggregator import fetch_market_intelligence
 from app.quant.feature_engine import compute_quant_features
 from app.brains.prompts.loader import load_prompt
-from app.ai_client import AIRequestConfig, build_async_ai_client, get_model_for_task, safe_async_chat_completion
+from app.ai_client import AIRequestConfig, ai_is_configured, build_async_ai_client, get_model_for_task, safe_async_chat_completion
+from app.ai_budget import AIBudgetExceededError, reserve_platform_ai_budget
 from app.settings import Settings, get_settings
 from app.quant.engine import build_quantitative_assessment
 from app.institutional.committee import (
@@ -55,7 +56,10 @@ async def _call_agent(
         return {"error": "AI client not configured.", "bias": "NEUTRAL", "conviction": 0}
 
     model = get_model_for_task(settings, task, ai_override)
-    max_attempts = 4
+    # The configured cap is a hard cap on provider requests, including retry
+    # attempts. Keeping retries within it prevents a single analysis from
+    # spending more than the operator explicitly allowed.
+    max_attempts = max(1, int(settings.ai_max_calls_per_analysis))
     for attempt in range(1, max_attempts + 1):
         try:
             # Stagger startup of parallel agents to spread load
@@ -72,6 +76,7 @@ async def _call_agent(
                 ],
                 response_format={"type": "json_object"},
                 temperature=0.2,
+                max_retries=0,
             )
             content = completion.choices[0].message.content or "{}"
             from app.utils.json_helper import loads_repaired
@@ -193,7 +198,27 @@ async def run_ai_council(
     dossier["historical_stats"] = historical_stats
     dossier["calendar_events"] = calendar_events
 
-    raw_cio_result = await _run_institutional_cio(symbol, timeframe, dossier, settings, ai_override)
+    ai_enabled = int(settings.ai_max_calls_per_analysis) > 0 and ai_is_configured(settings, ai_override)
+    if ai_enabled and ai_override is None:
+        try:
+            await reserve_platform_ai_budget(settings)
+        except AIBudgetExceededError as exc:
+            logger.warning("Platform AI request blocked by budget: %s", exc)
+            ai_enabled = False
+            ai_budget_error = str(exc)
+        else:
+            ai_budget_error = ""
+    else:
+        ai_budget_error = ""
+
+    raw_cio_result = (
+        await _run_institutional_cio(symbol, timeframe, dossier, settings, ai_override)
+        if ai_enabled
+        else build_deterministic_cio_decision(
+            dossier,
+            narrative_error=ai_budget_error or "AI synthesis is disabled or no configured AI connection is available.",
+        )
+    )
     if raw_cio_result.get("error"):
         raw_cio_result = build_deterministic_cio_decision(
             dossier,

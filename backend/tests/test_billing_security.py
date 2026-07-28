@@ -6,9 +6,9 @@ import asyncio
 from unittest.mock import AsyncMock, patch
 
 from app.auth import utcnow
-from app.billing import callback_configuration_error
+from app.billing import callback_configuration_error, payment_qr_data_uri
 from app.db.models import Payment, Subscription
-from app.routes.billing import _apply_provider_status, _pick_subscription, _reconcile_pending_payment
+from app.routes.billing import _apply_provider_status, _checkout_view, _pick_subscription, _reconcile_pending_payment
 from app.settings import get_settings
 
 
@@ -75,3 +75,23 @@ def test_orphaned_legacy_checkout_is_released_only_after_provider_lookup() -> No
         assert asyncio.run(_reconcile_pending_payment(payment, subscription)) is True
     assert payment.status == "expired"
     assert subscription.status == "expired"
+
+
+def test_in_page_checkout_generates_its_qr_without_a_third_party_url() -> None:
+    assert payment_qr_data_uri("TExamplePaymentAddress").startswith("data:image/png;base64,")
+
+
+def test_checkout_view_returns_only_the_bound_provider_instructions() -> None:
+    subscription = Subscription(id="sub", user_id="user", plan_code="monthly", status="pending")
+    payment = Payment(
+        id="pay", user_id="user", subscription_id="sub", provider="nowpayments",
+        provider_payment_id="provider-pay", order_id="atc-order", status="waiting",
+        amount=5.99, currency="usd", pay_currency="usdttrc20", pay_amount="5.99",
+        payment_address="TExamplePaymentAddress",
+        raw_payload={"network": "TRON", "expiration_estimate_date": "2030-01-01T00:00:00Z"},
+    )
+    view = _checkout_view(payment, subscription, reused=False)
+    assert view["pay_address"] == "TExamplePaymentAddress"
+    assert view["pay_currency"] == "USDTTRC20"
+    assert view["plan_days"] == 30
+    assert view["qr_data_uri"].startswith("data:image/png;base64,")

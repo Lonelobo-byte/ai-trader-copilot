@@ -1,14 +1,19 @@
 """Scanner management routes."""
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import List
-from fastapi import APIRouter, BackgroundTasks
+from fastapi import APIRouter, BackgroundTasks, Depends
 from pydantic import BaseModel
 
-from app.autonomous_scanner import scanner_state, run_scan_cycle
-from app.settings import get_settings
+from app.auth import require_admin
+from app.autonomous_scanner import (
+    get_scanner_configuration,
+    scanner_state,
+    run_scan_cycle,
+    update_scanner_configuration,
+)
+from app.db.models import User
 
 logger = logging.getLogger(__name__)
 
@@ -25,35 +30,31 @@ class ScannerToggle(BaseModel):
 
 
 @router.get("/status")
-def get_scanner_status():
+async def get_scanner_status():
     """Get the current state and run history of the autonomous scanner."""
-    settings = get_settings()
-    # Merge config states into status dict
+    config = await get_scanner_configuration()
     payload = dict(scanner_state)
-    payload["autonomous_scan_enabled"] = settings.autonomous_scan_enabled
-    payload["autonomous_pair_discovery"] = settings.autonomous_pair_discovery
+    payload["autonomous_scan_enabled"] = config["enabled"]
+    payload["autonomous_pair_discovery"] = config["discovery"]
+    payload["watchlist"] = config["watchlist"]
+    payload["configuration_updated_at"] = config["updated_at"]
     return payload
 
 
 @router.post("/toggle")
-def toggle_scanner(data: ScannerToggle):
+async def toggle_scanner(data: ScannerToggle, _: User = Depends(require_admin)):
     """Toggle scanner loop and AI discovery configurations dynamically."""
-    settings = get_settings()
-    if data.enabled is not None:
-        settings.autonomous_scan_enabled = data.enabled
-        logger.info(f"Autonomous background scanner loop state toggled to: {data.enabled}")
-    if data.discovery is not None:
-        settings.autonomous_pair_discovery = data.discovery
-        logger.info(f"Autonomous AI pair discovery state toggled to: {data.discovery}")
+    config = await update_scanner_configuration(enabled=data.enabled, discovery=data.discovery)
+    logger.info("Autonomous scanner configuration updated: enabled=%s discovery=%s", config["enabled"], config["discovery"])
     return {
         "status": "success",
-        "autonomous_scan_enabled": settings.autonomous_scan_enabled,
-        "autonomous_pair_discovery": settings.autonomous_pair_discovery
+        "autonomous_scan_enabled": config["enabled"],
+        "autonomous_pair_discovery": config["discovery"],
     }
 
 
 @router.post("/trigger")
-def trigger_scanner(background_tasks: BackgroundTasks):
+def trigger_scanner(background_tasks: BackgroundTasks, _: User = Depends(require_admin)):
     """Manually trigger a full scan cycle in the background."""
     if scanner_state["is_scanning"]:
         return {"status": "busy", "message": "Scanner is already running."}
@@ -63,18 +64,15 @@ def trigger_scanner(background_tasks: BackgroundTasks):
 
 
 @router.get("/watchlist")
-def get_watchlist():
+async def get_watchlist():
     """Get the currently configured watchlist."""
-    settings = get_settings()
-    return {"watchlist": settings.watchlist}
+    return {"watchlist": (await get_scanner_configuration())["watchlist"]}
 
 
 @router.post("/watchlist")
-def update_watchlist(data: WatchlistUpdate):
+async def update_watchlist(data: WatchlistUpdate, _: User = Depends(require_admin)):
     """Update the scanner watchlist."""
-    settings = get_settings()
     symbols = [s.upper().strip() for s in data.symbols if s.strip()]
-    settings.watchlist = symbols
-    scanner_state["watchlist"] = symbols
+    config = await update_scanner_configuration(watchlist=symbols)
     logger.info(f"Watchlist updated to: {symbols}")
-    return {"status": "success", "watchlist": settings.watchlist}
+    return {"status": "success", "watchlist": config["watchlist"]}

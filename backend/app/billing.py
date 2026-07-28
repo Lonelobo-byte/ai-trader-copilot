@@ -4,21 +4,26 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+from base64 import b64encode
 from datetime import timedelta
+from io import BytesIO
+from time import monotonic
 from typing import Any
 from urllib.parse import urlparse
 
 import httpx
+import qrcode
 
 from .auth import as_utc, utcnow
 from .settings import get_settings
 
 PLANS: dict[str, dict[str, Any]] = {
-    "monthly": {"amount": 19.0, "days": 31},
-    "quarterly": {"amount": 49.0, "days": 93},
-    "half_yearly": {"amount": 89.0, "days": 186},
-    "annual": {"amount": 159.0, "days": 366},
+    "monthly": {"amount": 5.99, "days": 30, "list_amount": 5.99},
+    "quarterly": {"amount": 15.99, "days": 90, "list_amount": 17.97},
+    "half_yearly": {"amount": 29.99, "days": 180, "list_amount": 35.94},
+    "annual": {"amount": 55.99, "days": 365, "list_amount": 71.88},
 }
+_CURRENCY_CACHE: tuple[float, list[dict[str, str]]] | None = None
 
 
 class PaymentProviderError(RuntimeError):
@@ -47,23 +52,85 @@ def plan_details(code: str) -> dict[str, Any]:
     return PLANS[code]
 
 
-async def create_nowpayments_invoice(order_id: str, plan_code: str) -> dict[str, Any]:
+def _currency_label(code: str) -> str:
+    labels = {
+        "usdttrc20": "USDT · TRON",
+        "usdtbsc": "USDT · BNB Smart Chain",
+        "usdterc20": "USDT · Ethereum",
+        "btc": "Bitcoin",
+        "eth": "Ethereum",
+        "sol": "Solana",
+    }
+    return labels.get(code, code.upper())
+
+
+async def fetch_nowpayments_currencies() -> list[dict[str, str]]:
+    """Return the provider's current payment routes, cached briefly for the picker."""
+    global _CURRENCY_CACHE
+    if _CURRENCY_CACHE and monotonic() - _CURRENCY_CACHE[0] < 300:
+        return _CURRENCY_CACHE[1]
     settings = get_settings()
     if settings.payment_provider != "nowpayments" or not settings.nowpayments_api_key:
         raise RuntimeError("Crypto checkout is not configured.")
+    async with httpx.AsyncClient(timeout=15) as client:
+        response = await client.get(
+            f"{settings.nowpayments_api_base_url.rstrip('/')}/currencies",
+            headers={"x-api-key": settings.nowpayments_api_key},
+        )
+    if response.is_error:
+        raise PaymentProviderError(f"NOWPayments currency lookup failed ({response.status_code}).")
+    body = response.json()
+    raw_codes = body.get("currencies", []) if isinstance(body, dict) else body
+    if not isinstance(raw_codes, list):
+        raise PaymentProviderError("NOWPayments returned an invalid currency catalog.")
+    codes = sorted({str(code).strip().lower() for code in raw_codes if str(code).strip()})
+    currencies = [{"code": code, "label": _currency_label(code)} for code in codes]
+    if not currencies:
+        raise PaymentProviderError("NOWPayments currently has no available payment currencies.")
+    _CURRENCY_CACHE = (monotonic(), currencies)
+    return currencies
+
+
+async def create_nowpayments_payment(order_id: str, plan_code: str, pay_currency: str) -> dict[str, Any]:
+    """Create a provider payment route whose address can be rendered in our modal."""
+    settings = get_settings()
+    if settings.payment_provider != "nowpayments" or not settings.nowpayments_api_key:
+        raise RuntimeError("Crypto checkout is not configured.")
+    permitted = {item["code"] for item in await fetch_nowpayments_currencies()}
+    if pay_currency.lower() not in permitted:
+        raise ValueError("Choose one of the available payment currencies.")
     plan = plan_details(plan_code)
     base_url = settings.public_base_url.rstrip("/")
-    payload = {"price_amount": plan["amount"], "price_currency": settings.billing_currency, "order_id": order_id, "order_description": f"AI Trader Copilot {plan_code} subscription", "ipn_callback_url": f"{base_url}/billing/webhooks/nowpayments", "success_url": f"{base_url}/dashboard?payment=success", "cancel_url": f"{base_url}/dashboard?payment=cancelled"}
+    payload = {
+        "price_amount": plan["amount"],
+        "price_currency": settings.billing_currency,
+        "pay_currency": pay_currency.lower(),
+        "order_id": order_id,
+        "order_description": f"AI Trader Copilot {plan_code} subscription",
+        "ipn_callback_url": f"{base_url}/billing/webhooks/nowpayments",
+        "is_fixed_rate": True,
+    }
     async with httpx.AsyncClient(timeout=20) as client:
-        response = await client.post(f"{settings.nowpayments_api_base_url.rstrip('/')}/invoice", json=payload, headers={"x-api-key": settings.nowpayments_api_key})
+        response = await client.post(
+            f"{settings.nowpayments_api_base_url.rstrip('/')}/payment",
+            json=payload,
+            headers={"x-api-key": settings.nowpayments_api_key},
+        )
         if response.is_error:
-            # Do not put the provider response in a client error: it can
-            # contain account-specific data.  It is retained in application logs.
-            raise PaymentProviderError(f"NOWPayments invoice request failed ({response.status_code}): {response.text[:500]}")
-        invoice = response.json()
-        if not isinstance(invoice, dict) or not invoice.get("invoice_url") or not invoice.get("id"):
-            raise PaymentProviderError("NOWPayments returned an incomplete invoice response.")
-        return invoice
+            raise PaymentProviderError(f"NOWPayments payment request failed ({response.status_code}): {response.text[:500]}")
+        payment = response.json()
+    required = ("payment_id", "payment_status", "pay_address", "pay_amount", "pay_currency")
+    if not isinstance(payment, dict) or any(payment.get(key) in (None, "") for key in required):
+        raise PaymentProviderError("NOWPayments returned incomplete payment instructions.")
+    return payment
+
+
+def payment_qr_data_uri(payment_address: str) -> str:
+    """Create the QR in-process; a payment address never leaves our domain."""
+    image = qrcode.make(payment_address)
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    return "data:image/png;base64," + b64encode(buffer.getvalue()).decode("ascii")
 
 
 async def fetch_nowpayments_payment(payment_id: str) -> dict[str, Any]:

@@ -66,6 +66,9 @@ class Settings(BaseSettings):
 
     ai_max_calls_per_analysis: int = 1
     ai_monthly_budget_usd: float = 10.0
+    # Reservations are deliberately conservative: a platform analysis reserves
+    # its maximum allowed call count before dispatching to the provider.
+    ai_estimated_cost_per_call_usd: float = 0.01
 
     binance_public_base_url: str = "https://api.binance.com"
     binance_futures_base_url: str = "https://fapi.binance.com"
