@@ -1221,7 +1221,10 @@
           const d = await r.json(); sessionStorage.setItem('atc_access_token', d.access_token); routeAfterAuth(d.access_token, true);
         } catch (_) { showLogin('Could not restore your session. Please sign in again.'); }
       };
-      if (sessionStorage.getItem('atc_access_token')) routeAfterAuth(sessionStorage.getItem('atc_access_token')); else restore();
+      // Always mint a fresh short-lived token from the HttpOnly refresh cookie
+      // before requesting protected billing state. This prevents a stale tab
+      // token from producing a visible /billing/me 401 on page reload.
+      restore(Boolean(sessionStorage.getItem('atc_access_token')));
       toggle.onclick = () => { register = !register; submit.textContent = register ? 'Create account' : 'Sign in'; toggle.textContent = register ? 'I already have an account' : 'Create an account'; copy.textContent = register ? 'Create an account, then choose a plan.' : 'Sign in to access your subscription.'; error.textContent = ''; };
       form.onsubmit = async (event) => {
         event.preventDefault(); error.textContent = ''; submit.disabled = true;
