@@ -128,30 +128,128 @@ def _quant_engine(quantitative: dict[str, Any]) -> dict[str, Any]:
 def _microstructure_engine(features: dict[str, Any], quantitative: dict[str, Any]) -> dict[str, Any]:
     micro = quantitative.get("microstructure", {}) or features.get("microstructure", {}) or {}
     flow = features.get("trade_flow", {}) or {}
-    available = bool(micro.get("available"))
-    score = 0.65 * _number(micro.get("signed_trade_flow")) + 0.35 * _number(micro.get("depth_imbalance"))
+    cross_venue = micro.get("incremental_public_feeds", {}) or {}
+    venue_payloads = cross_venue.get("venues", {}) or {}
+    base_available = bool(micro.get("available"))
+    venue_available = bool(cross_venue.get("available"))
+    venue_flow_confirmed = bool(cross_venue.get("flow_confirmed"))
+    base_score = 0.65 * _number(micro.get("signed_trade_flow")) + 0.35 * _number(micro.get("depth_imbalance"))
+    venue_score = _number(cross_venue.get("flow_score"))
+    if base_available and venue_flow_confirmed:
+        score = 0.65 * base_score + 0.35 * venue_score
+    elif base_available:
+        score = base_score
+    elif venue_flow_confirmed:
+        score = venue_score
+    else:
+        score = 0.0
+    available = base_available or venue_available
     bias = "BULLISH" if score >= 0.08 else "BEARISH" if score <= -0.08 else "NEUTRAL"
-    confidence = min(70.0, 35.0 + abs(score) * 100.0) if available else 0.0
+    confidence = min(
+        78.0,
+        35.0 + abs(score) * 100.0 + (8.0 if base_available and venue_flow_confirmed else 0.0),
+    ) if available else 0.0
     contradictions = []
     if _number(micro.get("signed_trade_flow")) * _number(micro.get("depth_imbalance")) < 0:
         contradictions.append("Displayed depth and aggressive trade flow point in opposite directions.")
+    base_bias = "BULLISH" if base_score >= 0.08 else "BEARISH" if base_score <= -0.08 else "NEUTRAL"
+    venue_consensus = str(cross_venue.get("flow_consensus", "UNAVAILABLE")).upper()
+    if (
+        base_available
+        and venue_flow_confirmed
+        and base_bias in {"BULLISH", "BEARISH"}
+        and venue_consensus in {"BULLISH", "BEARISH"}
+        and base_bias != venue_consensus
+    ):
+        contradictions.append(
+            f"Binance snapshot/taker evidence is {base_bias.lower()} while qualified "
+            f"Bybit/Coinbase aggressive flow is {venue_consensus.lower()}."
+        )
     evidence = []
-    if available:
-        evidence = [
+    if base_available:
+        evidence.extend([
             {"metric": "spread_bps", "value": micro.get("spread_bps"), "source": "Binance order-book snapshot"},
             {"metric": "depth_imbalance", "value": micro.get("depth_imbalance"), "source": "Binance order-book snapshot"},
             {"metric": "signed_trade_flow", "value": micro.get("signed_trade_flow"), "source": "completed Binance klines"},
             {"metric": "recent_trade_buy_ratio", "value": flow.get("buy_ratio"), "source": "Binance recent trades"},
-        ]
+        ])
+    if cross_venue:
+        evidence.extend([
+            {
+                "metric": "cross_venue_status",
+                "value": cross_venue.get("status", "UNAVAILABLE"),
+                "source": "Bybit and Coinbase public WebSockets",
+            },
+            {
+                "metric": "cross_venue_flow_consensus",
+                "value": venue_consensus,
+                "source": "qualified Bybit perpetual and Coinbase spot trades",
+            },
+            {
+                "metric": "cross_venue_flow_score",
+                "value": cross_venue.get("flow_score"),
+                "source": "qualified Bybit and Coinbase aggressive-flow composite",
+            },
+            {
+                "metric": "cross_venue_depth_score",
+                "value": cross_venue.get("depth_score"),
+                "source": "incremental Bybit and Coinbase Level-2 books",
+            },
+            {
+                "metric": "cross_venue_price_dispersion_bps",
+                "value": cross_venue.get("price_dispersion_bps"),
+                "source": "Bybit perpetual versus Coinbase spot",
+            },
+        ])
+        for venue in ("bybit", "coinbase"):
+            payload = venue_payloads.get(venue, {}) or {}
+            evidence.extend([
+                {
+                    "metric": f"{venue}_feed_health",
+                    "value": payload.get("health", "UNAVAILABLE"),
+                    "source": f"{venue.title()} public WebSocket",
+                },
+                {
+                    "metric": f"{venue}_aggressive_buy_ratio",
+                    "value": payload.get("aggressive_buy_ratio"),
+                    "source": f"{venue.title()} public trades",
+                },
+                {
+                    "metric": f"{venue}_persistent_depth_imbalance",
+                    "value": payload.get("persistent_imbalance"),
+                    "source": f"{venue.title()} incremental Level-2 book",
+                },
+                {
+                    "metric": f"{venue}_quote_removal_ratio",
+                    "value": payload.get("removal_ratio"),
+                    "source": f"{venue.title()} incremental Level-2 updates",
+                },
+            ])
+    status = (
+        "COMPLETE"
+        if base_available and venue_flow_confirmed
+        else "PARTIAL"
+        if available
+        else "UNAVAILABLE"
+    )
+    unknowns = []
+    if not base_available:
+        unknowns.append(micro.get("reason", "Primary Binance order-book evidence unavailable."))
+    if not venue_flow_confirmed:
+        unknowns.append(
+            "Qualified two-venue aggressive-flow consensus is unavailable; partial feeds are not neutral confirmation."
+        )
+    limitations = list(micro.get("limitations", ["No queue-position, cancellation, latency, or market-impact model."]))
+    limitations.extend(cross_venue.get("limitations", []))
     return _engine(
         "market_microstructure_engine",
-        status="PARTIAL" if available else "UNAVAILABLE",
+        status=status,
         bias=bias if available else "NEUTRAL",
         confidence_pct=confidence,
         evidence=evidence,
         contradictory_evidence=contradictions,
-        unknowns=[] if available else [micro.get("reason", "Order-book evidence unavailable.")],
-        limitations=micro.get("limitations", ["No queue-position, cancellation, latency, or market-impact model."]),
+        unknowns=unknowns,
+        limitations=limitations,
     )
 
 

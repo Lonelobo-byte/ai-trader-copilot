@@ -6,7 +6,12 @@ import pytest
 
 from app.data_sources.binance_public import Candle
 from app.brains.signal_builder import build_ai_driven_trade_setup, evaluate_ai_driven_approval
-from app.institutional.committee import apply_cio_policy, build_deterministic_cio_decision, build_institutional_dossier
+from app.institutional.committee import (
+    apply_cio_policy,
+    build_deterministic_cio_decision,
+    build_institutional_dossier,
+    build_investment_memo,
+)
 from app.settings import Settings
 
 
@@ -126,6 +131,59 @@ def test_on_chain_engine_is_not_part_of_decision_architecture() -> None:
     dossier = _dossier()
     assert "on_chain_intelligence_engine" not in dossier["engines"]
     assert dossier["engines"]["market_structure_engine"]["status"] == "COMPLETE"
+
+
+def test_cross_venue_evidence_reaches_cio_dossier_and_memorandum() -> None:
+    features = _features()
+    cross_venue = {
+        "available": True,
+        "status": "HEALTHY",
+        "fresh_venue_count": 2,
+        "flow_venue_count": 2,
+        "flow_confirmed": True,
+        "flow_consensus": "BULLISH",
+        "flow_score": 0.42,
+        "depth_score": 0.18,
+        "price_dispersion_bps": 1.5,
+        "venues": {
+            "bybit": {
+                "health": "HEALTHY",
+                "aggressive_buy_ratio": 0.68,
+                "persistent_imbalance": 0.21,
+                "removal_ratio": 0.31,
+            },
+            "coinbase": {
+                "health": "HEALTHY",
+                "aggressive_buy_ratio": 0.63,
+                "persistent_imbalance": 0.12,
+                "removal_ratio": 0.28,
+            },
+        },
+        "limitations": ["Displayed public liquidity only."],
+    }
+    features["microstructure"]["incremental_public_feeds"] = cross_venue
+    quantitative = _quantitative()
+    quantitative["microstructure"] = features["microstructure"]
+    dossier = build_institutional_dossier(
+        symbol="BTCUSDT",
+        timeframe="15m",
+        features=features,
+        intelligence=_intelligence(),
+        quantitative=quantitative,
+        portfolio_state=_portfolio(),
+        macro_blockout={"active": False, "reason": ""},
+        settings=_settings(),
+    )
+
+    engine = dossier["engines"]["market_microstructure_engine"]
+    evidence = {item["metric"]: item["value"] for item in engine["evidence"]}
+    assert engine["status"] == "COMPLETE"
+    assert evidence["cross_venue_flow_consensus"] == "BULLISH"
+    assert evidence["bybit_aggressive_buy_ratio"] == 0.68
+    assert evidence["coinbase_aggressive_buy_ratio"] == 0.63
+
+    memo = build_investment_memo({"decision": "WAIT"}, dossier)
+    assert any("cross_venue_flow_consensus=BULLISH" in item for item in memo["supporting_evidence"])
 
 
 def test_trade_plan_keeps_entry_zone_outside_stop() -> None:

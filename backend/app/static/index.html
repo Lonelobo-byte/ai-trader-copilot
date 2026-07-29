@@ -309,8 +309,8 @@
               <select id="timeframe-select">
                 <option value="1m">1m (Scalping)</option>
                 <option value="5m">5m (Intraday)</option>
-                <option value="15m" selected>15m (Confluence)</option>
-                <option value="1h">1h (Swing)</option>
+                <option value="15m">15m (Confluence)</option>
+                <option value="1h" selected>1h (Swing)</option>
                 <option value="4h">4h (Macro Swing)</option>
                 <option value="1d">1d (Position)</option>
               </select>
@@ -350,33 +350,96 @@
           </div>
         </div>
 
-        <!-- INSTITUTIONAL CVD & SQUEEZE TELEMETRY CARD -->
-        <div class="card cvd-telemetry-card" style="margin-top: 0.75rem;">
+        <!-- SIGNAL CONFIRMATION EVIDENCE CARD -->
+        <div class="card confirmation-evidence-card" style="margin-top: 0.75rem;">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
-            <h3 style="margin-bottom: 0; font-size: 0.85rem;">Order Flow & Squeeze Telemetry</h3>
-            <span class="telemetry-badge" id="squeeze-alert-badge"
-              style="font-size: 0.65rem; padding: 2px 6px; border-radius: 4px; background: rgba(255,255,255,0.05); color: var(--text-muted); font-weight: 700;">STABLE</span>
+            <h3>Signal Confirmation Evidence</h3>
+            <span class="telemetry-badge" id="confirmation-status-badge"
+              style="font-size: 0.65rem; padding: 2px 6px; border-radius: 4px; background: rgba(255,255,255,0.05); color: var(--text-muted); font-weight: 700;">SCANNING</span>
           </div>
-          <div class="ticker-grid" style="grid-template-columns: repeat(2, 1fr);">
+
+          <!-- Playbook & Phase -->
+          <div class="confirmation-playbook-row" id="confirmation-playbook-row">
+            <span class="confirmation-playbook-label">Playbook</span>
+            <span class="confirmation-playbook-value font-mono" id="confirmation-playbook-val">—</span>
+            <span class="confirmation-phase-sep">·</span>
+            <span class="confirmation-phase-value font-mono" id="confirmation-phase-val">—</span>
+          </div>
+
+          <!-- Structure Evidence Grid -->
+          <div class="ticker-grid" style="grid-template-columns: repeat(2, 1fr); margin-top: 0.5rem;">
             <div class="ticker-item">
-              <span class="label">CVD Taker Delta</span>
-              <span class="value font-mono" id="cvd-delta-val"
-                style="font-size: 0.75rem; color: var(--neon-blue);">NEUTRAL</span>
+              <span class="label">Break of Structure</span>
+              <span class="value font-mono" id="confirm-bos-val" style="font-size: 0.75rem;">—</span>
             </div>
             <div class="ticker-item">
-              <span class="label">Open Interest 5m</span>
-              <span class="value font-mono" id="oi-delta-val" style="font-size: 0.75rem;">0.00%</span>
+              <span class="label">20-Candle Breakout</span>
+              <span class="value font-mono" id="confirm-breakout-val" style="font-size: 0.75rem;">—</span>
             </div>
             <div class="ticker-item">
-              <span class="label">Risk Appetite (F&amp;G)</span>
-              <span class="value font-mono" id="liquidity-index-val"
-                style="font-size: 0.75rem; color: var(--neon-green);">65/100</span>
+              <span class="label">Liquidity Sweep</span>
+              <span class="value font-mono" id="confirm-sweep-val" style="font-size: 0.75rem;">—</span>
             </div>
             <div class="ticker-item">
-              <span class="label">Market Sentiment</span>
-              <span class="value font-mono" id="sentiment-index-val" style="font-size: 0.75rem;">50 NEUTRAL</span>
+              <span class="label">Relative Volume</span>
+              <span class="value font-mono" id="confirm-rvol-val" style="font-size: 0.75rem;">—</span>
             </div>
           </div>
+
+          <!-- Acceptance Evidence Grid -->
+          <div class="ticker-grid" style="grid-template-columns: repeat(2, 1fr); margin-top: 0.35rem;">
+            <div class="ticker-item">
+              <span class="label">VWAP Acceptance</span>
+              <span class="value font-mono" id="confirm-vwap-val" style="font-size: 0.75rem;">—</span>
+            </div>
+            <div class="ticker-item">
+              <span class="label">Volume Profile</span>
+              <span class="value font-mono" id="confirm-profile-val" style="font-size: 0.75rem;">—</span>
+            </div>
+            <div class="ticker-item">
+              <span class="label">Decisive Candle</span>
+              <span class="value font-mono" id="confirm-candle-val" style="font-size: 0.75rem;">—</span>
+            </div>
+            <div class="ticker-item">
+              <span class="label">Structure Opposition</span>
+              <span class="value font-mono" id="confirm-choch-val" style="font-size: 0.75rem;">—</span>
+            </div>
+          </div>
+
+          <!-- Live Execution Checks Strip -->
+          <div class="confirmation-exec-strip" id="confirmation-exec-strip" style="margin-top: 0.5rem;"></div>
+
+          <!-- Shared Bybit + Coinbase execution evidence -->
+          <section class="venue-evidence-panel" id="venue-evidence-panel" aria-live="polite">
+            <div class="venue-evidence-head">
+              <div>
+                <span class="venue-evidence-kicker">Public execution network</span>
+                <strong>Bybit Perpetual + Coinbase Spot</strong>
+              </div>
+              <span class="venue-evidence-badge starting" id="venue-evidence-status">STARTING</span>
+            </div>
+            <div class="venue-evidence-grid">
+              <div class="venue-evidence-metric">
+                <span>Flow consensus</span>
+                <strong id="venue-flow-value">WAITING FOR BOTH VENUES</strong>
+              </div>
+              <div class="venue-evidence-metric">
+                <span>Bybit perpetual</span>
+                <strong id="venue-bybit-value">SYNCING</strong>
+              </div>
+              <div class="venue-evidence-metric">
+                <span>Coinbase spot</span>
+                <strong id="venue-coinbase-value">SYNCING</strong>
+              </div>
+              <div class="venue-evidence-metric">
+                <span>Liquidation tape</span>
+                <strong id="venue-liquidation-value">NOT OBSERVED</strong>
+              </div>
+            </div>
+            <p id="venue-evidence-note">
+              Direction is qualified only when both public venues are fresh and meet the minimum trade-flow evidence.
+            </p>
+          </section>
         </div>
 
         <!-- AUTONOMOUS SCANNER CONTROL CARD -->

@@ -391,12 +391,25 @@ const changeVal = document.getElementById('change-val');
 const volumeVal = document.getElementById('volume-val');
 const spreadVal = document.getElementById('spread-val');
 
-// Institutional CVD & Squeeze Telemetry
-const squeezeAlertBadge = document.getElementById('squeeze-alert-badge');
-const cvdDeltaVal = document.getElementById('cvd-delta-val');
-const oiDeltaVal = document.getElementById('oi-delta-val');
-const liquidityIndexVal = document.getElementById('liquidity-index-val');
-const sentimentIndexVal = document.getElementById('sentiment-index-val');
+// Signal Confirmation Evidence
+const confirmStatusBadge = document.getElementById('confirmation-status-badge');
+const confirmPlaybookVal = document.getElementById('confirmation-playbook-val');
+const confirmPhaseVal = document.getElementById('confirmation-phase-val');
+const confirmBosVal = document.getElementById('confirm-bos-val');
+const confirmBreakoutVal = document.getElementById('confirm-breakout-val');
+const confirmSweepVal = document.getElementById('confirm-sweep-val');
+const confirmRvolVal = document.getElementById('confirm-rvol-val');
+const confirmVwapVal = document.getElementById('confirm-vwap-val');
+const confirmProfileVal = document.getElementById('confirm-profile-val');
+const confirmCandleVal = document.getElementById('confirm-candle-val');
+const confirmChochVal = document.getElementById('confirm-choch-val');
+const confirmExecStrip = document.getElementById('confirmation-exec-strip');
+const venueEvidenceStatus = document.getElementById('venue-evidence-status');
+const venueFlowValue = document.getElementById('venue-flow-value');
+const venueBybitValue = document.getElementById('venue-bybit-value');
+const venueCoinbaseValue = document.getElementById('venue-coinbase-value');
+const venueLiquidationValue = document.getElementById('venue-liquidation-value');
+const venueEvidenceNote = document.getElementById('venue-evidence-note');
 
 // Decision Elements
 const decisionCard = document.getElementById('decision-card-container');
@@ -524,8 +537,7 @@ const contextLimitations = document.getElementById('context-limitations');
 const regimeVal = document.getElementById('regime-val');
 const fundingVal = document.getElementById('funding-val');
 const oiVal = document.getElementById('oi-val');
-const squeezeSignalVal = document.getElementById('squeeze-signal-val');
-const squeezeDescVal = document.getElementById('squeeze-desc-val');
+// squeezeSignalVal and squeezeDescVal removed — replaced by confirmation evidence card
 const liquidationContainer = document.getElementById('liquidation-list-container');
 
 // AI Council elements
@@ -1271,11 +1283,7 @@ function updateConnectionUI(connected) {
     if (regimeVal) regimeVal.textContent = '-';
     if (fundingVal) fundingVal.textContent = '-';
     if (oiVal) oiVal.textContent = '-';
-    if (squeezeSignalVal) {
-      squeezeSignalVal.textContent = 'NEUTRAL';
-      squeezeSignalVal.className = 'value';
-    }
-    if (squeezeDescVal) squeezeDescVal.textContent = 'Waiting for updates...';
+    renderConfirmationEvidence({});
 
     renderTradeSetup(null);
     renderSignalMonitor(null);
@@ -1437,6 +1445,235 @@ function useAnalysisSnapshot(payload) {
   };
 }
 
+function renderConfirmationEvidence(data) {
+  const lc = data.live_confirmation || {};
+  const metrics = lc.metrics || {};
+  const structChecks = lc.structure_checks || {};
+  const liveChecks = lc.live_checks || {};
+  const direction = lc.direction || '';
+  const status = lc.status || '';
+
+  // Helper: set value + color class
+  const setVal = (el, text, cls) => {
+    if (!el) return;
+    el.textContent = text;
+    el.className = `value font-mono ${cls || ''}`;
+    el.style.fontSize = '0.75rem';
+  };
+
+  // Status badge
+  if (confirmStatusBadge) {
+    const isConfirmed = status === 'LIVE_CONFIRMED_REVIEW';
+    const isRejected = status.includes('REJECTED');
+    const isStructureRejected = status === 'STRUCTURE_REJECTED';
+    if (isConfirmed) {
+      confirmStatusBadge.textContent = '✓ CONFIRMED';
+      confirmStatusBadge.className = 'telemetry-badge confirmed';
+    } else if (isStructureRejected) {
+      confirmStatusBadge.textContent = 'STRUCTURE FAIL';
+      confirmStatusBadge.className = 'telemetry-badge rejected';
+    } else if (isRejected) {
+      confirmStatusBadge.textContent = 'NOT CONFIRMED';
+      confirmStatusBadge.className = 'telemetry-badge rejected';
+    } else if (direction) {
+      confirmStatusBadge.textContent = 'WATCHING';
+      confirmStatusBadge.className = 'telemetry-badge watching';
+    } else {
+      confirmStatusBadge.textContent = 'SCANNING';
+      confirmStatusBadge.className = 'telemetry-badge';
+    }
+  }
+
+  // Playbook & Phase
+  const playbook = metrics.playbook || '';
+  const primaryPhase = metrics.primary_phase || '';
+  const higherPhase = metrics.higher_phase || '';
+  if (confirmPlaybookVal) {
+    const label = playbook ? playbook.replace(/_/g, ' ') : '—';
+    confirmPlaybookVal.textContent = label;
+    confirmPlaybookVal.style.color = playbook && playbook !== 'NONE'
+      ? 'var(--neon-blue)' : 'var(--text-muted)';
+  }
+  if (confirmPhaseVal) {
+    confirmPhaseVal.textContent = primaryPhase && higherPhase
+      ? `${primaryPhase} · HTF ${higherPhase}`.replace(/_/g, ' ')
+      : primaryPhase ? primaryPhase.replace(/_/g, ' ')
+      : '—';
+  }
+
+  // BOS
+  const bos = metrics.bos || {};
+  if (bos.detected) {
+    const dir = String(bos.direction || '').toUpperCase();
+    setVal(confirmBosVal, `${dir} BOS`, dir === 'BULLISH' ? 'positive' : dir === 'BEARISH' ? 'negative' : '');
+  } else {
+    setVal(confirmBosVal, 'NO BREAK', 'neutral');
+  }
+
+  // 20-Candle Breakout
+  const breakoutConfirmed = structChecks.confirmed_completed_breakout;
+  if (breakoutConfirmed === true) {
+    setVal(confirmBreakoutVal, 'CONFIRMED', 'positive');
+  } else if (breakoutConfirmed === false) {
+    setVal(confirmBreakoutVal, 'AWAITED', 'warning');
+  } else {
+    setVal(confirmBreakoutVal, '—', 'neutral');
+  }
+
+  // Liquidity Sweep
+  const sweep = metrics.sweep || {};
+  if (sweep.detected) {
+    const dir = String(sweep.direction || '').replace(/_/g, ' ').toUpperCase();
+    const quality = sweep.quality === 'strong' ? ' ★' : '';
+    setVal(confirmSweepVal, `${dir}${quality}`,
+      dir.includes('BULLISH') ? 'positive' : dir.includes('BEARISH') ? 'negative' : 'warning');
+  } else {
+    setVal(confirmSweepVal, 'NOT DETECTED', 'neutral');
+  }
+
+  // Relative Volume
+  const rvol = metrics.rvol;
+  if (rvol !== undefined && rvol !== null) {
+    const passed = rvol >= 1.5;
+    setVal(confirmRvolVal, `${rvol.toFixed(2)}x`, passed ? 'positive' : 'warning');
+  } else {
+    setVal(confirmRvolVal, '—', 'neutral');
+  }
+
+  // VWAP Acceptance
+  const vwap = metrics.vwap || {};
+  if (vwap.available) {
+    const relation = String(vwap.price_relation || '').replace(/_/g, ' ');
+    const expected = direction === 'BULLISH' ? 'ABOVE ALL' : direction === 'BEARISH' ? 'BELOW ALL' : '';
+    const aligned = relation === expected;
+    setVal(confirmVwapVal, relation || 'UNKNOWN', aligned ? 'positive' : 'warning');
+  } else {
+    setVal(confirmVwapVal, 'UNAVAILABLE', 'neutral');
+  }
+
+  // Volume Profile
+  const profile = metrics.volume_profile || {};
+  if (profile.available) {
+    const loc = String(profile.location || '').replace(/_/g, ' ');
+    setVal(confirmProfileVal, loc || 'UNKNOWN',
+      loc.includes('ACCEPTANCE') ? 'positive' : 'warning');
+  } else {
+    setVal(confirmProfileVal, 'UNAVAILABLE', 'neutral');
+  }
+
+  // Decisive Candle
+  const bodyRatio = metrics.body_ratio;
+  if (bodyRatio !== undefined && bodyRatio !== null) {
+    const passed = bodyRatio >= 0.55;
+    setVal(confirmCandleVal, `Body ${(bodyRatio * 100).toFixed(0)}%`, passed ? 'positive' : 'warning');
+  } else {
+    setVal(confirmCandleVal, '—', 'neutral');
+  }
+
+  // Structure Opposition (CHoCH)
+  const choch = metrics.choch || {};
+  const structNotOpposed = structChecks.structure_not_opposed;
+  if (structNotOpposed === true) {
+    setVal(confirmChochVal, 'CLEAR', 'positive');
+  } else if (structNotOpposed === false) {
+    setVal(confirmChochVal, 'OPPOSED', 'negative');
+  } else if (choch.detected) {
+    const dir = String(choch.direction || '').toUpperCase();
+    setVal(confirmChochVal, `${dir} CHoCH`, 'negative');
+  } else {
+    setVal(confirmChochVal, 'CLEAR', 'neutral');
+  }
+
+  // Live Execution Check Chips
+  if (confirmExecStrip) {
+    const checks = [
+      ['Data', liveChecks.data_complete],
+      ['Spread', liveChecks.spread_within_limit],
+      ['Depth', liveChecks.depth_aligned],
+      ['Taker Flow', liveChecks.taker_flow_aligned],
+      ['Price/OI', liveChecks.price_oi_aligned],
+      ['Funding', liveChecks.funding_not_crowded],
+      ['Execution', liveChecks.execution_evidence_confirmed],
+      ['Cross-Venue', liveChecks.cross_venue_not_opposed],
+    ];
+    confirmExecStrip.innerHTML = checks.map(([label, passed]) => {
+      const cls = passed === true ? 'passed' : passed === false ? 'failed' : '';
+      return `<span class="confirm-exec-chip ${cls}"><span class="exec-dot"></span>${label}</span>`;
+    }).join('');
+  }
+
+  const multiVenue = data.multi_venue || {};
+  const venues = multiVenue.venues || {};
+  const flowConfirmed = multiVenue.flow_confirmed === true;
+  const flowConsensus = String(multiVenue.flow_consensus || 'UNAVAILABLE').toUpperCase();
+  const networkStatus = String(multiVenue.status || 'UNAVAILABLE').toUpperCase();
+  const setVenueValue = (element, text, tone = 'neutral') => {
+    if (!element) return;
+    element.textContent = text;
+    element.dataset.tone = tone;
+  };
+  const venueLine = (name) => {
+    const payload = venues[name] || {};
+    const flow = payload.trade_flow || {};
+    const health = String(payload.health || 'UNAVAILABLE').toUpperCase();
+    const buyRatio = Number(flow.aggressive_buy_ratio);
+    const trades = Number(flow.trade_count);
+    if (flow.available === true && Number.isFinite(buyRatio)) {
+      return `${health} / BUY ${(buyRatio * 100).toFixed(0)}% / ${Number.isFinite(trades) ? trades : 0} TRADES`;
+    }
+    return `${health} / ${flow.warmup_complete === false ? 'FLOW WARMING' : 'FLOW UNQUALIFIED'}`;
+  };
+  const flowTone = flowConsensus === 'BULLISH'
+    ? 'positive'
+    : flowConsensus === 'BEARISH'
+      ? 'negative'
+      : flowConsensus === 'MIXED'
+        ? 'warning'
+        : 'neutral';
+  const flowScore = Number(multiVenue.flow_score);
+  setVenueValue(
+    venueFlowValue,
+    flowConfirmed
+      ? `${flowConsensus} / SCORE ${Number.isFinite(flowScore) ? flowScore.toFixed(3) : 'N/A'}`
+      : `${flowConsensus} / TWO-VENUE PROOF REQUIRED`,
+    flowConfirmed ? flowTone : 'neutral',
+  );
+  setVenueValue(
+    venueBybitValue,
+    venueLine('bybit'),
+    venues.bybit?.health === 'HEALTHY' ? 'positive' : 'warning',
+  );
+  setVenueValue(
+    venueCoinbaseValue,
+    venueLine('coinbase'),
+    venues.coinbase?.health === 'HEALTHY' ? 'positive' : 'warning',
+  );
+
+  const liquidation = multiVenue.observed_liquidations || {};
+  const longLiquidated = Number(liquidation.long_liquidated_notional);
+  const shortLiquidated = Number(liquidation.short_liquidated_notional);
+  setVenueValue(
+    venueLiquidationValue,
+    liquidation.available
+      ? `LONG $${Math.round(longLiquidated || 0).toLocaleString()} / SHORT $${Math.round(shortLiquidated || 0).toLocaleString()}`
+      : 'NOT OBSERVED / FEED UNAVAILABLE',
+    liquidation.available ? 'warning' : 'neutral',
+  );
+
+  if (venueEvidenceStatus) {
+    venueEvidenceStatus.textContent = networkStatus;
+    venueEvidenceStatus.className = `venue-evidence-badge ${networkStatus === 'HEALTHY' ? 'healthy' : networkStatus === 'DEGRADED' ? 'degraded' : 'starting'}`;
+  }
+  if (venueEvidenceNote) {
+    const freshCount = Number(multiVenue.fresh_venue_count || 0);
+    venueEvidenceNote.textContent = flowConfirmed
+      ? `${freshCount}/2 venues are fresh and flow-qualified. This evidence is included in the CIO dossier and final live gate.`
+      : `${freshCount}/2 venues are fresh. Partial or warming data remains visible but is not treated as neutral confirmation.`;
+  }
+}
+
+
+
 function renderMarketContext(data) {
   if (!marketContextCard) return;
   const context = data.market_context || {};
@@ -1585,67 +1822,8 @@ function renderDashboard(data) {
 
   volumeVal.textContent = formatVolume(parseFloat(data.market.quote_volume_24h || 0));
 
-  // Institutional CVD & Squeeze Telemetry Updates
-  const derivatives = data.derivatives || {};
-  const takerData = derivatives.taker_buy_sell_volume || derivatives.taker_volume || {};
-  const oiHistData = derivatives.oi_history || {};
-  const liquidityData = data.risk_appetite_proxy || {};
-  const sentimentData = data.sentiment || {};
-
-  // 1. CVD Delta
-  const cvdTrend = takerData.cvd_trend || "CVD_NEUTRAL";
-  if (cvdDeltaVal) {
-    if (cvdTrend === "CVD_BULLISH_ACCUMULATION") {
-      cvdDeltaVal.textContent = "BULLISH ACCUMULATION";
-      cvdDeltaVal.style.color = "var(--neon-green)";
-    } else if (cvdTrend === "CVD_BEARISH_DISTRIBUTION") {
-      cvdDeltaVal.textContent = "BEARISH DUMP";
-      cvdDeltaVal.style.color = "var(--neon-red)";
-    } else {
-      cvdDeltaVal.textContent = "NEUTRAL";
-      cvdDeltaVal.style.color = "var(--neon-blue)";
-    }
-  }
-
-  // 2. Open Interest Delta %
-  if (oiDeltaVal) {
-    const oiPct = parseFloat(oiHistData.oi_change_pct || 0);
-    oiDeltaVal.textContent = (oiPct >= 0 ? '+' : '') + oiPct.toFixed(2) + '%';
-    oiDeltaVal.style.color = oiPct >= 0 ? 'var(--neon-green)' : 'var(--neon-red)';
-  }
-
-  // 3. Squeeze Warning Alert
-  if (squeezeAlertBadge) {
-    const squeeze = oiHistData.squeeze_warning || "NO_SQUEEZE";
-    if (squeeze === "SHORT_SQUEEZE_WARNING") {
-      squeezeAlertBadge.textContent = "⚡ SHORT SQUEEZE ALERT";
-      squeezeAlertBadge.style.background = "rgba(241, 188, 0, 0.15)";
-      squeezeAlertBadge.style.color = "var(--neon-gold)";
-    } else if (squeeze === "LONG_SQUEEZE_WARNING") {
-      squeezeAlertBadge.textContent = "⚡ LONG SQUEEZE ALERT";
-      squeezeAlertBadge.style.background = "rgba(241, 65, 108, 0.15)";
-      squeezeAlertBadge.style.color = "var(--neon-red)";
-    } else {
-      squeezeAlertBadge.textContent = "STABLE";
-      squeezeAlertBadge.style.background = "rgba(255, 255, 255, 0.05)";
-      squeezeAlertBadge.style.color = "var(--text-muted)";
-    }
-  }
-
-  // 4. Fear & Greed risk-appetite proxy (not a global-liquidity measure)
-  if (liquidityIndexVal) {
-    const lScore = liquidityData.risk_appetite_score || 50;
-    const lStatus = (liquidityData.risk_appetite_status || "RISK_APPETITE_NEUTRAL").replace("RISK_APPETITE_", "");
-    liquidityIndexVal.textContent = `${lScore}/100 ${lStatus}`;
-    liquidityIndexVal.style.color = lScore >= 60 ? "var(--neon-green)" : (lScore <= 40 ? "var(--neon-red)" : "var(--neon-blue)");
-  }
-
-  // 5. Market Sentiment Index
-  if (sentimentIndexVal) {
-    const fng = sentimentData.fear_greed || {};
-    const val = fng.value || 50;
-    sentimentIndexVal.textContent = `${val} ${fng.value_classification || "NEUTRAL"}`;
-  }
+  // Signal Confirmation Evidence
+  renderConfirmationEvidence(data);
 
   // Actual bid/ask spread from this same snapshot's order book.  BBW is a
   // volatility transform, not an execution spread.
@@ -1709,28 +1887,13 @@ function renderDashboard(data) {
   renderTradeSetup(data.trade_setup);
   renderSignalMonitor(data.signal_monitor);
 
-  // Squeeze Detector & Derivatives
+  // Derivatives (regime, funding, OI)
   if (regimeVal) regimeVal.textContent = (data.regime || 'RANGING').replace(/_/g, ' ');
   if (fundingVal && data.funding_rate !== undefined) {
     fundingVal.textContent = (data.funding_rate * 100).toFixed(4) + '%';
   }
   if (oiVal && data.open_interest !== undefined) {
     oiVal.textContent = formatVolume(data.open_interest);
-  }
-  if (squeezeSignalVal) {
-    const fRate = data.funding_rate || 0.0;
-    let sig = "NEUTRAL";
-    let desc = "Funding parameters within standard range.";
-    if (fRate < -0.0001) {
-      sig = "SHORT_SQUEEZE";
-      desc = "Shorts crowded (Negative Funding). High potential short squeeze.";
-    } else if (fRate > 0.0003) {
-      sig = "LONG_SQUEEZE";
-      desc = "Longs crowded (High Funding). Downside flush risks.";
-    }
-    squeezeSignalVal.textContent = sig.replace(/_/g, ' ');
-    squeezeSignalVal.className = 'value ' + sig.toLowerCase();
-    if (squeezeDescVal) squeezeDescVal.textContent = desc;
   }
 
   // Price Magnets

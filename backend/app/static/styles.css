@@ -7492,3 +7492,273 @@ select:focus-visible {
     transition-duration: .01ms !important;
   }
 }
+
+/* ── Signal Confirmation Evidence Card ──────────────────────────────── */
+.confirmation-evidence-card {
+  border: 1px solid rgba(255, 255, 255, .06);
+}
+
+.confirmation-playbook-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.35rem 0.55rem;
+  margin-top: 0.35rem;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, .2);
+  border: 1px solid rgba(255, 255, 255, .06);
+}
+
+.confirmation-playbook-label {
+  font-size: 0.6rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.confirmation-playbook-value {
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: var(--neon-blue);
+}
+
+.confirmation-phase-sep {
+  color: var(--text-muted);
+  font-size: 0.7rem;
+}
+
+.confirmation-phase-value {
+  font-size: 0.65rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+/* Execution check strip — reuses gate-chip design language */
+.confirmation-exec-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  padding-top: 0.35rem;
+  border-top: 1px solid rgba(255, 255, 255, .06);
+}
+
+.confirm-exec-chip {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.2rem 0.45rem;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, .16);
+  border: 1px solid rgba(255, 255, 255, .07);
+  font-size: 0.55rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.confirm-exec-chip .exec-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--text-muted);
+}
+
+.confirm-exec-chip.passed {
+  border-color: rgba(80, 205, 137, .2);
+  color: var(--text-secondary);
+}
+
+.confirm-exec-chip.passed .exec-dot {
+  background: var(--neon-green);
+  box-shadow: 0 0 4px var(--neon-green);
+}
+
+.confirm-exec-chip.failed {
+  border-color: rgba(241, 188, 0, .2);
+  color: var(--text-secondary);
+}
+
+.confirm-exec-chip.failed .exec-dot {
+  background: var(--neon-gold);
+  box-shadow: 0 0 4px var(--neon-gold);
+}
+
+.confirm-exec-chip.blocked {
+  border-color: rgba(255, 90, 113, .25);
+  color: var(--text-secondary);
+}
+
+.confirm-exec-chip.blocked .exec-dot {
+  background: var(--neon-red, #ff5a71);
+  box-shadow: 0 0 4px var(--neon-red, #ff5a71);
+}
+
+.venue-evidence-panel {
+  position: relative;
+  overflow: hidden;
+  margin-top: .65rem;
+  padding: .7rem;
+  border: 1px solid rgba(96, 165, 250, .16);
+  border-radius: 10px;
+  background:
+    radial-gradient(circle at 100% 0, rgba(96, 165, 250, .10), transparent 42%),
+    linear-gradient(145deg, rgba(7, 15, 28, .82), rgba(7, 12, 21, .55));
+}
+
+.venue-evidence-panel::before {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 2px;
+  content: "";
+  background: linear-gradient(180deg, var(--neon-blue), transparent);
+  box-shadow: 0 0 12px rgba(96, 165, 250, .45);
+}
+
+.venue-evidence-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .65rem;
+}
+
+.venue-evidence-head > div {
+  display: grid;
+  gap: .1rem;
+}
+
+.venue-evidence-kicker {
+  color: var(--text-muted);
+  font-size: .52rem;
+  font-weight: 800;
+  letter-spacing: .11em;
+  text-transform: uppercase;
+}
+
+.venue-evidence-head strong {
+  color: var(--text-primary);
+  font-size: .72rem;
+}
+
+.venue-evidence-badge {
+  padding: .2rem .45rem;
+  border: 1px solid rgba(255, 255, 255, .09);
+  border-radius: 999px;
+  font-size: .52rem;
+  font-weight: 900;
+  letter-spacing: .08em;
+}
+
+.venue-evidence-badge.healthy {
+  border-color: rgba(80, 205, 137, .28);
+  color: var(--neon-green);
+  background: rgba(80, 205, 137, .09);
+}
+
+.venue-evidence-badge.degraded {
+  border-color: rgba(241, 188, 0, .28);
+  color: var(--neon-gold);
+  background: rgba(241, 188, 0, .08);
+}
+
+.venue-evidence-badge.starting {
+  color: var(--text-muted);
+  background: rgba(255, 255, 255, .03);
+}
+
+.venue-evidence-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: .35rem;
+  margin-top: .6rem;
+}
+
+.venue-evidence-metric {
+  min-width: 0;
+  padding: .45rem .5rem;
+  border: 1px solid rgba(255, 255, 255, .055);
+  border-radius: 7px;
+  background: rgba(0, 0, 0, .18);
+}
+
+.venue-evidence-metric span {
+  display: block;
+  margin-bottom: .16rem;
+  color: var(--text-muted);
+  font-size: .5rem;
+  font-weight: 800;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+}
+
+.venue-evidence-metric strong {
+  display: block;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: .57rem;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.venue-evidence-metric strong[data-tone="positive"] {
+  color: var(--neon-green);
+}
+
+.venue-evidence-metric strong[data-tone="negative"] {
+  color: var(--neon-red, #ff5a71);
+}
+
+.venue-evidence-metric strong[data-tone="warning"] {
+  color: var(--neon-gold);
+}
+
+.venue-evidence-panel p {
+  margin: .55rem 0 0;
+  color: var(--text-muted);
+  font-size: .55rem;
+  line-height: 1.45;
+}
+
+@media (max-width: 720px) {
+  .venue-evidence-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Status badge color variants for the confirmation card */
+.confirmation-evidence-card .telemetry-badge.confirmed {
+  background: rgba(80, 205, 137, .15) !important;
+  color: var(--neon-green) !important;
+}
+
+.confirmation-evidence-card .telemetry-badge.rejected {
+  background: rgba(255, 90, 113, .15) !important;
+  color: var(--neon-red, #ff5a71) !important;
+}
+
+.confirmation-evidence-card .telemetry-badge.watching {
+  background: rgba(241, 188, 0, .15) !important;
+  color: var(--neon-gold) !important;
+}
+
+/* Evidence value color helpers */
+.confirmation-evidence-card .value.positive {
+  color: var(--neon-green) !important;
+}
+
+.confirmation-evidence-card .value.negative {
+  color: var(--neon-red, #ff5a71) !important;
+}
+
+.confirmation-evidence-card .value.neutral {
+  color: var(--text-muted) !important;
+}
+
+.confirmation-evidence-card .value.warning {
+  color: var(--neon-gold) !important;
+}

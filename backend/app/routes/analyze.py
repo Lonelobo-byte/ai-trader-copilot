@@ -137,9 +137,7 @@ async def analyze(request: AnalyzeRequest, user: User = Depends(_reserved_rest_r
         market_intelligence=intelligence,
         ai_override=ai_override,
         ai_cache_key=ai_cache_identity(user.id, ai_override),
-        # Shared signal publication is a platform operation. Subscriber
-        # analysis remains research-only and cannot alter the global ledger.
-        reconcile_signals=user.role == "admin",
+        reconcile_signals=True,
     )
     return payload
 
@@ -234,7 +232,7 @@ async def websocket_analyze(websocket: WebSocket):
                 market_intelligence=intelligence,
                 ai_override=ai_override,
                 ai_cache_key=ai_cache_identity(user.id, ai_override),
-                reconcile_signals=user.role == "admin",
+                reconcile_signals=True,
             )
             payload["type"] = event["type"]
             await websocket.send_json(payload)

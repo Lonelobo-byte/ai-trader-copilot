@@ -21,7 +21,12 @@ def _multi_venue_summary(multi_venue: dict[str, Any] | None) -> dict[str, Any]:
             "spread_bps": order_book.get("spread_bps"),
             "depth_imbalance": order_book.get("depth_imbalance"),
             "persistent_imbalance": order_book.get("persistent_imbalance"),
+            "book_event_count": order_book.get("book_event_count"),
+            "removal_ratio": order_book.get("removal_ratio"),
             "trade_flow_available": bool(trade_flow.get("available")),
+            "trade_flow_age_seconds": trade_flow.get("age_seconds"),
+            "trade_count": trade_flow.get("trade_count"),
+            "qualified_notional": trade_flow.get("qualified_notional"),
             "signed_trade_flow": trade_flow.get("signed_flow"),
             "aggressive_buy_ratio": trade_flow.get("aggressive_buy_ratio"),
         }
@@ -39,6 +44,7 @@ def _multi_venue_summary(multi_venue: dict[str, Any] | None) -> dict[str, Any]:
             "available": False,
             "observed": False,
         },
+        "limitations": list(data.get("limitations") or []),
         "venues": venues,
     }
 
