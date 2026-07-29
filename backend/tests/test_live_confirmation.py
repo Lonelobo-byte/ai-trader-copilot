@@ -72,6 +72,37 @@ def test_main_signal_keeps_depth_as_supporting_evidence_not_a_snapshot_veto() ->
     assert all(result["live_evidence"]["required_checks"].values())
 
 
+def test_planned_notional_is_blocked_when_displayed_depth_capacity_is_too_small() -> None:
+    primary = _candles(start=100.0, step=0.20, last_volume=2_000.0)
+    higher = _candles(start=100.0, step=0.40, last_volume=2_000.0)
+    inputs = _live_inputs(primary[-1].close)
+    result = verify_main_signal_snapshot(
+        symbol="TESTUSDT", timeframe="5m", side="LONG", candles=primary, higher_candles=higher,
+        order_book=inputs["order_book"], funding=inputs["funding"], derivatives=inputs["derivatives"],
+        planned_notional_usd=10_000.0,
+    )
+    assert result["passed"] is False
+    assert result["live_checks"]["execution_capacity_sufficient"] is False
+    assert result["live_evidence"]["execution_capacity"]["evaluated"] is True
+    assert any("10% of the displayed" in item for item in result["risk_flags"])
+
+
+def test_errored_funding_payload_is_missing_data_not_neutral_funding() -> None:
+    primary = _candles(start=100.0, step=0.20, last_volume=2_000.0)
+    higher = _candles(start=100.0, step=0.40, last_volume=2_000.0)
+    inputs = _live_inputs(primary[-1].close)
+    result = verify_main_signal_snapshot(
+        symbol="TESTUSDT", timeframe="5m", side="LONG", candles=primary, higher_candles=higher,
+        order_book=inputs["order_book"],
+        funding={"funding_rate": 0.0, "error": "provider unavailable"},
+        derivatives=inputs["derivatives"],
+    )
+    assert result["passed"] is False
+    assert result["publication_coverage"]["requirements"]["funding"] is False
+    assert "funding" in result["publication_coverage"]["missing"]
+    assert result["live_checks"]["data_complete"] is False
+
+
 def test_main_signal_accepts_completed_range_sweep_with_context_acceptance() -> None:
     """Neutral/ranging phases must be evaluated as a sweep reversal, not a failed trend."""
     primary = _candles(start=100.0, step=0.20, last_volume=2_000.0)

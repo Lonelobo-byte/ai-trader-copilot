@@ -224,6 +224,7 @@ async def run_single_symbol_scan(symbol: str, timeframe: str, settings: Any) -> 
             order_book=intelligence.get("order_book", {}), funding=intelligence.get("funding", {}),
             derivatives=intelligence.get("derivatives", {}),
             multi_venue=intelligence.get("multi_venue", {}) or {},
+            planned_notional_usd=(trade_setup.get("position") or {}).get("notional_usd"),
         )
 
         # Evaluate approval

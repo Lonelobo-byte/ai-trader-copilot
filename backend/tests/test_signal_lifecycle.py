@@ -90,6 +90,24 @@ def test_council_approval_is_not_rejected_by_legacy_agent_contract() -> None:
     assert approval["approved"] is True
 
 
+def test_final_publication_contract_rejects_missing_canonical_council_approval() -> None:
+    approval = evaluate_signal_approval(
+        decision=_decision(),
+        trade_setup=_setup(),
+        risk_idea={"risk_reward": 2.0, "entry_zone_low": 99.5, "entry_zone_high": 100.5},
+        trend={"status": "bullish"},
+        momentum={"bias": "bullish"},
+        order_book={"pressure": "buyers"},
+        data_freshness={"passed": True},
+        liquidity={"passed": True},
+        ai_result=_ai(),
+        current_price=100.0,
+        require_council_approval=True,
+    )
+    assert approval["approved"] is False
+    assert any("canonical" in blocker.lower() for blocker in approval["blockers"])
+
+
 def test_trade_setup_preserves_low_price_pair_precision() -> None:
     from app.brains.signal_builder import build_ai_driven_trade_setup
     from app.settings import get_settings

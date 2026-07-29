@@ -110,6 +110,50 @@ def _truncate_for_prompt(data: Any, max_chars: int = 3000) -> str:
     return raw[:max_chars] + "...(truncated)"
 
 
+def _cio_prompt_dossier(dossier: dict[str, Any]) -> str:
+    """Build a bounded, valid JSON dossier without dropping code-owned controls."""
+    def prompt_value(value: Any, max_chars: int = 600) -> Any:
+        raw = json.dumps(value, default=str)
+        if len(raw) <= max_chars:
+            return value
+        return raw[:max_chars] + "...(value truncated)"
+
+    engines: dict[str, Any] = {}
+    for name, report in (dossier.get("engines") or {}).items():
+        engines[name] = {
+            "status": report.get("status"),
+            "bias": report.get("bias"),
+            "confidence_pct": report.get("confidence_pct"),
+            "evidence": [
+                {
+                    "metric": item.get("metric"),
+                    "value": prompt_value(item.get("value")),
+                    "source": item.get("source"),
+                }
+                for item in (report.get("evidence") or [])[:12]
+            ],
+            "contradictory_evidence": list(report.get("contradictory_evidence") or [])[:8],
+            "unknowns": list(report.get("unknowns") or [])[:8],
+            "limitations": list(report.get("limitations") or [])[:5],
+        }
+    projection = {
+        "architecture": dossier.get("architecture"),
+        "symbol": dossier.get("symbol"),
+        "timeframe": dossier.get("timeframe"),
+        "as_of": dossier.get("as_of"),
+        "policy": dossier.get("policy", {}),
+        "data_quality": dossier.get("data_quality", {}),
+        "evidence_manifest": dossier.get("evidence_manifest", {}),
+        "provisional_thesis": dossier.get("provisional_thesis", {}),
+        "adversarial_review": dossier.get("adversarial_review", {}),
+        "risk_committee": dossier.get("risk_committee", {}),
+        "historical_stats": dossier.get("historical_stats", {}),
+        "calendar_events": list(dossier.get("calendar_events") or [])[:5],
+        "engines": engines,
+    }
+    return json.dumps(projection, default=str)
+
+
 async def _run_institutional_cio(
     symbol: str,
     timeframe: str,
@@ -124,7 +168,7 @@ async def _run_institutional_cio(
     prompt = load_prompt("institutional_cio")
     user = (
         f"Symbol: {symbol} ({timeframe})\n"
-        f"Institutional Dossier: {_truncate_for_prompt(dossier, 14000)}\n"
+        f"Institutional Dossier: {_cio_prompt_dossier(dossier)}\n"
     )
     result = await _call_agent(prompt, user, settings, task="judge", agent_name="institutional_cio", ai_override=ai_override)
     error = str(result.get("error", ""))
@@ -256,6 +300,7 @@ async def run_ai_council(
         "risk_warnings": cio_result.get("risk_warnings", []),
         "investment_memo": cio_result.get("investment_memo", {}),
         "institutional_dossier": dossier,
+        "evidence_manifest": dossier.get("evidence_manifest", {}),
         "committee_controls": cio_result.get("committee_controls", {}),
         "quantitative_assessment": quantitative,
         # Trade plan (if actionable)

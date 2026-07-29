@@ -410,6 +410,20 @@ class _InstrumentState:
             sum((value >= 0) == (mean_imbalance >= 0) for value in samples) / len(samples)
             if samples else 0.0
         )
+        removal_ratio = removals / book_event_count if book_event_count else None
+        stability_qualified = fresh and book_event_count >= 20 and len(samples) >= 5
+        quote_instability_score = (
+            removal_ratio * (1.0 - same_sign)
+            if stability_qualified and removal_ratio is not None
+            else None
+        )
+        quote_stability_status = (
+            "ELEVATED"
+            if stability_qualified and removal_ratio is not None and removal_ratio >= 0.80 and same_sign < 0.55
+            else "STABLE"
+            if stability_qualified
+            else "UNAVAILABLE"
+        )
 
         liquidations = [
             row for row in self.liquidations
@@ -447,7 +461,22 @@ class _InstrumentState:
                 "persistence_ratio": round(same_sign, 3) if samples else None,
                 "sample_count": len(samples),
                 "book_event_count": book_event_count,
-                "removal_ratio": round(removals / book_event_count, 4) if book_event_count else None,
+                "removal_ratio": round(removal_ratio, 4) if removal_ratio is not None else None,
+                "displayed_liquidity_stability": {
+                    "qualified": stability_qualified,
+                    "status": quote_stability_status,
+                    "instability_score": round(quote_instability_score, 4) if quote_instability_score is not None else None,
+                    "minimum_book_events": 20,
+                    "minimum_imbalance_samples": 5,
+                    "reason": (
+                        "High quote-removal activity coincides with low directional persistence."
+                        if quote_stability_status == "ELEVATED"
+                        else "Incremental quote behavior is stable within the observed window."
+                        if quote_stability_status == "STABLE"
+                        else "More incremental book events are required before quote stability can be assessed."
+                    ),
+                    "limitation": "This is a displayed-liquidity instability proxy, not proof that a participant is spoofing.",
+                },
             },
             "trade_flow": {
                 "available": flow_available,
@@ -504,11 +533,16 @@ class MultiVenueMarketDataHub:
             normalized = _symbol(item)
             if normalized and normalized.endswith("USDT") and normalized not in configured:
                 configured.append(normalized)
-        max_symbols = max(1, min(int(self.settings.multi_venue_max_symbols), 12))
-        self.symbols = configured[:max_symbols]
+        self.max_symbols = max(1, min(int(self.settings.multi_venue_max_symbols), 12))
+        self.symbols = configured[: self.max_symbols]
         if not self.symbols:
             logger.warning("No valid USDT symbols configured for the multi-venue public streams.")
         self.states: dict[tuple[str, str], _InstrumentState] = {}
+        observed = monotonic()
+        self._symbol_last_requested: dict[str, float] = {
+            symbol: observed + index * 1e-6 for index, symbol in enumerate(self.symbols)
+        }
+        self._subscription_generation = 0
         self._coinbase_sequence: int | None = None
         self._bybit_subscriptions: set[str] = set()
         self._bybit_rejected_symbols: dict[str, float] = {}
@@ -519,26 +553,109 @@ class MultiVenueMarketDataHub:
             "sequence_gaps": 0,
             "subscription_errors": 0,
             "stale_events_dropped": 0,
+            "dynamic_symbol_registrations": 0,
+            "dynamic_symbol_evictions": 0,
+            "subscription_refreshes": 0,
         }
         self._configure_states()
         self._snapshot_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 
-    def _configure_states(self) -> None:
+    def _new_state(self, venue: str, symbol: str) -> _InstrumentState:
         max_window = max(self.trade_window_seconds, self.liquidation_window_seconds)
+        state = _InstrumentState(
+            venue=venue,
+            symbol=symbol,
+            max_levels=(
+                self.settings.coinbase_multi_venue_book_levels
+                if venue == "coinbase"
+                else self.settings.multi_venue_book_levels
+            ),
+            max_events=self.settings.multi_venue_max_events,
+            max_window_seconds=max_window,
+            min_book_levels=self.settings.multi_venue_min_book_levels,
+        )
+        state.health_reason = "SUBSCRIBING"
+        return state
+
+    def _configure_states(self) -> None:
         for venue in ("bybit", "coinbase"):
             for symbol in self.symbols:
-                self.states[(venue, symbol)] = _InstrumentState(
-                    venue=venue,
-                    symbol=symbol,
-                    max_levels=(
-                        self.settings.coinbase_multi_venue_book_levels
-                        if venue == "coinbase"
-                        else self.settings.multi_venue_book_levels
-                    ),
-                    max_events=self.settings.multi_venue_max_events,
-                    max_window_seconds=max_window,
-                    min_book_levels=self.settings.multi_venue_min_book_levels,
-                )
+                self.states[(venue, symbol)] = self._new_state(venue, symbol)
+
+    def ensure_symbol(self, symbol: str) -> dict[str, Any]:
+        """Register a selected USDT market in the bounded shared collectors.
+
+        Registration is synchronous and network-free. The two long-running
+        collector tasks observe the generation change and reconnect once with
+        the updated subscription set. When the cap is full, the least recently
+        requested symbol is evicted so arbitrary user-selected markets work
+        without opening per-user WebSocket connections.
+        """
+        normalized = _symbol(symbol)
+        if (
+            not normalized
+            or not normalized.endswith("USDT")
+            or len(normalized) <= 4
+            or len(normalized) > 24
+            or not normalized.isalnum()
+        ):
+            return {
+                "registered": False,
+                "symbol": normalized,
+                "reason": "invalid_usdt_symbol",
+                "evicted_symbol": None,
+            }
+
+        observed = monotonic()
+        if normalized in self.symbols:
+            self._symbol_last_requested[normalized] = observed
+            return {
+                "registered": True,
+                "symbol": normalized,
+                "reason": "already_registered",
+                "evicted_symbol": None,
+            }
+
+        evicted: str | None = None
+        if len(self.symbols) >= self.max_symbols:
+            evicted = min(
+                self.symbols,
+                key=lambda item: self._symbol_last_requested.get(item, 0.0),
+            )
+            self.symbols.remove(evicted)
+            self._symbol_last_requested.pop(evicted, None)
+            self._bybit_subscriptions.discard(evicted)
+            self._bybit_rejected_symbols.pop(evicted, None)
+            self._coinbase_rejected_products.pop(self.coinbase_product(evicted), None)
+            self._snapshot_cache.pop(evicted, None)
+            for venue in ("bybit", "coinbase"):
+                state = self.states.pop((venue, evicted), None)
+                if state:
+                    state.disconnect("DYNAMICALLY_EVICTED")
+            self.metrics["dynamic_symbol_evictions"] = int(
+                self.metrics["dynamic_symbol_evictions"]
+            ) + 1
+
+        self.symbols.append(normalized)
+        self._symbol_last_requested[normalized] = observed
+        for venue in ("bybit", "coinbase"):
+            self.states[(venue, normalized)] = self._new_state(venue, normalized)
+        self._subscription_generation += 1
+        self.metrics["dynamic_symbol_registrations"] = int(
+            self.metrics["dynamic_symbol_registrations"]
+        ) + 1
+        self._snapshot_cache.clear()
+        logger.info(
+            "Dynamically registered %s for public multi-venue evidence%s.",
+            normalized,
+            f"; evicted least-recently-requested {evicted}" if evicted else "",
+        )
+        return {
+            "registered": True,
+            "symbol": normalized,
+            "reason": "dynamic_registration_started",
+            "evicted_symbol": evicted,
+        }
 
     @staticmethod
     def coinbase_product(symbol: str) -> str:
@@ -621,7 +738,13 @@ class MultiVenueMarketDataHub:
             return False
         request_id = str(message.get("req_id", ""))
         requested_symbol = request_id.removeprefix("mv:") if request_id.startswith("mv:") else ""
-        targets = [requested_symbol] if requested_symbol in self.symbols else list(self.symbols)
+        targets = (
+            [requested_symbol]
+            if requested_symbol in self.symbols
+            else []
+            if requested_symbol
+            else list(self.symbols)
+        )
         if message.get("success") is not True:
             self.metrics["subscription_errors"] = int(self.metrics["subscription_errors"]) + 1
             for symbol in targets:
@@ -816,6 +939,7 @@ class MultiVenueMarketDataHub:
         delay = 1.0
         while True:
             failure_reason = "CONNECTION_CLOSED"
+            subscription_refresh = False
             heartbeat_task: asyncio.Task | None = None
             try:
                 self._set_connected("bybit", False)
@@ -830,6 +954,7 @@ class MultiVenueMarketDataHub:
                 ) as websocket:
                     self._set_connected("bybit", True)
                     connected_at = monotonic()
+                    subscription_generation = self._subscription_generation
                     active_symbols = self._active_bybit_symbols()
                     for symbol in self._bybit_rejected_symbols:
                         state = self._state("bybit", symbol)
@@ -846,8 +971,20 @@ class MultiVenueMarketDataHub:
                         self._bybit_heartbeat(websocket), name="bybit-application-heartbeat"
                     )
                     logger.info("Bybit public market-data stream connected for %s.", self.symbols)
-                    async for raw in websocket:
-                        self.process_bybit_message(json.loads(raw))
+                    while True:
+                        if subscription_generation != self._subscription_generation:
+                            failure_reason = "SUBSCRIPTION_REFRESH"
+                            subscription_refresh = True
+                            self.metrics["subscription_refreshes"] = int(
+                                self.metrics["subscription_refreshes"]
+                            ) + 1
+                            break
+                        try:
+                            raw = await asyncio.wait_for(websocket.recv(), timeout=1.0)
+                        except asyncio.TimeoutError:
+                            raw = None
+                        if raw is not None:
+                            self.process_bybit_message(json.loads(raw))
                         active_symbols = self._active_bybit_symbols()
                         self._assert_stream_readiness("bybit", active_symbols, connected_at)
                         if (
@@ -872,16 +1009,18 @@ class MultiVenueMarketDataHub:
                     await asyncio.gather(heartbeat_task, return_exceptions=True)
                 self._set_connected("bybit", False, reason=failure_reason)
             self.metrics["bybit_reconnects"] = int(self.metrics["bybit_reconnects"]) + 1
+            if subscription_refresh:
+                delay = 0.0
             await asyncio.sleep(delay + random.uniform(0.0, min(delay, 1.0)))
-            delay = min(delay * 2.0, 30.0)
+            delay = 1.0 if subscription_refresh else min(delay * 2.0, 30.0)
 
     async def run_coinbase(self) -> None:
         url = self.settings.coinbase_public_ws_url
-        products = [self.coinbase_product(symbol) for symbol in self.symbols]
         delay = 1.0
         while True:
             failure_reason = "CONNECTION_CLOSED"
             periodic_resync = False
+            subscription_refresh = False
             try:
                 self._set_connected("coinbase", False)
                 self._coinbase_sequence = None
@@ -895,6 +1034,8 @@ class MultiVenueMarketDataHub:
                 ) as websocket:
                     self._set_connected("coinbase", True)
                     connected_at = monotonic()
+                    subscription_generation = self._subscription_generation
+                    products = [self.coinbase_product(symbol) for symbol in self.symbols]
                     active_products = self._active_coinbase_products(products)
                     active_symbols = [
                         symbol for symbol in self.symbols
@@ -913,8 +1054,20 @@ class MultiVenueMarketDataHub:
                                 "product_ids": active_products,
                             }))
                     logger.info("Coinbase public market-data stream connected for %s.", active_products)
-                    async for raw in websocket:
-                        self.process_coinbase_message(json.loads(raw))
+                    while True:
+                        if subscription_generation != self._subscription_generation:
+                            failure_reason = "SUBSCRIPTION_REFRESH"
+                            subscription_refresh = True
+                            self.metrics["subscription_refreshes"] = int(
+                                self.metrics["subscription_refreshes"]
+                            ) + 1
+                            break
+                        try:
+                            raw = await asyncio.wait_for(websocket.recv(), timeout=1.0)
+                        except asyncio.TimeoutError:
+                            raw = None
+                        if raw is not None:
+                            self.process_coinbase_message(json.loads(raw))
                         active_products = self._active_coinbase_products(products)
                         active_symbols = [
                             symbol for symbol in self.symbols
@@ -948,20 +1101,41 @@ class MultiVenueMarketDataHub:
             finally:
                 self._set_connected("coinbase", False, reason=failure_reason)
             self.metrics["coinbase_reconnects"] = int(self.metrics["coinbase_reconnects"]) + 1
-            if periodic_resync:
-                delay = 1.0
+            if periodic_resync or subscription_refresh:
+                delay = 0.0 if subscription_refresh else 1.0
             await asyncio.sleep(delay + random.uniform(0.0, min(delay, 1.0)))
-            delay = min(delay * 2.0, 30.0)
+            delay = 1.0 if subscription_refresh else min(delay * 2.0, 30.0)
 
-    def snapshot(self, symbol: str, *, now: float | None = None) -> dict[str, Any]:
+    def snapshot(
+        self,
+        symbol: str,
+        *,
+        now: float | None = None,
+        register: bool = True,
+        touch: bool = True,
+    ) -> dict[str, Any]:
         normalized = _symbol(symbol)
+        registration = (
+            self.ensure_symbol(normalized)
+            if register
+            else {
+                "registered": normalized in self.symbols,
+                "symbol": normalized,
+                "reason": "registration_not_requested",
+                "evicted_symbol": None,
+            }
+        )
         if normalized not in self.symbols:
             return {
                 "available": False,
+                "status": "UNAVAILABLE",
                 "symbol": normalized,
-                "reason": "symbol_not_subscribed_to_shared_multi_venue_stream",
+                "reason": registration.get("reason", "symbol_not_registered"),
+                "registration": registration,
                 "venues": {},
             }
+        if touch and not register:
+            self._symbol_last_requested[normalized] = monotonic()
         cache_at = monotonic() if now is None else None
         if cache_at is not None:
             cached = self._snapshot_cache.get(normalized)
@@ -1017,12 +1191,43 @@ class MultiVenueMarketDataHub:
             if len(mid_prices) >= 2 and mean_price else None
         )
         bybit_liquidations = (venue_snapshots.get("bybit") or {}).get("liquidations", {})
+        stability_rows = [
+            ((item.get("order_book") or {}).get("displayed_liquidity_stability") or {})
+            for item in fresh
+        ]
+        qualified_stability = [row for row in stability_rows if row.get("qualified")]
+        elevated_stability = [row for row in qualified_stability if row.get("status") == "ELEVATED"]
+        quote_stability_status = (
+            "ELEVATED"
+            if len(elevated_stability) >= 2
+            else "WATCH"
+            if elevated_stability
+            else "STABLE"
+            if qualified_stability
+            else "UNAVAILABLE"
+        )
+        venue_health = {
+            str(item.get("health", "UNAVAILABLE")).upper()
+            for item in venue_snapshots.values()
+        }
+        subscription_warming = bool(venue_health) and venue_health.issubset(
+            {"SUBSCRIBING", "SYNCING", "INSUFFICIENT_DEPTH"}
+        )
         result = {
             "available": bool(fresh),
             "symbol": normalized,
             "captured_at": datetime.now(timezone.utc).isoformat(),
             "operational_metrics": dict(self.metrics),
-            "status": "HEALTHY" if len(fresh) >= 2 else "DEGRADED" if fresh else "UNAVAILABLE",
+            "status": (
+                "HEALTHY"
+                if len(fresh) >= 2
+                else "DEGRADED"
+                if fresh
+                else "SUBSCRIBING"
+                if subscription_warming
+                else "UNAVAILABLE"
+            ),
+            "registration": registration,
             "fresh_venue_count": len(fresh),
             "required_venue_count": 2,
             "cross_venue_confirmed": len(fresh) >= 2,
@@ -1035,6 +1240,13 @@ class MultiVenueMarketDataHub:
             "depth_score": round(depth_score, 4),
             "price_dispersion_bps": round(dispersion_bps, 3) if dispersion_bps is not None else None,
             "observed_liquidations": bybit_liquidations,
+            "displayed_liquidity_stability": {
+                "status": quote_stability_status,
+                "qualified_venue_count": len(qualified_stability),
+                "elevated_venue_count": len(elevated_stability),
+                "publication_veto": quote_stability_status == "ELEVATED",
+                "limitation": "A two-venue instability reading is a cancellation-risk safeguard, not proof of spoofing.",
+            },
             "venues": venue_snapshots,
             "limitations": [
                 "Bybit evidence is perpetual-futures activity while Coinbase evidence is spot activity.",

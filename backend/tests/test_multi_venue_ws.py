@@ -267,6 +267,50 @@ def test_books_events_and_dedupe_indexes_remain_bounded() -> None:
     assert len(hub.states) == before
 
 
+def test_selected_symbol_is_registered_automatically_with_bounded_lru_eviction() -> None:
+    hub = MultiVenueMarketDataHub(_settings(multi_venue_max_symbols=2))
+    generation = hub._subscription_generation
+
+    xrp = hub.snapshot("XRPUSDT")
+    assert xrp["status"] == "SUBSCRIBING"
+    assert xrp["registration"]["reason"] == "dynamic_registration_started"
+    assert "XRPUSDT" in hub.symbols
+    assert ("bybit", "XRPUSDT") in hub.states
+    assert ("coinbase", "XRPUSDT") in hub.states
+    assert hub._subscription_generation == generation + 1
+
+    eth = hub.snapshot("ETHUSDT")
+    assert eth["status"] == "SUBSCRIBING"
+    assert eth["registration"]["evicted_symbol"] == "BTCUSDT"
+    assert hub.symbols == ["XRPUSDT", "ETHUSDT"]
+    assert len(hub.states) == 4
+    assert hub.metrics["dynamic_symbol_registrations"] == 2
+    assert hub.metrics["dynamic_symbol_evictions"] == 1
+
+
+def test_invalid_dynamic_symbol_does_not_mutate_the_shared_hub() -> None:
+    hub = MultiVenueMarketDataHub(_settings())
+    before_symbols = list(hub.symbols)
+    before_generation = hub._subscription_generation
+    snapshot = hub.snapshot("BTC/USD")
+    assert snapshot["status"] == "UNAVAILABLE"
+    assert snapshot["reason"] == "invalid_usdt_symbol"
+    assert hub.symbols == before_symbols
+    assert hub._subscription_generation == before_generation
+
+
+def test_late_bybit_ack_for_evicted_symbol_cannot_mark_replacement_ready() -> None:
+    hub = MultiVenueMarketDataHub(_settings(multi_venue_max_symbols=1))
+    hub.snapshot("XRPUSDT")
+    hub.process_bybit_message(
+        {"op": "subscribe", "req_id": "mv:BTCUSDT", "success": True},
+        now=100.0,
+    )
+    assert "BTCUSDT" not in hub.symbols
+    assert "XRPUSDT" not in hub._bybit_subscriptions
+    assert hub.states[("bybit", "XRPUSDT")].liquidation_stream_ready is False
+
+
 def test_crossed_book_is_rejected_and_cleared() -> None:
     hub = MultiVenueMarketDataHub(_settings())
     hub._set_connected("bybit", True, now=100.0)
@@ -307,6 +351,26 @@ def test_confirmed_cross_venue_opposition_vetoes_but_missing_feed_does_not() -> 
     assert candidate["status"] == "LIVE_CONFIRMED_REVIEW"
     assert candidate["advanced_confirmation"]["cross_venue_evidence"]["status"] == "UNAVAILABLE"
     assert any("not counted as neutral" in item for item in candidate["advanced_confirmation"]["supporting_warnings"])
+
+
+def test_two_venue_displayed_liquidity_instability_vetoes_live_confirmation() -> None:
+    unstable = {
+        "flow_confirmed": True,
+        "flow_consensus": "BULLISH",
+        "flow_score": 0.5,
+        "fresh_venue_count": 2,
+        "displayed_liquidity_stability": {
+            "status": "ELEVATED",
+            "qualified_venue_count": 2,
+            "elevated_venue_count": 2,
+            "publication_veto": True,
+        },
+    }
+    candidate = {"direction": "BULLISH", "score": 75, "risk_flags": [], "causal_radar": True}
+    apply_live_confirmation(candidate, _complete_live(unstable))
+    assert candidate["status"] == "LIVE_CONFIRMATION_REJECTED"
+    assert candidate["advanced_confirmation"]["checks"]["displayed_liquidity_stable"] is False
+    assert any("liquidity instability" in item.lower() for item in candidate["risk_flags"])
 
 
 def test_cached_intelligence_refreshes_live_snapshot_without_duplicate_source_labels(monkeypatch) -> None:
@@ -579,3 +643,103 @@ async def test_coinbase_subscriptions_are_batched_per_channel(monkeypatch) -> No
     assert [payload["channel"] for payload in sent] == ["heartbeats", "level2", "market_trades"]
     assert len(sent[1]["product_ids"]) == 12
     assert sent[1]["product_ids"] == sent[2]["product_ids"]
+
+
+@pytest.mark.asyncio
+async def test_dynamic_selection_refreshes_live_coinbase_subscription_set(monkeypatch) -> None:
+    hub = MultiVenueMarketDataHub(_settings(multi_venue_max_symbols=2))
+    sent: list[dict] = []
+    initial_ready = asyncio.Event()
+    refreshed_ready = asyncio.Event()
+
+    class FakeSocket:
+        async def send(self, raw: str) -> None:
+            payload = multi_venue_ws.json.loads(raw)
+            sent.append(payload)
+            if payload.get("channel") == "market_trades":
+                products = payload.get("product_ids", [])
+                if "XRP-USD" in products:
+                    refreshed_ready.set()
+                else:
+                    initial_ready.set()
+
+        async def recv(self) -> str:
+            await asyncio.Future()
+
+    class FakeConnection:
+        async def __aenter__(self):
+            return FakeSocket()
+
+        async def __aexit__(self, exc_type, exc, traceback):
+            return False
+
+    monkeypatch.setattr(
+        multi_venue_ws.websockets,
+        "connect",
+        lambda *args, **kwargs: FakeConnection(),
+    )
+    task = asyncio.create_task(hub.run_coinbase())
+    try:
+        await asyncio.wait_for(initial_ready.wait(), timeout=1.0)
+        selected = hub.snapshot("XRPUSDT")
+        assert selected["status"] == "SUBSCRIBING"
+        await asyncio.wait_for(refreshed_ready.wait(), timeout=3.0)
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    refreshed_level2 = [
+        payload for payload in sent
+        if payload.get("channel") == "level2" and "XRP-USD" in payload.get("product_ids", [])
+    ]
+    assert refreshed_level2
+    assert set(refreshed_level2[-1]["product_ids"]) == {"BTC-USD", "XRP-USD"}
+
+
+@pytest.mark.asyncio
+async def test_dynamic_selection_refreshes_live_bybit_subscription_set(monkeypatch) -> None:
+    hub = MultiVenueMarketDataHub(_settings(multi_venue_max_symbols=2))
+    sent: list[dict] = []
+    initial_ready = asyncio.Event()
+    refreshed_ready = asyncio.Event()
+
+    class FakeSocket:
+        async def send(self, raw: str) -> None:
+            payload = multi_venue_ws.json.loads(raw)
+            sent.append(payload)
+            if payload.get("req_id") == "mv:BTCUSDT":
+                initial_ready.set()
+            if payload.get("req_id") == "mv:XRPUSDT":
+                refreshed_ready.set()
+
+        async def recv(self) -> str:
+            await asyncio.Future()
+
+    class FakeConnection:
+        async def __aenter__(self):
+            return FakeSocket()
+
+        async def __aexit__(self, exc_type, exc, traceback):
+            return False
+
+    monkeypatch.setattr(
+        multi_venue_ws.websockets,
+        "connect",
+        lambda *args, **kwargs: FakeConnection(),
+    )
+    task = asyncio.create_task(hub.run_bybit())
+    try:
+        await asyncio.wait_for(initial_ready.wait(), timeout=1.0)
+        selected = hub.snapshot("XRPUSDT")
+        assert selected["status"] == "SUBSCRIBING"
+        await asyncio.wait_for(refreshed_ready.wait(), timeout=3.0)
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    xrp_subscription = next(payload for payload in sent if payload.get("req_id") == "mv:XRPUSDT")
+    assert set(xrp_subscription["args"]) == {
+        "orderbook.50.XRPUSDT",
+        "publicTrade.XRPUSDT",
+        "allLiquidation.XRPUSDT",
+    }

@@ -31,8 +31,8 @@ async def public_market_data_health():
         return {"enabled": False, "status": "DISABLED", "symbols": {}}
     hub = get_multi_venue_hub(settings)
     symbols = {}
-    for symbol in hub.symbols:
-        snapshot = hub.snapshot(symbol)
+    for symbol in list(hub.symbols):
+        snapshot = hub.snapshot(symbol, register=False, touch=False)
         symbols[symbol] = {
             "status": snapshot.get("status", "UNAVAILABLE"),
             "fresh_venue_count": snapshot.get("fresh_venue_count", 0),
@@ -52,6 +52,10 @@ async def public_market_data_health():
         "status": status,
         "symbols": symbols,
         "subscribed_symbols": list(hub.symbols),
+        "dynamic_subscription_capacity": {
+            "active_symbols": len(hub.symbols),
+            "maximum_symbols": hub.max_symbols,
+        },
         "quarantined_subscriptions": hub.quarantined_subscriptions,
         "metrics": dict(hub.metrics),
     }

@@ -279,6 +279,8 @@ def build_ai_driven_trade_setup(
 def evaluate_ai_driven_approval(
     cio_result: dict[str, Any],
     trade_setup: dict[str, Any],
+    *,
+    require_live_confirmation: bool = True,
 ) -> dict[str, Any]:
     """Evaluate whether the AI Council output meets criteria for publication."""
     blockers = []
@@ -305,8 +307,14 @@ def evaluate_ai_driven_approval(
     dossier = cio_result.get("institutional_dossier") or {}
     risk_committee = dossier.get("risk_committee") or {}
     adversarial = dossier.get("adversarial_review") or {}
+    evidence_manifest = dossier.get("evidence_manifest") or {}
     if decision in {"BUY_WATCH", "SELL_WATCH"} and not dossier:
         blockers.append("An institutional evidence dossier is required for publication.")
+    if decision in {"BUY_WATCH", "SELL_WATCH"} and not evidence_manifest:
+        blockers.append("A deterministic evidence manifest is required for publication.")
+    elif decision in {"BUY_WATCH", "SELL_WATCH"} and not evidence_manifest.get("core_ready", False):
+        missing = ", ".join(evidence_manifest.get("missing_required", [])) or "unknown controls"
+        blockers.append(f"Required evidence validation is incomplete: {missing}.")
     if dossier and not risk_committee.get("approved_for_allocation", False):
         blockers.extend(str(item) for item in risk_committee.get("hard_blockers", []) if item)
         if not risk_committee.get("hard_blockers"):
@@ -321,7 +329,9 @@ def evaluate_ai_driven_approval(
     # A committee narrative cannot override the deterministic Radar-equivalent
     # structure and execution verifier at the point a signal is published.
     live_confirmation = cio_result.get("live_confirmation")
-    if live_confirmation is not None and not live_confirmation.get("passed", False):
+    if require_live_confirmation and not isinstance(live_confirmation, dict):
+        blockers.append("Live confirmation is required before an actionable setup can be published.")
+    elif live_confirmation is not None and not live_confirmation.get("passed", False):
         blockers.append(f"Live confirmation failed: {live_confirmation.get('reason') or 'required structure or execution evidence is absent.'}")
         
     if trade_setup.get("status") == "NO_TRADE":
@@ -351,5 +361,6 @@ def evaluate_ai_driven_approval(
         "confidence": confidence,
         "confirmations": support_votes,
         "blockers": list(dict.fromkeys(blockers)),
+        "validation_coverage": evidence_manifest,
         "summary": "AI Council approved signal release." if not blockers else blockers[0],
     }

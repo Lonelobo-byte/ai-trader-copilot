@@ -199,7 +199,14 @@ async def run_full_analysis(
             "macro_blockout": macro_blockout,
             "historical_stats": historical_stats,
             "quant_features": features,
+            "full_quant_features": features,
             "data_quality": features.get("data_quality", {}),
+            "institutional_dossier": active_review.get("institutional_dossier") or {},
+            "evidence_manifest": active_review.get("evidence_manifest") or (
+                (active_review.get("institutional_dossier") or {}).get("evidence_manifest", {})
+            ),
+            "committee_controls": active_review.get("committee_controls") or {},
+            "investment_memo": active_review.get("investment_memo") or {},
         }
     else:
         # Check Volatility/Volume Ratios for logging
@@ -349,6 +356,7 @@ async def run_full_analysis(
             higher_candles=higher_candles, order_book=order_book_raw,
             funding=intel.get("funding", {}) or {}, derivatives=intel.get("derivatives", {}) or {},
             multi_venue=intel.get("multi_venue", {}) or {},
+            planned_notional_usd=(trade_setup.get("position") or {}).get("notional_usd"),
         )
     if cio_result.get("institutional_dossier"):
         from app.institutional.committee import build_investment_memo, render_investment_memo
@@ -356,7 +364,11 @@ async def run_full_analysis(
         memo = build_investment_memo(cio_result, cio_result["institutional_dossier"])
         cio_result["investment_memo"] = memo
         cio_result["report_md"] = render_investment_memo(memo)
-    approval = evaluate_ai_driven_approval(cio_result, trade_setup)
+    approval = evaluate_ai_driven_approval(
+        cio_result,
+        trade_setup,
+        require_live_confirmation=not historical_replay,
+    )
 
     # ── Step 3: Reconcile active signal or publish new one ───────────────
     # If this is WebSocket streaming (is_new_candle tracking), or REST.
@@ -475,6 +487,7 @@ async def run_full_analysis(
         "data_quality": analysis_snapshot["source_coverage"],
         "quantitative": analysis_snapshot["quantitative"],
         "institutional_committee": cio_result.get("institutional_dossier"),
+        "evidence_manifest": (cio_result.get("institutional_dossier") or {}).get("evidence_manifest", {}),
         "investment_memo": cio_result.get("investment_memo"),
         "committee_controls": cio_result.get("committee_controls"),
         "trend": features.get("trend", {}).get("primary", {}),

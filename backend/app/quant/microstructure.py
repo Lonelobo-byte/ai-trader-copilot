@@ -23,6 +23,7 @@ def _multi_venue_summary(multi_venue: dict[str, Any] | None) -> dict[str, Any]:
             "persistent_imbalance": order_book.get("persistent_imbalance"),
             "book_event_count": order_book.get("book_event_count"),
             "removal_ratio": order_book.get("removal_ratio"),
+            "displayed_liquidity_stability": order_book.get("displayed_liquidity_stability") or {},
             "trade_flow_available": bool(trade_flow.get("available")),
             "trade_flow_age_seconds": trade_flow.get("age_seconds"),
             "trade_count": trade_flow.get("trade_count"),
@@ -43,6 +44,12 @@ def _multi_venue_summary(multi_venue: dict[str, Any] | None) -> dict[str, Any]:
         "observed_liquidations": data.get("observed_liquidations") or {
             "available": False,
             "observed": False,
+        },
+        "displayed_liquidity_stability": data.get("displayed_liquidity_stability") or {
+            "status": "UNAVAILABLE",
+            "qualified_venue_count": 0,
+            "elevated_venue_count": 0,
+            "publication_veto": False,
         },
         "limitations": list(data.get("limitations") or []),
         "venues": venues,
@@ -82,6 +89,13 @@ def analyze_microstructure(
     return_change = ((last.close - last.open) / last.open) if last and last.open else 0.0
     # Large signed flow with muted price change is a cautious absorption proxy.
     absorption = abs(signed_flow) * max(0.0, 1.0 - min(abs(return_change) * 250, 1.0))
+    absorption_state = (
+        "PASSIVE_SELLER_ABSORPTION"
+        if absorption >= 0.20 and signed_flow > 0
+        else "PASSIVE_BUYER_ABSORPTION"
+        if absorption >= 0.20 and signed_flow < 0
+        else "NOT_DETECTED"
+    )
     near_bid = _levels_notional(bids, min(5, len(bids)))
     near_ask = _levels_notional(asks, min(5, len(asks)))
 
@@ -96,6 +110,7 @@ def analyze_microstructure(
         "aggressive_buy_ratio": round(buy_notional / gross_notional, 4) if gross_notional else 0.5,
         "signed_trade_flow": round(signed_flow, 4),
         "absorption_proxy": round(absorption, 4),
+        "absorption_state": absorption_state,
         "liquidity_quality": "thin" if spread_bps > 15 else "normal" if total_depth else "unavailable",
         "incremental_public_feeds": cross_venue,
         "limitations": [

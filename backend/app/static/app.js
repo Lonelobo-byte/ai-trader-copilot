@@ -409,6 +409,8 @@ const venueFlowValue = document.getElementById('venue-flow-value');
 const venueBybitValue = document.getElementById('venue-bybit-value');
 const venueCoinbaseValue = document.getElementById('venue-coinbase-value');
 const venueLiquidationValue = document.getElementById('venue-liquidation-value');
+const venueStabilityValue = document.getElementById('venue-stability-value');
+const venueCapacityValue = document.getElementById('venue-capacity-value');
 const venueEvidenceNote = document.getElementById('venue-evidence-note');
 
 // Decision Elements
@@ -532,6 +534,14 @@ const contextVwap = document.getElementById('context-vwap');
 const marketContextContradictions = document.getElementById('market-context-contradictions');
 const contextCoverage = document.getElementById('context-coverage');
 const contextLimitations = document.getElementById('context-limitations');
+const validationManifest = document.getElementById('validation-manifest');
+const validationManifestTitle = document.getElementById('validation-manifest-title');
+const validationManifestBadge = document.getElementById('validation-manifest-badge');
+const validationRequiredValue = document.getElementById('validation-required-value');
+const validationRequiredFill = document.getElementById('validation-required-fill');
+const validationSupplementalValue = document.getElementById('validation-supplemental-value');
+const validationSupplementalFill = document.getElementById('validation-supplemental-fill');
+const validationManifestDetail = document.getElementById('validation-manifest-detail');
 
 // economic data values
 const regimeVal = document.getElementById('regime-val');
@@ -732,6 +742,9 @@ function renderScannerDiagnostics(diagnostics) {
 // ── Autonomous Scanner Integration ──────────────────────────────────────────
 
 async function fetchScannerStatus() {
+  // The scanner control card is intentionally absent from the Research Page.
+  // Keep the admin integration dormant without polling hidden endpoints.
+  if (!scannerLoopStatus) return;
   try {
     const response = await fetch('/scanner/status');
     if (!response.ok) throw new Error("Failed to fetch scanner status.");
@@ -871,7 +884,7 @@ async function removeWatchlistPair(symbol) {
 }
 
 // Manual scan run trigger
-triggerScanBtn.addEventListener('click', async () => {
+triggerScanBtn?.addEventListener('click', async () => {
   if (!canManageScanner()) return;
   try {
     triggerScanBtn.disabled = true;
@@ -889,16 +902,16 @@ triggerScanBtn.addEventListener('click', async () => {
   }
 });
 
-addPairBtn.addEventListener('click', () => {
+addPairBtn?.addEventListener('click', () => {
   addWatchlistPair(newPairInput.value);
 });
 
-newPairInput.addEventListener('keypress', (e) => {
+newPairInput?.addEventListener('keypress', (e) => {
   if (e.key === 'Enter') addWatchlistPair(newPairInput.value);
 });
 
 // Watchlist Discovery toggles UI responses
-scannerDiscoveryToggle.addEventListener('change', async () => {
+scannerDiscoveryToggle?.addEventListener('change', async () => {
   if (!canManageScanner()) return;
   const isChecked = scannerDiscoveryToggle.checked;
   logMsg(`Updating AI pair discovery state: ${isChecked ? "ON" : "OFF"}...`, 'system');
@@ -918,7 +931,7 @@ scannerDiscoveryToggle.addEventListener('change', async () => {
   }
 });
 
-scannerEnableToggle.addEventListener('change', async () => {
+scannerEnableToggle?.addEventListener('change', async () => {
   if (!canManageScanner()) return;
   const isChecked = scannerEnableToggle.checked;
   logMsg(`Updating background scanner state: ${isChecked ? "ON" : "OFF"}...`, 'system');
@@ -941,15 +954,17 @@ scannerEnableToggle.addEventListener('change', async () => {
 // Do not probe premium scanner routes while the subscription gate is still
 // restoring a session. The gate emits this event only after it has a valid
 // access token and has verified entitlement.
-activeScannerInterval = setInterval(() => {
-  if (window.atcAuthenticated && canManageScanner()) fetchScannerStatus();
-}, 30000);
-window.addEventListener('atc:authenticated', () => {
+if (scannerLoopStatus) {
+  activeScannerInterval = setInterval(() => {
+    if (window.atcAuthenticated && canManageScanner()) fetchScannerStatus();
+  }, 30000);
+  window.addEventListener('atc:authenticated', () => {
+    applyScannerPermissions();
+    if (canManageScanner()) fetchScannerStatus();
+  });
   applyScannerPermissions();
-  if (canManageScanner()) fetchScannerStatus();
-});
-applyScannerPermissions();
-if (window.atcAuthenticated && canManageScanner()) fetchScannerStatus();
+  if (window.atcAuthenticated && canManageScanner()) fetchScannerStatus();
+}
 
 // ── Rendering dashboard logic ──────────────────────────────────────────────
 
@@ -1595,6 +1610,8 @@ function renderConfirmationEvidence(data) {
       ['Funding', liveChecks.funding_not_crowded],
       ['Execution', liveChecks.execution_evidence_confirmed],
       ['Cross-Venue', liveChecks.cross_venue_not_opposed],
+      ['Quote Stability', liveChecks.displayed_liquidity_stable],
+      ['Depth Capacity', liveChecks.execution_capacity_sufficient],
     ];
     confirmExecStrip.innerHTML = checks.map(([label, passed]) => {
       const cls = passed === true ? 'passed' : passed === false ? 'failed' : '';
@@ -1659,6 +1676,33 @@ function renderConfirmationEvidence(data) {
       : 'NOT OBSERVED / FEED UNAVAILABLE',
     liquidation.available ? 'warning' : 'neutral',
   );
+  const stability = multiVenue.displayed_liquidity_stability || lc.live_evidence?.displayed_liquidity_stability || {};
+  const stabilityStatus = String(stability.status || 'UNAVAILABLE').toUpperCase();
+  setVenueValue(
+    venueStabilityValue,
+    stabilityStatus === 'UNAVAILABLE'
+      ? 'UNQUALIFIED / NOT NEUTRAL'
+      : `${stabilityStatus} / ${Number(stability.qualified_venue_count || 0)}/2 QUALIFIED`,
+    stabilityStatus === 'ELEVATED' ? 'negative' : stabilityStatus === 'WATCH' ? 'warning' : stabilityStatus === 'STABLE' ? 'positive' : 'neutral',
+  );
+  const capacity = lc.live_evidence?.execution_capacity || {};
+  const capacityEvaluated = capacity.evaluated === true;
+  const capacityLimit = Number(capacity.maximum_notional_at_10pct_depth);
+  const plannedNotional = Number(capacity.planned_notional_usd);
+  const compactUsd = (value) => value >= 1_000_000
+    ? `$${(value / 1_000_000).toFixed(1)}M`
+    : value >= 1_000
+      ? `$${(value / 1_000).toFixed(1)}K`
+      : `$${Math.round(value).toLocaleString()}`;
+  setVenueValue(
+    venueCapacityValue,
+    capacityEvaluated
+      ? `PLAN ${compactUsd(plannedNotional)} / MAX ${compactUsd(capacityLimit)}`
+      : 'NOT EVALUATED',
+    capacityEvaluated
+      ? (liveChecks.execution_capacity_sufficient ? 'positive' : 'negative')
+      : 'neutral',
+  );
 
   if (venueEvidenceStatus) {
     venueEvidenceStatus.textContent = networkStatus;
@@ -1666,7 +1710,9 @@ function renderConfirmationEvidence(data) {
   }
   if (venueEvidenceNote) {
     const freshCount = Number(multiVenue.fresh_venue_count || 0);
-    venueEvidenceNote.textContent = flowConfirmed
+    venueEvidenceNote.textContent = networkStatus === 'SUBSCRIBING'
+      ? `The selected market was registered automatically. Bybit and Coinbase are synchronizing books and warming the measured flow window.`
+      : flowConfirmed
       ? `${freshCount}/2 venues are fresh and flow-qualified. This evidence is included in the CIO dossier and final live gate.`
       : `${freshCount}/2 venues are fresh. Partial or warming data remains visible but is not treated as neutral confirmation.`;
   }
@@ -1686,6 +1732,10 @@ function renderMarketContext(data) {
   const structure = data.market_structure || {};
   const direction = context.direction || 'WAIT';
   const coverage = context.coverage || {};
+  const manifest = data.evidence_manifest
+    || data.institutional_committee?.evidence_manifest
+    || data.ai_analysis?.institutional_dossier?.evidence_manifest
+    || {};
   const state = direction === 'LONG' ? 'long' : direction === 'SHORT' ? 'short' : 'wait';
   const directionalText = direction === 'WAIT' ? 'WAIT' : `${direction} CANDIDATE`;
   const score = Number(context.score);
@@ -1724,6 +1774,34 @@ function renderMarketContext(data) {
   contextProfile.textContent = profile.available ? `${String(profile.location || 'UNKNOWN').replace(/_/g, ' ')} · POC ${formatCurrency(profile.poc)}` : 'Profile unavailable';
   contextVwap.textContent = vwap.available ? String(vwap.price_relation || 'UNKNOWN').replace(/_/g, ' ') : 'VWAP unavailable';
   contextCoverage.textContent = `${coverage.available_domains || 0} / ${coverage.required_domains || 8} required domains`;
+
+  if (validationManifest) {
+    const requiredAvailable = Number(manifest.required_available || 0);
+    const requiredTotal = Number(manifest.required_total || 4);
+    const supplementalAvailable = Number(manifest.supplemental_available || 0);
+    const supplementalTotal = Number(manifest.supplemental_total || 13);
+    const coreReady = manifest.core_ready === true;
+    const hasManifest = manifest.schema_version === 'evidence_manifest.v1' || Object.keys(manifest).length > 0;
+    const missingRequired = Array.isArray(manifest.missing_required) ? manifest.missing_required : [];
+    const unknownSupplemental = Array.isArray(manifest.unknown_supplemental) ? manifest.unknown_supplemental : [];
+    validationManifest.dataset.state = coreReady ? 'ready' : hasManifest ? 'blocked' : 'waiting';
+    validationManifestTitle.textContent = coreReady
+      ? 'ALL PUBLICATION CONTROLS PRESENT'
+      : hasManifest
+        ? 'REQUIRED CONTROL MISSING'
+        : 'AWAITING COMMITTEE SNAPSHOT';
+    validationManifestBadge.textContent = coreReady ? 'CORE READY' : hasManifest ? 'FAIL CLOSED' : 'WAITING';
+    validationManifestBadge.className = `validation-manifest-badge ${coreReady ? 'ready' : hasManifest ? 'blocked' : 'waiting'}`;
+    validationRequiredValue.textContent = `${requiredAvailable} / ${requiredTotal}`;
+    validationSupplementalValue.textContent = `${supplementalAvailable} / ${supplementalTotal}`;
+    validationRequiredFill.style.width = `${requiredTotal ? Math.min(100, requiredAvailable / requiredTotal * 100) : 0}%`;
+    validationSupplementalFill.style.width = `${supplementalTotal ? Math.min(100, supplementalAvailable / supplementalTotal * 100) : 0}%`;
+    validationManifestDetail.textContent = missingRequired.length
+      ? `Missing required: ${missingRequired.join(', ').replace(/_/g, ' ')}. Publication is blocked.`
+      : unknownSupplemental.length
+        ? `${unknownSupplemental.length} supplemental domain${unknownSupplemental.length === 1 ? '' : 's'} unavailable; none are counted as neutral evidence.`
+        : 'Required controls and all measured supplemental domains are present.';
+  }
 
   const contradictions = Array.isArray(context.contradictions) ? context.contradictions : [];
   marketContextContradictions.hidden = contradictions.length === 0;

@@ -11,6 +11,7 @@ Rules:
 5. Missing or unvalidated evidence reduces confidence. It must never be described as neutral evidence.
 6. WAIT is a successful capital-preservation decision.
 7. This system never submits orders. Any actionable result is for manual review only.
+8. Audit `evidence_manifest` before forming a thesis. If `core_ready` is false, decision must be WAIT. State unavailable supplemental domains as unknowns, never as confirmations.
 
 Return JSON only with these keys:
 

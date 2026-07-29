@@ -28,6 +28,153 @@ def _available_sources(intelligence: dict[str, Any]) -> set[str]:
     return set((intelligence.get("meta") or {}).get("sources_available") or [])
 
 
+def _evidence_manifest(
+    *,
+    features: dict[str, Any],
+    intelligence: dict[str, Any],
+    quantitative: dict[str, Any],
+    portfolio_state: dict[str, Any],
+) -> dict[str, Any]:
+    """Describe exactly which measured domains reached the committee.
+
+    The manifest separates publication-critical controls from supplemental
+    context. Missing supplemental evidence is never converted into neutral
+    evidence, while an actionable result must have every required control.
+    """
+    data_quality = features.get("data_quality", {}) or {}
+    publication = data_quality.get("publication_coverage", {}) or {}
+    sources = _available_sources(intelligence)
+    derivatives_raw = intelligence.get("derivatives", {}) or {}
+    if not publication:
+        funding = intelligence.get("funding", {}) or {}
+        publication_requirements = {
+            "order_book": bool((intelligence.get("order_book", {}) or {}).get("bids"))
+            and bool((intelligence.get("order_book", {}) or {}).get("asks")),
+            "funding": (
+                isinstance(funding, dict)
+                and "funding_rate" in funding
+                and not funding.get("error")
+            ),
+            "oi_history": bool((derivatives_raw.get("oi_history", {}) or {}).get("available")),
+            "taker_flow": bool((derivatives_raw.get("taker_buy_sell_volume", {}) or {}).get("available")),
+        }
+        publication = {
+            "ready": all(publication_requirements.values()),
+            "requirements": publication_requirements,
+            "missing": [name for name, ready in publication_requirements.items() if not ready],
+        }
+
+    context = features.get("market_context", {}) or {}
+    context_coverage = context.get("coverage", {}) or {}
+    probability = quantitative.get("probability_engine", {}) or {}
+    statistics = quantitative.get("statistical_features", {}) or {}
+    micro = quantitative.get("microstructure", {}) or features.get("microstructure", {}) or {}
+    cross_venue = micro.get("incremental_public_feeds", {}) or features.get("multi_venue", {}) or {}
+    positioning = features.get("positioning", {}) or {}
+    derivatives = features.get("derivatives", {}) or {}
+
+    required = {
+        "core_market_snapshot": {
+            "available": bool(data_quality.get("passed")),
+            "source": "market snapshot integrity checks",
+            "detail": data_quality.get("reason", "unknown"),
+        },
+        "causal_market_context": {
+            "available": bool(context_coverage.get("complete")) and context.get("status") == "SETUP_CANDIDATE",
+            "source": context.get("method", "causal_market_context_v1"),
+            "detail": {
+                "status": context.get("status", "UNAVAILABLE"),
+                "coverage": context_coverage,
+            },
+        },
+        "quantitative_risk": {
+            "available": bool(statistics.get("available")) and probability.get("model") not in {None, "unavailable"},
+            "source": "quantitative assessment",
+            "detail": {
+                "model": probability.get("model", "unavailable"),
+                "model_status": probability.get("model_status", "unknown"),
+            },
+        },
+        "live_execution_inputs": {
+            "available": bool(publication.get("ready")),
+            "source": "publication data coverage",
+            "detail": {
+                "requirements": publication.get("requirements", {}),
+                "missing": publication.get("missing", []),
+            },
+        },
+    }
+    supplemental = {
+        "market_structure": {
+            "available": bool(features.get("market_structure")),
+            "source": "completed candles",
+        },
+        "liquidity_map": {
+            "available": bool((features.get("liquidity_map", {}) or {}).get("available")),
+            "source": "completed candles",
+        },
+        "trade_flow": {
+            "available": bool((features.get("trade_flow", {}) or {}).get("available")) and bool(micro.get("available")),
+            "source": "recent trades and displayed order book",
+        },
+        "positioning": {
+            "available": bool(positioning.get("available")),
+            "source": "funding, open interest, price and taker delta",
+        },
+        "volatility": {
+            "available": bool((features.get("volatility_context", {}) or {}).get("available")),
+            "source": "completed candles",
+        },
+        "volume_profile": {
+            "available": bool((features.get("volume_profile", {}) or {}).get("available")),
+            "source": "completed-candle volume distribution",
+        },
+        "vwap": {
+            "available": bool((features.get("vwap_context", {}) or {}).get("available")),
+            "source": "daily, weekly and anchored VWAP",
+        },
+        "derivatives_positioning": {
+            "available": bool(derivatives.get("open_interest")) and ("funding" in sources or "open_interest" in sources),
+            "source": "public perpetual-futures endpoints",
+        },
+        "cross_asset_macro": {
+            "available": bool(features.get("cross_asset")) and "macro" in sources,
+            "source": "macro and cross-asset snapshot",
+        },
+        "incremental_cross_venue_flow": {
+            "available": bool(cross_venue.get("flow_confirmed")),
+            "source": "Bybit and Coinbase public WebSockets",
+        },
+        "observed_liquidations": {
+            "available": bool((cross_venue.get("observed_liquidations", {}) or {}).get("available")),
+            "source": "Bybit public liquidation stream",
+        },
+        "options_positioning": {
+            "available": bool((intelligence.get("options", {}) or {}).get("available")),
+            "source": "options provider",
+        },
+        "portfolio_state": {
+            "available": bool(portfolio_state.get("available")),
+            "source": portfolio_state.get("source", "unavailable"),
+        },
+    }
+    required_available = sum(bool(item["available"]) for item in required.values())
+    supplemental_available = sum(bool(item["available"]) for item in supplemental.values())
+    return {
+        "schema_version": "evidence_manifest.v1",
+        "required": required,
+        "supplemental": supplemental,
+        "core_ready": required_available == len(required),
+        "required_available": required_available,
+        "required_total": len(required),
+        "supplemental_available": supplemental_available,
+        "supplemental_total": len(supplemental),
+        "missing_required": [name for name, item in required.items() if not item["available"]],
+        "unknown_supplemental": [name for name, item in supplemental.items() if not item["available"]],
+        "policy": "Required controls fail closed; supplemental unknowns remain explicit and do not become neutral votes.",
+    }
+
+
 def _engine(
     name: str,
     *,
@@ -152,6 +299,11 @@ def _microstructure_engine(features: dict[str, Any], quantitative: dict[str, Any
     contradictions = []
     if _number(micro.get("signed_trade_flow")) * _number(micro.get("depth_imbalance")) < 0:
         contradictions.append("Displayed depth and aggressive trade flow point in opposite directions.")
+    absorption_state = str(micro.get("absorption_state", "NOT_DETECTED"))
+    if absorption_state == "PASSIVE_SELLER_ABSORPTION":
+        contradictions.append("Aggressive buying is being absorbed by passive sellers in the measured candle window.")
+    elif absorption_state == "PASSIVE_BUYER_ABSORPTION":
+        contradictions.append("Aggressive selling is being absorbed by passive buyers in the measured candle window.")
     base_bias = "BULLISH" if base_score >= 0.08 else "BEARISH" if base_score <= -0.08 else "NEUTRAL"
     venue_consensus = str(cross_venue.get("flow_consensus", "UNAVAILABLE")).upper()
     if (
@@ -171,6 +323,8 @@ def _microstructure_engine(features: dict[str, Any], quantitative: dict[str, Any
             {"metric": "spread_bps", "value": micro.get("spread_bps"), "source": "Binance order-book snapshot"},
             {"metric": "depth_imbalance", "value": micro.get("depth_imbalance"), "source": "Binance order-book snapshot"},
             {"metric": "signed_trade_flow", "value": micro.get("signed_trade_flow"), "source": "completed Binance klines"},
+            {"metric": "absorption_proxy", "value": micro.get("absorption_proxy"), "source": "completed Binance klines"},
+            {"metric": "absorption_state", "value": absorption_state, "source": "completed Binance klines"},
             {"metric": "recent_trade_buy_ratio", "value": flow.get("buy_ratio"), "source": "Binance recent trades"},
         ])
     if cross_venue:
@@ -199,6 +353,11 @@ def _microstructure_engine(features: dict[str, Any], quantitative: dict[str, Any
                 "metric": "cross_venue_price_dispersion_bps",
                 "value": cross_venue.get("price_dispersion_bps"),
                 "source": "Bybit perpetual versus Coinbase spot",
+            },
+            {
+                "metric": "displayed_liquidity_stability",
+                "value": cross_venue.get("displayed_liquidity_stability", {}),
+                "source": "incremental Bybit and Coinbase Level-2 updates",
             },
         ])
         for venue in ("bybit", "coinbase"):
@@ -470,6 +629,16 @@ def _adversarial_review(
     if (features.get("microstructure") or {}).get("liquidity_quality") == "thin":
         severity += 2
         contradictions.append("Thin liquidity raises slippage and manipulation risk.")
+    quote_stability = (
+        ((features.get("microstructure") or {}).get("incremental_public_feeds") or {})
+        .get("displayed_liquidity_stability", {})
+    )
+    if quote_stability.get("publication_veto"):
+        severity += 3
+        contradictions.append(
+            "Displayed liquidity is unstable across both incremental public books; "
+            "quote-removal risk is elevated."
+        )
     severity = min(severity, 10)
     return {
         "engine": "adversarial_review_engine",
@@ -500,6 +669,7 @@ def _risk_committee(
     data_quality: dict[str, Any],
     macro_blockout: dict[str, Any],
     adversarial: dict[str, Any],
+    evidence_manifest: dict[str, Any],
     settings: Any,
 ) -> dict[str, Any]:
     forecast = quantitative.get("probability_engine", {}) or {}
@@ -515,8 +685,11 @@ def _risk_committee(
 
     if not data_quality.get("passed", False):
         hard_blockers.append("Required core market data is incomplete.")
+    if not evidence_manifest.get("core_ready", False):
+        missing = ", ".join(evidence_manifest.get("missing_required", [])) or "unknown controls"
+        hard_blockers.append(f"Required evidence manifest is incomplete: {missing}.")
     context = features.get("market_context", {}) or {}
-    if context and context.get("status") != "SETUP_CANDIDATE":
+    if context.get("status") != "SETUP_CANDIDATE":
         hard_blockers.append("Causal market-context score is not an aligned setup; wait for regime, liquidity, positioning, and flow alignment.")
     # Estimate EV on the same horizon as the proposed trade plan. The quant
     # forecast is next-observation directional evidence; it cannot be compared
@@ -654,11 +827,17 @@ def build_institutional_dossier(
         "derivatives_engine": _derivatives_engine(features, intelligence),
         "macro_intelligence_engine": _macro_engine(features, intelligence),
     }
+    evidence_manifest = _evidence_manifest(
+        features=features,
+        intelligence=intelligence,
+        quantitative=quantitative,
+        portfolio_state=portfolio_state,
+    )
     thesis = _provisional_thesis(engines, features)
     adversarial = _adversarial_review(engines, thesis, features, macro_blockout)
     risk = _risk_committee(
         engines, quantitative, features, thesis, portfolio_state, features.get("data_quality", {}),
-        macro_blockout, adversarial, settings,
+        macro_blockout, adversarial, evidence_manifest, settings,
     )
     engines["adversarial_review_engine"] = adversarial
     engines["risk_committee"] = risk
@@ -675,6 +854,7 @@ def build_institutional_dossier(
             "execution": "manual_only",
         },
         "data_quality": features.get("data_quality", {}),
+        "evidence_manifest": evidence_manifest,
         "engines": engines,
         "provisional_thesis": thesis,
         "adversarial_review": adversarial,
@@ -718,12 +898,21 @@ def build_investment_memo(cio_result: dict[str, Any], dossier: dict[str, Any]) -
         "market_context": (
             f"{dossier.get('symbol')} {dossier.get('timeframe')} review; "
             f"engine coverage {dossier.get('engine_coverage_pct')}%; "
+            f"required evidence "
+            f"{dossier.get('evidence_manifest', {}).get('required_available', 0)}/"
+            f"{dossier.get('evidence_manifest', {}).get('required_total', 0)}; "
             f"provisional direction {dossier.get('provisional_thesis', {}).get('direction', 'NEUTRAL')}."
         ),
         "primary_thesis": dossier.get("provisional_thesis"),
         "supporting_evidence": measured_evidence,
         "contradictory_evidence": adversarial.get("contradictory_evidence", []),
-        "unknown_variables": [item for report in dossier.get("engines", {}).values() for item in report.get("unknowns", [])],
+        "unknown_variables": (
+            [item for report in dossier.get("engines", {}).values() for item in report.get("unknowns", [])]
+            + [
+                f"Supplemental evidence unavailable: {name.replace('_', ' ')}."
+                for name in dossier.get("evidence_manifest", {}).get("unknown_supplemental", [])
+            ]
+        ),
         "risk_assessment": risk,
         "scenario_analysis": {
             "bull_case": f"Quant probability_up={quant_values.get('probability_up')}; requires supporting flow and no invalidation.",

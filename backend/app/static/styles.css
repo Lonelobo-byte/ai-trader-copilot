@@ -6763,6 +6763,123 @@ select {
   padding: .6rem .7rem;
 }
 
+.validation-manifest {
+  margin-top: 0.85rem;
+  padding: 0.85rem;
+  border: 1px solid rgba(107, 126, 255, 0.18);
+  border-radius: 14px;
+  background:
+    radial-gradient(circle at 92% 12%, rgba(107, 126, 255, 0.14), transparent 34%),
+    rgba(5, 11, 24, 0.56);
+}
+
+.validation-manifest[data-state="ready"] {
+  border-color: rgba(61, 220, 151, 0.24);
+}
+
+.validation-manifest[data-state="blocked"] {
+  border-color: rgba(255, 102, 119, 0.28);
+}
+
+.validation-manifest > header,
+.validation-manifest-meters,
+.validation-manifest-meters > div {
+  display: flex;
+  align-items: center;
+}
+
+.validation-manifest > header {
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.validation-manifest > header > div {
+  display: grid;
+  gap: 0.18rem;
+}
+
+.validation-manifest > header strong {
+  color: var(--text-primary);
+  font-size: 0.76rem;
+  letter-spacing: 0.055em;
+}
+
+.validation-manifest-badge {
+  flex: 0 0 auto;
+  padding: 0.3rem 0.5rem;
+  border: 1px solid rgba(140, 154, 187, 0.22);
+  border-radius: 999px;
+  color: var(--text-muted);
+  font-size: 0.62rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+.validation-manifest-badge.ready {
+  border-color: rgba(61, 220, 151, 0.35);
+  color: #73e8b0;
+  background: rgba(61, 220, 151, 0.08);
+}
+
+.validation-manifest-badge.blocked {
+  border-color: rgba(255, 102, 119, 0.36);
+  color: #ff8998;
+  background: rgba(255, 102, 119, 0.08);
+}
+
+.validation-manifest-meters {
+  gap: 0.65rem;
+  margin-top: 0.75rem;
+}
+
+.validation-manifest-meters > div {
+  position: relative;
+  flex: 1 1 0;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.38rem 0.6rem;
+}
+
+.validation-manifest-meters span,
+.validation-manifest p {
+  color: var(--text-muted);
+  font-size: 0.66rem;
+}
+
+.validation-manifest-meters strong {
+  color: var(--text-secondary);
+  font: 700 0.68rem var(--font-mono);
+}
+
+.validation-manifest-meters i {
+  grid-column: 1 / -1;
+  height: 4px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(140, 154, 187, 0.12);
+}
+
+.validation-manifest-meters i b {
+  display: block;
+  width: 0;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #6b7eff, #51d7c7);
+  transition: width 420ms ease;
+}
+
+.validation-manifest p {
+  margin: 0.68rem 0 0;
+  line-height: 1.45;
+}
+
+@media (max-width: 620px) {
+  .validation-manifest-meters {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}
+
 .market-context-footer {
   align-items: center;
   border-top: 1px solid rgba(255, 255, 255, .06);

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
 import pytest
 
 from app.data_sources.binance_public import Candle
+from app.brains.council import _cio_prompt_dossier
 from app.brains.signal_builder import build_ai_driven_trade_setup, evaluate_ai_driven_approval
 from app.institutional.committee import (
     apply_cio_policy,
@@ -36,7 +38,32 @@ def _settings(**overrides):
 
 def _features() -> dict:
     return {
-        "data_quality": {"passed": True, "missing_required": []},
+        "data_quality": {
+            "passed": True,
+            "missing_required": [],
+            "reason": "complete_core_snapshot",
+            "publication_coverage": {
+                "ready": True,
+                "requirements": {
+                    "order_book": True,
+                    "funding": True,
+                    "oi_history": True,
+                    "taker_flow": True,
+                },
+                "missing": [],
+            },
+        },
+        "market_context": {
+            "method": "causal_market_context_v1",
+            "direction": "LONG",
+            "score": 74.0,
+            "normalized_directional_score": 0.32,
+            "coverage": {"available_domains": 8, "required_domains": 4, "complete": True},
+            "components": {},
+            "contradictions": [],
+            "status": "SETUP_CANDIDATE",
+            "limitations": [],
+        },
         "volatility": {"atr_pct": 0.5},
         "microstructure": {
             "available": True,
@@ -186,6 +213,15 @@ def test_cross_venue_evidence_reaches_cio_dossier_and_memorandum() -> None:
     assert any("cross_venue_flow_consensus=BULLISH" in item for item in memo["supporting_evidence"])
 
 
+def test_cio_prompt_projection_preserves_manifest_vetoes_and_engine_evidence() -> None:
+    dossier = _dossier()
+    projection = json.loads(_cio_prompt_dossier(dossier))
+    assert projection["evidence_manifest"]["schema_version"] == "evidence_manifest.v1"
+    assert projection["risk_committee"]["approved_for_allocation"] is True
+    assert projection["adversarial_review"]["veto"] is False
+    assert projection["engines"]["market_microstructure_engine"]["evidence"]
+
+
 def test_trade_plan_keeps_entry_zone_outside_stop() -> None:
     result = {
         "decision": "BUY_WATCH",
@@ -326,6 +362,7 @@ def test_balanced_policy_releases_reduced_size_conditional_manual_review() -> No
         "agent_agreement": {"bullish": 2, "bearish": 0, "neutral": 3},
         "data_quality": {"passed": True},
         "macro_blockout": {"active": False},
+        "live_confirmation": {"passed": True, "reason": "All deterministic live checks passed."},
     })
     setup = build_ai_driven_trade_setup(
         result,
@@ -345,6 +382,12 @@ def test_live_confirmation_failure_vetoes_an_otherwise_approved_trade() -> None:
         "institutional_dossier": {
             "risk_committee": {"approved_for_allocation": True, "minimum_directional_engines": 1},
             "adversarial_review": {"veto": False},
+            "evidence_manifest": {
+                "core_ready": True,
+                "required_available": 4,
+                "required_total": 4,
+                "missing_required": [],
+            },
         },
         "agent_agreement": {"bullish": 3, "bearish": 0},
         "live_confirmation": {"passed": False, "reason": "Displayed order-book depth opposes the long."},
@@ -355,6 +398,25 @@ def test_live_confirmation_failure_vetoes_an_otherwise_approved_trade() -> None:
     )
     assert approval["approved"] is False
     assert any("Live confirmation failed" in blocker for blocker in approval["blockers"])
+
+
+def test_missing_live_confirmation_and_manifest_fail_closed() -> None:
+    result = {
+        "decision": "BUY_WATCH", "confidence_pct": 85, "trade_grade": "A",
+        "data_quality": {"passed": True}, "macro_blockout": {"active": False},
+        "institutional_dossier": {
+            "risk_committee": {"approved_for_allocation": True, "minimum_directional_engines": 1},
+            "adversarial_review": {"veto": False},
+        },
+        "agent_agreement": {"bullish": 3, "bearish": 0},
+    }
+    approval = evaluate_ai_driven_approval(
+        result,
+        {"status": "READY_FOR_MANUAL_REVIEW", "position": {"risk_amount_usd": 5, "units": 1}},
+    )
+    assert approval["approved"] is False
+    assert any("evidence manifest" in blocker.lower() for blocker in approval["blockers"])
+    assert any("live confirmation is required" in blocker.lower() for blocker in approval["blockers"])
 
 
 @pytest.mark.anyio

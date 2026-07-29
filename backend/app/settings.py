@@ -90,8 +90,10 @@ class Settings(BaseSettings):
     multi_venue_ws_enabled: bool = True
     bybit_public_ws_url: str = "wss://stream.bybit.com/v5/public/linear"
     coinbase_public_ws_url: str = "wss://advanced-trade-ws.coinbase.com"
+    # Startup warm set only. Any valid USDT market selected in Radar/Research
+    # is registered automatically and replaces the least-recently-used symbol.
     multi_venue_symbols: list[str] = ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
-    # A hard cap in the hub also limits this to 12 even if configuration drifts.
+    # The bounded dynamic hub limits this to 12 even if configuration drifts.
     multi_venue_max_symbols: int = 12
     multi_venue_book_levels: int = 200
     coinbase_multi_venue_book_levels: int = 2_000

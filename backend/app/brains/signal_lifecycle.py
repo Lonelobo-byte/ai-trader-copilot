@@ -51,6 +51,7 @@ def evaluate_signal_approval(
     data_freshness: Mapping[str, Any], liquidity: Mapping[str, Any],
     ai_result: Mapping[str, Any] | None, current_price: float,
     council_approval: Mapping[str, Any] | None = None,
+    require_council_approval: bool = False,
 ) -> dict[str, Any]:
     """Apply publication safeguards to a council-approved trade plan.
 
@@ -74,12 +75,14 @@ def evaluate_signal_approval(
         council_side = council_approval.get("side")
         if council_side and council_side != side:
             blockers.append("AI Council approval direction does not match the trade plan.")
+    elif require_council_approval:
+        blockers.append("Canonical AI Council approval is required before publication.")
 
     if side is None:
         blockers.append("No directional AI Council decision.")
     # Legacy callers without a council release decision retain the original
     # deterministic approval contract.
-    if council_approval is None:
+    if council_approval is None and not require_council_approval:
         if confidence < 72:
             blockers.append(f"Confidence {confidence:.0f}% is below the 72% release threshold.")
         if decision.get("trade_grade") not in {"A+", "A", "B"}:
@@ -92,7 +95,7 @@ def evaluate_signal_approval(
         blockers.append("A minimum 1.5R entry, invalidation, and target plan is required.")
 
     confirmations = 0
-    if side and council_approval is None:
+    if side and council_approval is None and not require_council_approval:
         confirmations = sum((
             _aligned(trend.get("status"), side, "trend"),
             _aligned(momentum.get("bias"), side, "momentum"),
@@ -105,7 +108,7 @@ def evaluate_signal_approval(
         blockers.append("AI risk review has not completed.")
     elif ai_result.get("error"):
         blockers.append("AI risk review failed, so the bot will not release a signal.")
-    elif council_approval is None:
+    elif council_approval is None and not require_council_approval:
         reports = ai_result.get("agent_reports") or {}
         risk_review = reports.get("risk_manager") or {}
         pre_mortem = reports.get("pre_mortem_analyst") or {}

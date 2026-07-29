@@ -647,9 +647,15 @@ def _data_quality(intelligence: dict[str, Any], closed: list[Candle], current_pr
     missing_required = sorted(required - set(available))
     passed = bool(closed and current_price > 0 and not missing_required)
     derivatives = intelligence.get("derivatives", {}) or {}
+    funding = intelligence.get("funding", {}) or {}
+    funding_available = (
+        isinstance(funding, dict)
+        and "funding_rate" in funding
+        and not funding.get("error")
+    )
     publication_requirements = {
         "order_book": bool((intelligence.get("order_book", {}) or {}).get("bids") and (intelligence.get("order_book", {}) or {}).get("asks")),
-        "funding": bool(intelligence.get("funding", {})),
+        "funding": funding_available,
         "oi_history": bool((derivatives.get("oi_history", {}) or {}).get("available")),
         "taker_flow": bool((derivatives.get("taker_buy_sell_volume", {}) or {}).get("available")),
     }

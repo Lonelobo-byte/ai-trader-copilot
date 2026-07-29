@@ -78,6 +78,9 @@ def apply_live_confirmation(candidate: dict[str, Any], live: dict[str, Any]) -> 
     cross_venue_consensus = str(multi_venue.get("flow_consensus", "UNAVAILABLE")).upper()
     opposite_direction = "BEARISH" if direction == "BULLISH" else "BULLISH"
     cross_venue_opposed = cross_venue_confirmed and cross_venue_consensus == opposite_direction
+    quote_stability = multi_venue.get("displayed_liquidity_stability", {}) or {}
+    quote_stability_status = str(quote_stability.get("status", "UNAVAILABLE")).upper()
+    displayed_liquidity_stable = not bool(quote_stability.get("publication_veto"))
     cross_venue_status = (
         "UNAVAILABLE"
         if not cross_venue_confirmed
@@ -109,6 +112,16 @@ def apply_live_confirmation(candidate: dict[str, Any], live: dict[str, Any]) -> 
     )
     liquid = spread_bps is not None and spread_bps <= 12.0
     crowded = (direction == "BULLISH" and funding > 0.0005) or (direction == "BEARISH" and funding < -0.0005)
+    planned_notional = _number(live.get("planned_notional_usd"))
+    opposing_depth = _number(live.get("opposing_depth_notional"))
+    execution_capacity_evaluated = planned_notional > 0 and opposing_depth > 0
+    # Reserve most displayed liquidity for other participants and for quote
+    # cancellation between observation and manual execution.
+    execution_capacity_sufficient = (
+        planned_notional <= opposing_depth * 0.10
+        if execution_capacity_evaluated
+        else True
+    )
 
     live_points = sum((8 if liquid else 0, 10 if depth_aligned else 0, 10 if flow_aligned else 0, 7 if positioning_aligned else 0, 5 if not crowded else 0))
     # Causal Radar rows already contain the complete market-context score.
@@ -131,6 +144,8 @@ def apply_live_confirmation(candidate: dict[str, Any], live: dict[str, Any]) -> 
         "funding_not_crowded": not crowded,
         "execution_evidence_confirmed": execution_evidence_confirmed,
         "cross_venue_not_opposed": not cross_venue_opposed,
+        "displayed_liquidity_stable": displayed_liquidity_stable,
+        "execution_capacity_sufficient": execution_capacity_sufficient,
     }
     risk_flags = candidate.setdefault("risk_flags", [])
     messages = {
@@ -142,11 +157,14 @@ def apply_live_confirmation(candidate: dict[str, Any], live: dict[str, Any]) -> 
         "funding_not_crowded": "Funding is crowded in the proposed direction; squeeze/flush risk is elevated.",
         "execution_evidence_confirmed": "Aggressive flow and price/OI positioning are not jointly aligned.",
         "cross_venue_not_opposed": "Healthy Bybit/Coinbase aggressive flow is aligned against the proposed direction.",
+        "displayed_liquidity_stable": "Incremental Bybit and Coinbase books both show elevated displayed-liquidity instability.",
+        "execution_capacity_sufficient": "Planned notional exceeds 10% of the displayed 20-level opposing-side depth.",
     }
     required_names = (
         "data_complete", "spread_within_limit", "taker_flow_aligned",
         "price_oi_aligned", "funding_not_crowded",
         "execution_evidence_confirmed", "cross_venue_not_opposed",
+        "displayed_liquidity_stable", "execution_capacity_sufficient",
     )
     required_checks = {key: checks[key] for key in required_names}
     risk_flags.extend(message for key, message in messages.items() if key in required_checks and not checks[key])
@@ -155,6 +173,16 @@ def apply_live_confirmation(candidate: dict[str, Any], live: dict[str, Any]) -> 
         supporting_warnings.append("Cross-venue public flow is partial or unavailable; it was not counted as neutral confirmation.")
     elif cross_venue_status in {"MIXED", "NEUTRAL"}:
         supporting_warnings.append(f"Cross-venue public flow is {cross_venue_status.lower()}, so it adds no directional confirmation.")
+    if quote_stability_status == "UNAVAILABLE":
+        supporting_warnings.append(
+            "Incremental quote stability is not yet qualified; spoofing cannot be inferred from the available public data."
+        )
+    elif quote_stability_status == "WATCH":
+        supporting_warnings.append(
+            "One venue shows elevated displayed-liquidity instability; this is a cancellation-risk warning, not proof of spoofing."
+        )
+    if not execution_capacity_evaluated:
+        supporting_warnings.append("Displayed-depth capacity was not evaluated because no positive planned notional was supplied.")
     candidate["advanced_confirmation"] = {
         **live,
         "checks": checks,
@@ -162,6 +190,13 @@ def apply_live_confirmation(candidate: dict[str, Any], live: dict[str, Any]) -> 
         "depth_evidence": "SUPPORTIVE" if depth_aligned else "CONTRADICTORY_SNAPSHOT",
         "supporting_warnings": supporting_warnings,
         "live_points": live_points,
+        "execution_capacity": {
+            "evaluated": execution_capacity_evaluated,
+            "planned_notional_usd": round(planned_notional, 2),
+            "opposing_depth_notional": round(opposing_depth, 2),
+            "maximum_notional_at_10pct_depth": round(opposing_depth * 0.10, 2),
+        },
+        "displayed_liquidity_stability": quote_stability,
         "cross_venue_evidence": {
             "status": cross_venue_status,
             "confirmed": cross_venue_confirmed,
@@ -180,6 +215,7 @@ def verify_main_signal_snapshot(
     *, symbol: str, timeframe: str, side: str | None, candles: list[Candle],
     higher_candles: list[Candle], order_book: dict[str, Any], funding: dict[str, Any],
     derivatives: dict[str, Any], multi_venue: dict[str, Any] | None = None,
+    planned_notional_usd: float | None = None,
 ) -> dict[str, Any]:
     """Fail closed for new main-system signals unless Radar-equivalent checks pass.
 
@@ -357,8 +393,13 @@ def verify_main_signal_snapshot(
     midpoint = (best_bid + best_ask) / 2.0 if best_bid and best_ask else 0.0
     oi_history = derivatives.get("oi_history", {}) or {}
     taker = derivatives.get("taker_buy_sell_volume", {}) or {}
+    funding_available = (
+        isinstance(funding, dict)
+        and "funding_rate" in funding
+        and not funding.get("error")
+    )
     live = {
-        "data_complete": bool(bids and asks and funding and oi_history.get("available") and taker.get("available")),
+        "data_complete": bool(bids and asks and funding_available and oi_history.get("available") and taker.get("available")),
         "depth_imbalance": (bid_notional - ask_notional) / (bid_notional + ask_notional) if bid_notional + ask_notional else None,
         "spread_bps": (best_ask - best_bid) / midpoint * 10_000 if midpoint else None,
         "funding_rate": _number(funding.get("funding_rate")),
@@ -366,10 +407,12 @@ def verify_main_signal_snapshot(
         "price_change_pct": ((_number(primary[-1].close) - _number(primary[-6].close)) / _number(primary[-6].close) * 100.0) if _number(primary[-6].close) else 0.0,
         "taker_buy_sell_ratio": _number(taker.get("ratio", taker.get("buy_sell_ratio"))) if taker.get("available") else None,
         "multi_venue": multi_venue or {},
+        "planned_notional_usd": _number(planned_notional_usd),
+        "opposing_depth_notional": ask_notional if direction == "BULLISH" else bid_notional,
     }
     coverage_requirements = {
         "order_book": bool(bids and asks),
-        "funding": bool(funding),
+        "funding": funding_available,
         "oi_history": bool(oi_history.get("available")),
         "taker_flow": bool(taker.get("available")),
     }
@@ -384,6 +427,10 @@ def verify_main_signal_snapshot(
                 "status": (multi_venue or {}).get("status", "UNAVAILABLE"),
                 "consensus": (multi_venue or {}).get("flow_consensus", "UNAVAILABLE"),
             },
+            "displayed_liquidity_stability": (multi_venue or {}).get(
+                "displayed_liquidity_stability",
+                {"status": "UNAVAILABLE", "publication_veto": False},
+            ),
         },
     }
     candidate = {"symbol": symbol, "direction": direction, "score": 75 if all(structure_checks.values()) else 0, "risk_flags": risk_flags}

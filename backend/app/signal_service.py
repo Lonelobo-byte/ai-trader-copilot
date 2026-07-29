@@ -184,6 +184,7 @@ async def reconcile_signal(
                 momentum=momentum, order_book=order_book, data_freshness=data_freshness,
                 liquidity=liquidity, ai_result=ai_result, current_price=current_price,
                 council_approval=council_approval,
+                require_council_approval=True,
             )
                 if not approval["approved"]:
                     latest = await db.execute(
