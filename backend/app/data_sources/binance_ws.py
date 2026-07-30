@@ -18,12 +18,18 @@ class BinanceWSSubscriber:
         self.symbol = symbol.upper().strip()
         self.timeframe = timeframe
         self.settings = settings
-        self.rest_client = BinancePublicClient(settings.binance_public_base_url)
+        # The Research workspace, Radar, funding, OI and public flow all refer
+        # to the perpetual contract. Bootstrap and stream the same venue so a
+        # spot candle cannot be evaluated against futures positioning.
+        self.rest_client = BinancePublicClient(
+            settings.binance_futures_base_url,
+            market="futures",
+        )
         self.history_candles: list[Candle] = []
         self.latest_ticker: dict[str, Any] = {}
         self.latest_order_book: dict[str, Any] = {"bids": [], "asks": []}
         self.websocket_url = (
-            f"{settings.binance_stream_base_url}/stream?streams="
+            "wss://fstream.binance.com/stream?streams="
             f"{self.symbol.lower()}@kline_{self.timeframe}/"
             f"{self.symbol.lower()}@ticker/"
             f"{self.symbol.lower()}@depth20@1000ms"

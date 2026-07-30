@@ -10,7 +10,10 @@ import logging
 import math
 from typing import Any, Mapping
 
+from app.indicators.market_story import evaluate_story_direction
+
 logger = logging.getLogger(__name__)
+MAX_LIVE_EVENT_CHASE_ATR = 2.5
 
 
 def _finite_number(value: Any, default: float = 0.0) -> float:
@@ -39,6 +42,20 @@ def _value_retest_reference(side: str, current_price: float, features: Mapping[s
     vwap = features.get("vwap_context") or {}
     profile = features.get("volume_profile") or {}
     candidates = [
+        (
+            "completed_structure_event_retest",
+            _finite_number(
+                (
+                    (
+                        evaluate_story_direction(
+                            features.get("market_story") or {},
+                            "BULLISH" if side == "LONG" else "BEARISH",
+                        ).get("aligned_event")
+                        or {}
+                    ).get("break_level")
+                )
+            ),
+        ),
         ("anchored_vwap_retest", _finite_number(vwap.get("anchored"))),
         ("daily_vwap_retest", _finite_number(vwap.get("daily"))),
         ("weekly_vwap_retest", _finite_number(vwap.get("weekly"))),
@@ -51,6 +68,73 @@ def _value_retest_reference(side: str, current_price: float, features: Mapping[s
     if valid:
         return min(valid, key=lambda item: abs(item[1] - current_price))[1], min(valid, key=lambda item: abs(item[1] - current_price))[0]
     return current_price, "measured_market_reference_no_value_retest_available"
+
+
+def _live_event_distance_atr(
+    *,
+    side: str,
+    current_price: float,
+    story_view: Mapping[str, Any],
+    fallback_atr: float,
+) -> float | None:
+    event = story_view.get("aligned_event") or story_view.get("selected_event") or {}
+    expected = "BULLISH" if side == "LONG" else "BEARISH"
+    if str(event.get("direction") or "").upper() != expected:
+        return None
+    level = _finite_number(event.get("break_level"))
+    event_atr = _finite_number(event.get("atr_at_event"))
+    atr = event_atr if event_atr > 0 else fallback_atr
+    if current_price <= 0 or level <= 0 or atr <= 0:
+        return None
+    signed_distance = current_price - level if side == "LONG" else level - current_price
+    return signed_distance / atr
+
+
+def _plan_geometry(
+    *,
+    side: str,
+    entry: float,
+    atr: float,
+    min_stop_bps: float,
+    liquidity_map: Mapping[str, Any],
+) -> dict[str, Any]:
+    risk_per_unit = max(1.5 * atr, entry * min_stop_bps / 10_000.0)
+    stop = entry - risk_per_unit if side == "LONG" else entry + risk_per_unit
+    protective_pool = liquidity_map.get("nearest_below" if side == "LONG" else "nearest_above") or {}
+    protective_price = _finite_number(protective_pool.get("price"))
+    if (side == "LONG" and 0 < protective_price < entry) or (
+        side == "SHORT" and protective_price > entry
+    ):
+        liquidity_buffer = max(atr * 0.25, entry * 0.0005)
+        stop = (
+            min(stop, protective_price - liquidity_buffer)
+            if side == "LONG"
+            else max(stop, protective_price + liquidity_buffer)
+        )
+        risk_per_unit = abs(entry - stop)
+
+    objective_pool = liquidity_map.get("nearest_above" if side == "LONG" else "nearest_below") or {}
+    objective_price = _finite_number(objective_pool.get("price"))
+    objective_is_directional = (
+        objective_price > entry if side == "LONG" else 0 < objective_price < entry
+    )
+    remaining_reward = abs(objective_price - entry) if objective_is_directional else 0.0
+    remaining_reward_r = (
+        remaining_reward / risk_per_unit
+        if risk_per_unit > 0 and remaining_reward > 0
+        else 0.0
+    )
+    return {
+        "stop": stop,
+        "risk_per_unit": risk_per_unit,
+        "protective_pool": protective_pool,
+        "protective_price": protective_price,
+        "objective_pool": objective_pool,
+        "objective_price": objective_price,
+        "objective_is_directional": objective_is_directional,
+        "remaining_reward": remaining_reward,
+        "remaining_reward_r": remaining_reward_r,
+    }
 
 
 def build_ai_driven_trade_setup(
@@ -68,8 +152,20 @@ def build_ai_driven_trade_setup(
     dossier = cio_result.get("institutional_dossier") or {}
     thesis = dossier.get("provisional_thesis") or {}
     thesis_direction = str(thesis.get("direction", "")).upper()
-    actionable = decision in {"BUY_WATCH", "SELL_WATCH"}
-    research_watch = not actionable and thesis_direction in {"LONG", "SHORT"}
+    requested_side = "LONG" if decision == "BUY_WATCH" else "SHORT" if decision == "SELL_WATCH" else thesis_direction
+    story = features.get("market_story") or {}
+    story_view = (
+        evaluate_story_direction(
+            story,
+            "BULLISH" if requested_side == "LONG" else "BEARISH" if requested_side == "SHORT" else "NEUTRAL",
+        )
+        if story.get("available")
+        else {}
+    )
+    story_allows_entry = not story.get("available") or bool(story_view.get("actionable"))
+    requested_actionable = decision in {"BUY_WATCH", "SELL_WATCH"}
+    actionable = requested_actionable and story_allows_entry
+    research_watch = not actionable and requested_side in {"LONG", "SHORT"}
 
     if not actionable and not research_watch:
         return {
@@ -79,7 +175,7 @@ def build_ai_driven_trade_setup(
             "timeframe": timeframe,
         }
 
-    side = "LONG" if (decision == "BUY_WATCH" or thesis_direction == "LONG") else "SHORT"
+    side = "LONG" if requested_side == "LONG" else "SHORT"
     direction = 1 if side == "LONG" else -1
 
     # Extract the market price and volatility from measured features.
@@ -104,10 +200,36 @@ def build_ai_driven_trade_setup(
     except AttributeError:
         atr_val = 0.0
 
+    if atr_val <= 0 or not math.isfinite(atr_val):
+        atr_val = last_price * 0.015
+
+    live_event_distance_atr = (
+        _live_event_distance_atr(
+            side=side,
+            current_price=last_price,
+            story_view=story_view,
+            fallback_atr=atr_val,
+        )
+        if actionable
+        else None
+    )
+    live_chase_blocker = ""
+    if live_event_distance_atr is not None and live_event_distance_atr > MAX_LIVE_EVENT_CHASE_ATR:
+        actionable = False
+        research_watch = True
+        live_chase_blocker = (
+            f"Live quote is {live_event_distance_atr:.2f} ATR beyond the completed "
+            "event level; the entry has moved away and chasing is prohibited."
+        )
+
     # Models are not permitted to invent execution levels. Approved setups use
-    # the current measured quote; an unapproved directional context is shown as
-    # a value-retest watch using measured VWAP/profile references.
-    entry, entry_mode = (last_price, "measured_market_reference") if actionable else _value_retest_reference(side, last_price, features)
+    # the current measured quote; a non-executable context is displayed at a
+    # measured event/VWAP/profile retest instead of masquerading as a live entry.
+    entry, entry_mode = (
+        (last_price, "measured_market_reference")
+        if actionable
+        else _value_retest_reference(side, last_price, features)
+    )
     if entry <= 0:
         return {
             "status": "NO_TRADE",
@@ -116,26 +238,63 @@ def build_ai_driven_trade_setup(
             "timeframe": timeframe,
         }
 
-    if atr_val <= 0 or not math.isfinite(atr_val):
-        atr_val = entry * 0.015
-
-    # Pre-committed volatility invalidation. A stop must also be far enough
-    # from entry to survive normal spread/noise and must never sit inside its
-    # own entry zone.
-    volatility_risk = 1.5 * atr_val
     min_stop_bps = max(_finite_number(getattr(settings, "institutional_min_stop_distance_bps", 25.0), 25.0), 1.0)
-    minimum_risk = entry * min_stop_bps / 10_000.0
-    risk_per_unit = max(volatility_risk, minimum_risk)
-    stop = entry - risk_per_unit if side == "LONG" else entry + risk_per_unit
     liquidity_map = features.get("liquidity_map") or {}
-    protective_pool = liquidity_map.get("nearest_below" if side == "LONG" else "nearest_above") or {}
-    protective_price = _finite_number(protective_pool.get("price"))
-    if (side == "LONG" and 0 < protective_price < entry) or (side == "SHORT" and protective_price > entry):
-        # Place invalidation beyond a measured liquidity reference, with a
-        # small volatility buffer. It is a falsification point, not a stop hunt.
-        liquidity_buffer = max(atr_val * 0.25, entry * 0.0005)
-        stop = min(stop, protective_price - liquidity_buffer) if side == "LONG" else max(stop, protective_price + liquidity_buffer)
-        risk_per_unit = abs(entry - stop)
+    geometry = _plan_geometry(
+        side=side,
+        entry=entry,
+        atr=atr_val,
+        min_stop_bps=min_stop_bps,
+        liquidity_map=liquidity_map,
+    )
+    stop = geometry["stop"]
+    risk_per_unit = geometry["risk_per_unit"]
+    protective_pool = geometry["protective_pool"]
+    protective_price = geometry["protective_price"]
+    objective_pool = geometry["objective_pool"]
+    objective_price = geometry["objective_price"]
+    objective_is_directional = geometry["objective_is_directional"]
+    remaining_reward = geometry["remaining_reward"]
+    remaining_reward_r = geometry["remaining_reward_r"]
+    minimum_remaining_reward_r = 1.5
+    reward_space_adequate = (
+        objective_is_directional and remaining_reward_r >= minimum_remaining_reward_r
+        if story.get("available")
+        else True
+    )
+    reward_space_blocker = ""
+    release_reward_r = remaining_reward_r
+    release_reward_distance = remaining_reward
+    release_objective_price = objective_price
+    release_objective_kind = objective_pool.get("kind") if objective_is_directional else None
+    if actionable and not reward_space_adequate:
+        actionable = False
+        research_watch = True
+        reward_space_blocker = (
+            f"Only {remaining_reward_r:.2f}R remains to the next measured liquidity objective."
+            if objective_is_directional
+            else "No unconsumed directional liquidity objective is available."
+        )
+        # The release gate was evaluated at the live quote. Once it downgrades
+        # the setup, rebuild the displayed research plan from a measured retest
+        # rather than leaving the rejected live quote labelled as its entry.
+        entry, entry_mode = _value_retest_reference(side, last_price, features)
+        geometry = _plan_geometry(
+            side=side,
+            entry=entry,
+            atr=atr_val,
+            min_stop_bps=min_stop_bps,
+            liquidity_map=liquidity_map,
+        )
+        stop = geometry["stop"]
+        risk_per_unit = geometry["risk_per_unit"]
+        protective_pool = geometry["protective_pool"]
+        protective_price = geometry["protective_price"]
+        objective_pool = geometry["objective_pool"]
+        objective_price = geometry["objective_price"]
+        objective_is_directional = geometry["objective_is_directional"]
+        remaining_reward = geometry["remaining_reward"]
+        remaining_reward_r = geometry["remaining_reward_r"]
 
     # Deterministic payoff ladder (1.5R, 2.5R, 3.5R, 5.0R).
     tp1 = entry + direction * risk_per_unit * 1.5
@@ -209,7 +368,19 @@ def build_ai_driven_trade_setup(
         status = "BLOCKED_BY_MACRO"
         reason = "Macro blockout is active; signal publication suppressed."
     elif research_watch:
-        blocker = next(iter(risk_committee.get("hard_blockers") or []), "allocation approval and live confirmation are still required")
+        blocker = (
+            reward_space_blocker
+            if reward_space_blocker
+            else live_chase_blocker
+            if live_chase_blocker
+            else
+            (
+                f"market story is {story_view.get('state', 'not actionable')}: "
+                f"{story_view.get('reason') or 'the original structural opportunity is no longer available'}"
+            )
+            if requested_actionable and not story_allows_entry
+            else next(iter(risk_committee.get("hard_blockers") or []), "allocation approval and live confirmation are still required")
+        )
         status = "WATCH_ONLY"
         reason = f"Directional causal context is mapped as a value-retest watch; no allocation is authorized yet: {blocker}"
     elif allocation_tier == "CONDITIONAL_MANUAL_REVIEW" and confidence >= 60:
@@ -230,8 +401,54 @@ def build_ai_driven_trade_setup(
         "side": side,
         "confidence": confidence,
         "grade": grade,
-        "setup_type": "institutional_committee_allocation" if actionable else "causal_value_retest_watch",
+        "setup_type": "completed_candle_event_allocation" if actionable else "causal_value_retest_watch",
         "execution_permitted": actionable and status in {"READY_FOR_MANUAL_REVIEW", "CONDITIONAL_MANUAL_REVIEW"},
+        "market_story": {
+            "state": "EXTENDED_DO_NOT_CHASE" if live_chase_blocker else story_view.get("state", "UNAVAILABLE"),
+            "actionable": (
+                False
+                if live_chase_blocker
+                else bool(story_view.get("actionable"))
+                if story_view
+                else None
+            ),
+            "reason": live_chase_blocker or story_view.get("reason"),
+            "selected_event": story_view.get("aligned_event"),
+            "chase_prohibited": bool(live_chase_blocker or story_view.get("chase_prohibited")),
+            "live_quote_distance_atr": (
+                round(live_event_distance_atr, 3)
+                if live_event_distance_atr is not None
+                else None
+            ),
+            "live_quote": _price(last_price),
+        },
+        "remaining_reward": {
+            "adequate": reward_space_adequate,
+            "minimum_required_r": minimum_remaining_reward_r,
+            "to_liquidity_objective_r": round(
+                release_reward_r if reward_space_blocker else remaining_reward_r,
+                3,
+            ),
+            "distance": _price(
+                release_reward_distance if reward_space_blocker else remaining_reward
+            ),
+            "objective_price": (
+                _price(release_objective_price)
+                if reward_space_blocker and release_objective_price > 0
+                else _price(objective_price)
+                if objective_is_directional
+                else None
+            ),
+            "objective_kind": (
+                release_objective_kind
+                if reward_space_blocker
+                else objective_pool.get("kind")
+                if objective_is_directional
+                else None
+            ),
+            "displayed_retest_reward_r": round(remaining_reward_r, 3),
+            "reason": reward_space_blocker or "Sufficient measured reward remains before the next liquidity objective.",
+        },
         "allocation_tier": allocation_tier,
         "committee_restrictions": (((cio_result.get("institutional_dossier") or {}).get("risk_committee") or {}).get("restrictions", [])),
         "entry": {
@@ -248,6 +465,7 @@ def build_ai_driven_trade_setup(
         "stop": {
             "selected": _price(stop),
             "method": "max_atr_invalidation_1_5x_or_minimum_stop_distance",
+            "atr": _price(atr_val),
             "distance_pct": round(stop_distance_pct, 3),
             "risk_per_unit": _price(risk_per_unit),
             "minimum_distance_bps": round(min_stop_bps, 2),
@@ -255,7 +473,7 @@ def build_ai_driven_trade_setup(
             "liquidity_reference_kind": protective_pool.get("kind") if protective_price > 0 else None,
         },
         "targets": targets,
-        "liquidity_objective": (liquidity_map.get("nearest_above") if side == "LONG" else liquidity_map.get("nearest_below")) or None,
+        "liquidity_objective": objective_pool or None,
         "position": {
             "account_size_usd": round(account_size, 2),
             "risk_pct": round(risk_pct, 3),
@@ -336,6 +554,20 @@ def evaluate_ai_driven_approval(
         
     if trade_setup.get("status") == "NO_TRADE":
         blockers.append("Failed to build valid trade parameters.")
+    story_view = trade_setup.get("market_story") or {}
+    if decision in {"BUY_WATCH", "SELL_WATCH"} and story_view.get("actionable") is False:
+        blockers.append(
+            f"Completed-candle market story is {story_view.get('state', 'not actionable')}: "
+            f"{story_view.get('reason') or 'the structural entry is unavailable.'}"
+        )
+    remaining_reward = trade_setup.get("remaining_reward") or {}
+    if decision in {"BUY_WATCH", "SELL_WATCH"} and remaining_reward.get("adequate") is False:
+        blockers.append(
+            remaining_reward.get("reason")
+            or "Insufficient reward remains before the next measured liquidity objective."
+        )
+    if decision in {"BUY_WATCH", "SELL_WATCH"} and trade_setup.get("execution_permitted") is False:
+        blockers.append("The deterministic trade plan is research-only and cannot authorize signal publication.")
     position = trade_setup.get("position") or {}
     if decision in {"BUY_WATCH", "SELL_WATCH"} and (
         _finite_number(position.get("risk_amount_usd")) <= 0

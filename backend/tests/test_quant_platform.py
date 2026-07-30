@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from app.data_sources.binance_public import Candle
 from app.quant.engine import build_quantitative_assessment
+from app.quant.regimes import classify_market_state
 from app.quant.research import validate_series
 
 
@@ -44,3 +45,34 @@ def test_alpha_validation_uses_held_out_information_coefficient() -> None:
     assert result["observations"] == 60
     assert result["test_information_coefficient"] > 0.9
     assert result["status"] == "candidate"
+
+
+def test_market_state_prefers_live_execution_tape_flow() -> None:
+    stats = {
+        "available": True,
+        "volatility_percentile": 0.4,
+        "price_z_score": -0.2,
+        "trend_strength_z": 0.5,
+        "return_autocorrelation_lag1": 0.1,
+        "normalized_entropy": 0.5,
+        "excess_kurtosis": 0.0,
+    }
+    result = classify_market_state(
+        stats,
+        {
+            "signed_trade_flow": 0.9,
+            "execution_tape": {
+                "actual_flow": {
+                    "available": True,
+                    "status": "SELLING_CONFIRMED",
+                    "signed_flow": -0.7,
+                }
+            },
+        },
+    )
+    assert result["flow_evidence"] == {
+        "source": "live_execution_tape",
+        "status": "SELLING_CONFIRMED",
+        "signed_flow": -0.7,
+        "directional_flow": -0.7,
+    }

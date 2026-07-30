@@ -14,6 +14,7 @@ import math
 from typing import Any
 
 from app.data_sources.binance_public import Candle, completed_candles
+from app.indicators.market_story import evaluate_story_direction
 from app.indicators.structure import find_swing_points
 
 
@@ -100,8 +101,18 @@ def build_liquidity_map(candles: list[Candle], atr: float) -> dict[str, Any]:
     }
 
 
-def classify_positioning(candles: list[Candle], derivatives: dict[str, Any]) -> dict[str, Any]:
-    """Classify the price/OI relationship before interpreting funding."""
+def classify_positioning(
+    candles: list[Candle],
+    derivatives: dict[str, Any],
+    *,
+    execution_tape: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Classify price×OI positioning separately from current aggressor flow.
+
+    When the normalized Binance/Bybit tape is available it owns delta and
+    divergence interpretation. The slower REST taker series is retained only
+    as an explicitly labelled fallback.
+    """
     closed = completed_candles(candles)
     history = derivatives.get("oi_history", {}) or {}
     if len(closed) < 6 or not history.get("available"):
@@ -122,9 +133,29 @@ def classify_positioning(candles: list[Candle], derivatives: dict[str, Any]) -> 
 
     funding = _number(derivatives.get("funding_rate"))
     crowded = "LONGS_CROWDED" if funding > 0.0005 else "SHORTS_CROWDED" if funding < -0.0005 else "NEUTRAL"
+    actual_flow = ((execution_tape or {}).get("actual_flow") or {})
     taker = derivatives.get("taker_volume", {}) or {}
-    cvd = str(taker.get("cvd_trend", "CVD_NEUTRAL"))
-    delta_bias = "BULLISH" if "BULLISH" in cvd else "BEARISH" if "BEARISH" in cvd else "NEUTRAL"
+    if actual_flow.get("available"):
+        active_aggressor = str(actual_flow.get("active_aggressor", "NEUTRAL")).upper()
+        flow_status = str(actual_flow.get("status", "UNAVAILABLE")).upper()
+        delta_bias = (
+            "BULLISH"
+            if flow_status == "BUYING_CONFIRMED" and active_aggressor == "BUYERS"
+            else "BEARISH"
+            if flow_status == "SELLING_CONFIRMED" and active_aggressor == "SELLERS"
+            else "NEUTRAL"
+        )
+        delta_source = "live_execution_tape"
+        delta_status = flow_status
+    else:
+        cvd = str(taker.get("cvd_trend", "CVD_NEUTRAL"))
+        delta_bias = (
+            "BULLISH" if "BULLISH" in cvd
+            else "BEARISH" if "BEARISH" in cvd
+            else "NEUTRAL"
+        )
+        delta_source = "binance_rest_taker_fallback"
+        delta_status = cvd
     divergence = (
         "BEARISH_DELTA_DIVERGENCE" if price_change_pct > 0.05 and delta_bias == "BEARISH"
         else "BULLISH_DELTA_DIVERGENCE" if price_change_pct < -0.05 and delta_bias == "BULLISH"
@@ -140,7 +171,13 @@ def classify_positioning(candles: list[Candle], derivatives: dict[str, Any]) -> 
         "crowding": crowded,
         "delta_bias": delta_bias,
         "delta_divergence": divergence,
-        "taker_aggression": taker.get("aggression", "NEUTRAL"),
+        "delta_source": delta_source,
+        "delta_status": delta_status,
+        "taker_aggression": (
+            actual_flow.get("active_aggressor", "NEUTRAL")
+            if actual_flow.get("available")
+            else taker.get("aggression", "NEUTRAL")
+        ),
     }
 
 
@@ -233,6 +270,13 @@ def score_market_context(features: dict[str, Any]) -> dict[str, Any]:
     liquidity = features.get("liquidity_map", {}) or {}
     micro = features.get("microstructure", {}) or {}
     trade_flow = features.get("trade_flow", {}) or {}
+    execution_tape = (
+        features.get("execution_tape")
+        or micro.get("execution_tape")
+        or micro.get("incremental_public_feeds")
+        or {}
+    )
+    actual_flow = execution_tape.get("actual_flow", {}) or {}
     volatility = features.get("volatility_context", {}) or {}
     profile = features.get("volume_profile", {}) or {}
     vwap = features.get("vwap_context", {}) or {}
@@ -241,10 +285,20 @@ def score_market_context(features: dict[str, Any]) -> dict[str, Any]:
 
     phase = str(structure.get("phase", "RANGING"))
     bos = structure.get("bos", {}) or {}
+    story = features.get("market_story", {}) or structure.get("story", {}) or {}
     structure_score = (1.0 if phase in {"MARKUP", "ACCUMULATION"} else -1.0 if phase in {"MARKDOWN", "DISTRIBUTION"} else 0.0)
-    if bos.get("detected"):
+    if bos.get("detected") and bos.get("state") not in {"INVALIDATED", "EXPIRED", "MISSED", "EXTENDED_DO_NOT_CHASE"}:
         structure_score += 0.5 if bos.get("direction") == "bullish" else -0.5 if bos.get("direction") == "bearish" else 0.0
-    components["regime_structure"] = {"available": bool(structure), "score": structure_score, "weight": 0.20, "bias": _direction(structure_score, 0.2), "evidence": phase}
+    components["regime_structure"] = {
+        "available": bool(structure),
+        "score": structure_score,
+        "weight": 0.20,
+        "bias": _direction(structure_score, 0.2),
+        "evidence": phase,
+        "event_state": story.get("current_state", bos.get("state", "NO_ACTIVE_EVENT")),
+        "event_type": (story.get("latest_event") or {}).get("type", bos.get("type")),
+        "event_age_bars": (story.get("latest_event") or {}).get("age_bars", bos.get("age_bars")),
+    }
 
     sweep = features.get("sweep", {}) or {}
     sweep_direction = str(sweep.get("direction", ""))
@@ -260,9 +314,21 @@ def score_market_context(features: dict[str, Any]) -> dict[str, Any]:
 
     depth_available = bool(micro.get("available")) and micro.get("depth_imbalance") is not None
     trade_available = bool(trade_flow.get("available")) and trade_flow.get("buy_ratio") is not None
+    tape_available = bool(actual_flow.get("available"))
     depth = _number(micro.get("depth_imbalance")) if depth_available else None
     buy_ratio = _number(trade_flow.get("buy_ratio")) if trade_available else None
-    if depth_available and trade_available:
+    tape_verdict = str(actual_flow.get("status", "UNAVAILABLE")).upper()
+    tape_signed_flow = _number(actual_flow.get("signed_flow"))
+    tape_directionally_confirmed = tape_verdict in {
+        "BUYING_CONFIRMED",
+        "SELLING_CONFIRMED",
+    }
+    if tape_available:
+        # Aggression only earns directional weight when traded price accepts
+        # it. Absorption, exhaustion, and no-progress states remain visible
+        # but contribute no directional vote.
+        flow_score = tape_signed_flow if tape_directionally_confirmed else 0.0
+    elif depth_available and trade_available:
         flow_score = 0.55 * depth + 0.45 * ((buy_ratio - 0.5) * 2.0)
     elif depth_available:
         flow_score = depth
@@ -271,11 +337,31 @@ def score_market_context(features: dict[str, Any]) -> dict[str, Any]:
     else:
         flow_score = 0.0
     components["order_flow"] = {
-        "available": depth_available or trade_available,
+        "available": tape_available or depth_available or trade_available,
         "score": flow_score,
         "weight": 0.23,
         "bias": _direction(flow_score, 0.08),
-        "evidence": {"depth_imbalance": depth, "buy_ratio": buy_ratio},
+        "evidence": {
+            "method": (
+                "live_execution_tape"
+                if tape_available
+                else "completed_market_fallback"
+            ),
+            "verdict": tape_verdict if tape_available else "UNAVAILABLE",
+            "active_aggressor": actual_flow.get("active_aggressor"),
+            "net_delta_usd": actual_flow.get("net_delta_usd"),
+            "signed_flow": actual_flow.get("signed_flow"),
+            "cvd_trend": actual_flow.get("cvd_trend"),
+            "price_response": actual_flow.get("price_response"),
+            "absorption": actual_flow.get("absorption"),
+            "exhaustion": actual_flow.get("exhaustion"),
+            "spot_perpetual_alignment": actual_flow.get(
+                "cross_market_alignment"
+            ),
+            "confidence": actual_flow.get("confidence"),
+            "depth_imbalance": depth,
+            "fallback_buy_ratio": buy_ratio,
+        },
     }
 
     vol_state = volatility.get("state", "UNKNOWN")
@@ -297,14 +383,40 @@ def score_market_context(features: dict[str, Any]) -> dict[str, Any]:
     direction = "LONG" if normalized >= 0.16 else "SHORT" if normalized <= -0.16 else "WAIT"
     score = min(100.0, round(50.0 + abs(normalized) * 50.0 + min(len(available), 6) * 3.0, 2))
     contradictions = [name for name, component in components.items() if component["available"] and ((direction == "LONG" and component["bias"] == "BEARISH") or (direction == "SHORT" and component["bias"] == "BULLISH"))]
+    story_direction = "BULLISH" if direction == "LONG" else "BEARISH" if direction == "SHORT" else "NEUTRAL"
+    story_view = evaluate_story_direction(story, story_direction) if story.get("available") else {
+        "direction": story_direction,
+        "state": "UNAVAILABLE",
+        "actionable": None,
+        "reason": "Completed-candle market story is unavailable.",
+    }
+    if (
+        direction != "WAIT"
+        and story.get("available")
+        and not story_view.get("actionable", False)
+    ):
+        contradictions.append(
+            f"market_story_{str(story_view.get('state', 'not_actionable')).lower()}"
+        )
+    contradictions = list(dict.fromkeys(contradictions))
+    story_ready = (
+        direction == "WAIT"
+        or not story.get("available")
+        or bool(story_view.get("actionable"))
+    )
     return {
-        "method": "causal_market_context_v1",
+        "method": "causal_market_context_v2_market_story",
         "direction": direction,
         "score": score if direction != "WAIT" else 0.0,
         "normalized_directional_score": round(normalized, 4),
         "coverage": {"available_domains": len(available), "required_domains": 4, "complete": len(available) >= 4},
         "components": components,
         "contradictions": contradictions,
-        "status": "SETUP_CANDIDATE" if direction != "WAIT" and len(available) >= 4 and not contradictions else "WAIT",
-        "limitations": ["Displayed order-book depth remains a snapshot until incremental depth history is captured.", "Liquidation levels are not treated as observed liquidation events without a dedicated event feed."],
+        "actionability": story_view,
+        "status": "SETUP_CANDIDATE" if direction != "WAIT" and len(available) >= 4 and not contradictions and story_ready else "WAIT",
+        "limitations": [
+            "Displayed order-book depth remains a snapshot until incremental depth history is captured.",
+            "Liquidation levels are not treated as observed liquidation events without a dedicated event feed.",
+            "Completed-candle event reconstruction prevents stale entries but does not predict the next move with certainty.",
+        ],
     }

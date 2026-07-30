@@ -1,61 +1,18 @@
 """Liquidity indicators — sweep detection, order book analysis."""
 from __future__ import annotations
 
-from statistics import mean
 from typing import Any
 
-from app.data_sources.binance_public import Candle, completed_candles
+from app.data_sources.binance_public import Candle
 from ._math import pct
 
 
 def detect_liquidity_sweep(candles: list[Candle], lookback: int = 24) -> dict[str, Any]:
-    closed = completed_candles(candles)
-    if len(closed) < lookback + 5:
-        return {"detected": False, "direction": "none", "reason": "not_enough_candles"}
+    """Return the most recent sweep and its current completed-candle lifecycle."""
+    from app.indicators.market_story import build_market_story, observable_liquidity_sweep
 
-    signal = closed[-1]
-    prior = closed[-lookback - 1 : -1]
-    prior_high = max(c.high for c in prior)
-    prior_low = min(c.low for c in prior)
-    avg_volume = mean([c.volume for c in prior]) if prior else 0.0
-    volume_ratio = signal.volume / avg_volume if avg_volume > 0 else 0.0
-
-    bearish = signal.high > prior_high and signal.close < prior_high
-    bullish = signal.low < prior_low and signal.close > prior_low
-
-    if bearish:
-        sweep_distance_pct = pct(signal.high - prior_high, prior_high)
-        return {
-            "detected": True,
-            "direction": "bearish_reversal_watch",
-            "swept_level": round(prior_high, 4),
-            "sweep_extreme": round(signal.high, 4),
-            "close_back_inside": round(signal.close, 4),
-            "volume_ratio": round(volume_ratio, 3),
-            "sweep_distance_pct": round(sweep_distance_pct, 5),
-            "quality": "strong" if volume_ratio >= 1.25 else "normal",
-        }
-
-    if bullish:
-        sweep_distance_pct = pct(prior_low - signal.low, prior_low)
-        return {
-            "detected": True,
-            "direction": "bullish_reversal_watch",
-            "swept_level": round(prior_low, 4),
-            "sweep_extreme": round(signal.low, 4),
-            "close_back_inside": round(signal.close, 4),
-            "volume_ratio": round(volume_ratio, 3),
-            "sweep_distance_pct": round(sweep_distance_pct, 5),
-            "quality": "strong" if volume_ratio >= 1.25 else "normal",
-        }
-
-    return {
-        "detected": False,
-        "direction": "none",
-        "prior_high": round(prior_high, 4),
-        "prior_low": round(prior_low, 4),
-        "reason": "no_sweep_on_last_closed_candle",
-    }
+    story = build_market_story(candles, sweep_lookback=max(5, lookback))
+    return observable_liquidity_sweep(story)
 
 
 def analyze_liquidity(ticker: dict[str, Any], order_book: dict[str, Any]) -> dict[str, Any]:

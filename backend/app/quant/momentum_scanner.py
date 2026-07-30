@@ -5,13 +5,15 @@ import httpx
 from typing import List, Dict, Any, Tuple, Set
 
 from app.data_sources.binance_public import Candle
-from app.data_sources.multi_venue_ws import get_multi_venue_snapshot
-from app.indicators.liquidity import detect_liquidity_sweep
+from app.data_sources.execution_tape_ws import get_execution_tape_snapshot
+from app.indicators.market_story import (
+    build_market_story,
+    evaluate_story_playbook,
+    observable_liquidity_sweep,
+    observable_structure_events,
+)
 from app.indicators.structure import (
     classify_market_phase,
-    detect_bos,
-    detect_choch,
-    find_swing_points,
     find_fair_value_gaps,
     find_order_blocks,
 )
@@ -31,6 +33,7 @@ _RADAR_INTERVALS = {"5m", "15m", "1h", "4h", "1d"}
 _KLINE_CONCURRENCY = 8
 _ADVANCED_CONFIRMATION_MAX_CANDIDATES = 6
 _ADVANCED_CONFIRMATION_CONCURRENCY = 2
+_CAUSAL_HISTORY_CANDLES = 200
 
 
 def _float(value: Any, default: float = 0.0) -> float:
@@ -73,9 +76,11 @@ def analyze_radar_structure_confluence(candles: list[Candle], direction: str) ->
         return {"score_adjustment": 0, "phase": "RANGING", "risk_flags": [], "supporting_factors": []}
 
     price = candles[-1].close
-    bos = detect_bos(candles)
-    choch = detect_choch(candles)
-    sweep = detect_liquidity_sweep(candles)
+    story = build_market_story(candles)
+    events = observable_structure_events(story)
+    bos = events["bos"]
+    choch = events["choch"]
+    sweep = observable_liquidity_sweep(story)
     order_blocks = find_order_blocks(candles)
     fvgs = find_fair_value_gaps(candles)
     phase = classify_market_phase(candles)
@@ -189,16 +194,24 @@ async def _fetch_live_confirmation(client: httpx.AsyncClient, symbol: str) -> Di
     )
     taker_latest = taker[-1] if isinstance(taker, list) and taker else {}
 
+    execution_tape = get_execution_tape_snapshot(symbol)
+    tape_flow_ready = bool(
+        (execution_tape.get("actual_flow") or {}).get("available")
+    )
     return {
-        "data_complete": bool(bids and asks and premium and len(oi_values) >= 2 and taker_latest),
+        "data_complete": bool(
+            bids and asks and premium and len(oi_values) >= 2
+            and (taker_latest or tape_flow_ready)
+        ),
         "depth_imbalance": round((bid_notional - ask_notional) / total_depth, 4) if total_depth else None,
         "spread_bps": round(spread_bps, 3) if spread_bps is not None else None,
+        "current_price": round(midpoint, 12) if midpoint else None,
         "bid_depth_notional": round(bid_notional, 2),
         "ask_depth_notional": round(ask_notional, 2),
         "funding_rate": _float((premium or {}).get("lastFundingRate")),
         "oi_change_pct": round(oi_change_pct, 3) if oi_change_pct is not None else None,
         "taker_buy_sell_ratio": _float(taker_latest.get("buySellRatio"), 1.0) if taker_latest else None,
-        "multi_venue": get_multi_venue_snapshot(symbol),
+        "execution_tape": execution_tape,
     }
 
 
@@ -217,10 +230,16 @@ async def _enrich_live_confirmations(
         async with semaphore:
             live = await _fetch_live_confirmation(client, candidate["symbol"])
             _refresh_causal_context_from_live(candidate, live)
-            if candidate.get("direction") == "NEUTRAL":
+            if (
+                candidate.get("direction") == "NEUTRAL"
+                or (candidate.get("market_context") or {}).get("status") != "SETUP_CANDIDATE"
+                or not (candidate.get("structure_confirmation") or {}).get("passed")
+            ):
                 candidate["review_status"] = "WATCH_ONLY"
                 candidate["status"] = "CAUSAL_CONTEXT_WAIT"
-                candidate.setdefault("risk_flags", []).append("Live evidence removed directional alignment; waiting for a new causal context.")
+                candidate.setdefault("risk_flags", []).append(
+                    "Live evidence or market-story timing is not actionable; waiting for a fresh causal context."
+                )
                 return
             _apply_live_confirmation(candidate, live)
 
@@ -341,7 +360,7 @@ async def fetch_klines(client: httpx.AsyncClient, symbol: str, timeframe: str) -
     params = {
         "symbol": symbol,
         "interval": timeframe,
-        "limit": 60
+        "limit": _CAUSAL_HISTORY_CANDLES,
     }
     try:
         response = await client.get(url, params=params, timeout=5.0)
@@ -390,6 +409,10 @@ async def _legacy_get_breakout_candidates(ltf: str = "5m", htf: str = "1h", use_
     Radar candidates are not trade signals. They are ranked from completed
     candles, liquidity, volatility, and higher-timeframe alignment only.
     """
+    raise RuntimeError(
+        "Legacy RSI/EMA Radar scoring is retired. Use "
+        "get_breakout_candidates(), which enforces the Bare Eye contract."
+    )
     if ltf not in _RADAR_INTERVALS or htf not in _RADAR_INTERVALS:
         raise ValueError("Radar supports 5m, 15m, 1h, 4h, and 1d timeframes.")
     if ltf == htf:
@@ -863,22 +886,8 @@ def _candle_range_reference(candles: list[Candle]) -> float:
 
 
 def _observable_structure_events(candles: list[Candle]) -> dict[str, dict[str, Any]]:
-    """Direct completed-candle swing breaks; no moving-average trend filter."""
-    highs, lows = find_swing_points(candles, N=3)
-    if not highs or not lows:
-        unavailable = {"detected": False, "direction": "none", "reason": "insufficient_confirmed_swing_points"}
-        return {"bos": unavailable, "choch": unavailable.copy()}
-    close = candles[-1].close
-    last_high, last_low = highs[-1]["price"], lows[-1]["price"]
-    if close > last_high:
-        bos = {"detected": True, "direction": "bullish", "broken_level": last_high, "current_close": close, "type": "BOS"}
-    elif close < last_low:
-        bos = {"detected": True, "direction": "bearish", "broken_level": last_low, "current_close": close, "type": "BOS"}
-    else:
-        bos = {"detected": False, "direction": "none", "reason": "no_completed_swing_break"}
-    # A CHoCH needs prior structure sequencing beyond a single snapshot. Do
-    # not invent it from EMA direction or a one-candle heuristic.
-    return {"bos": bos, "choch": {"detected": False, "direction": "none", "reason": "requires_historical_structure_sequence"}}
+    """Compatibility projection from the canonical completed-candle story."""
+    return observable_structure_events(build_market_story(candles))
 
 
 def _candidate_from_causal_context(
@@ -891,17 +900,24 @@ def _candidate_from_causal_context(
     phase = classify_market_phase(candles)
     higher_phase = classify_market_phase(higher_candles)
     higher_bias = _phase_bias(higher_phase)
-    sweep = detect_liquidity_sweep(candles)
-    events = _observable_structure_events(candles)
+    story = build_market_story(candles)
+    higher_story = build_market_story(higher_candles)
+    sweep = observable_liquidity_sweep(story)
+    events = observable_structure_events(story)
     structure = {
         "phase": phase,
         "higher_timeframe_phase": higher_phase,
         "bos": events["bos"],
         "choch": events["choch"],
+        "liquidity_sweep": sweep,
+        "story_state": story.get("current_state"),
+        "story_actionability": story.get("actionability", {}),
+        "story_as_of_close_time": story.get("as_of_close_time"),
     }
     liquidity_map = build_liquidity_map(candles, _candle_range_reference(candles))
     features: dict[str, Any] = {
         "market_structure": structure,
+        "market_story": story,
         "liquidity_map": liquidity_map,
         "sweep": sweep,
         "positioning": {"available": False, "state": "UNKNOWN"},
@@ -915,9 +931,39 @@ def _candidate_from_causal_context(
     }
     context = score_market_context(features)
     direction = {"LONG": "BULLISH", "SHORT": "BEARISH"}.get(context["direction"], "NEUTRAL")
+    playbook_evaluation = evaluate_story_playbook(
+        primary_story=story,
+        higher_story=higher_story,
+        direction=direction,
+        primary_phase=phase,
+        higher_phase=higher_phase,
+        vwap_context=features["vwap_context"],
+        volume_profile=features["volume_profile"],
+    )
+    story_view = playbook_evaluation["directional_view"]
+    structure_ready = bool(playbook_evaluation["passed"])
+    structure_playbook = playbook_evaluation["playbook"]
+    event_quality_ready = bool(
+        playbook_evaluation["checks"]["structure_event_quality_ready"]
+    )
     risk_flags = list(context.get("contradictions", []))
     if direction != "NEUTRAL" and higher_bias not in {"NEUTRAL", direction}:
         risk_flags.append("higher_timeframe_regime_conflicts")
+    if direction != "NEUTRAL" and not structure_ready:
+        # An actionable/retesting event can still fail the *playbook* because
+        # regime, range acceptance, or higher-timeframe structure is missing.
+        # Calling that event itself a contradiction produced labels such as
+        # "market story actionable now", which inverted the actual meaning.
+        if not story_view.get("actionable"):
+            risk_flags.append(
+                f"market_story_{story_view.get('state', 'not_actionable').lower()}"
+            )
+        else:
+            reason_code = str(
+                playbook_evaluation.get("reason_code", "playbook_not_confirmed")
+            ).lower()
+            risk_flags.append(f"structure_playbook_{reason_code}")
+    risk_flags = list(dict.fromkeys(risk_flags))
 
     completed = candles[-1]
     reference = candles[-6].close
@@ -926,7 +972,9 @@ def _candidate_from_causal_context(
     coverage = context.get("coverage", {})
     eligible = (
         direction != "NEUTRAL"
+        and context.get("status") == "SETUP_CANDIDATE"
         and coverage.get("complete", False)
+        and structure_ready
         and not risk_flags
     )
     components = context.get("components", {})
@@ -951,6 +999,19 @@ def _candidate_from_causal_context(
         "volume_profile": features["volume_profile"],
         "vwap_context": features["vwap_context"],
         "market_structure": structure,
+        "market_story": story,
+        "higher_timeframe_story": higher_story,
+        "structure_confirmation": {
+            "passed": structure_ready,
+            "playbook": structure_playbook,
+            "story_state": story_view.get("state"),
+            "actionable": bool(story_view.get("actionable")),
+            "reason": playbook_evaluation.get("reason"),
+            "event_quality_ready": event_quality_ready,
+            "higher_timeframe_aligned": higher_bias == direction,
+            "selected_event": playbook_evaluation.get("selected_event"),
+            "checks": playbook_evaluation.get("checks", {}),
+        },
         "target_pool": target_pool,
         "evidence_tags": evidence_tags,
         "coverage": coverage,
@@ -981,6 +1042,13 @@ def _refresh_causal_context_from_live(candidate: dict[str, Any], live: dict[str,
     candles = candidate.get("_candles")
     if not isinstance(features, dict) or not isinstance(candles, list):
         return
+    execution_tape = live.get("execution_tape")
+    if isinstance(execution_tape, dict):
+        # The live-confirmation fetch already reads the shared four-feed tape.
+        # Attach that exact snapshot before rescoring so Radar ranking, its
+        # evidence chips, and the final confirmation badge cannot disagree.
+        features["execution_tape"] = execution_tape
+        features["multi_venue"] = execution_tape
     ratio_raw = live.get("taker_buy_sell_ratio")
     ratio = _float(ratio_raw) if ratio_raw is not None else None
     ratio_value = ratio if ratio is not None else 1.0
@@ -997,7 +1065,11 @@ def _refresh_causal_context_from_live(candidate: dict[str, Any], live: dict[str,
             "aggression": "UNAVAILABLE" if ratio is None else "BUYER_AGGRESSIVE" if ratio >= 1.02 else "SELLER_AGGRESSIVE" if ratio <= 0.98 else "NEUTRAL",
         },
     }
-    features["positioning"] = classify_positioning(candles, derivatives)
+    features["positioning"] = classify_positioning(
+        candles,
+        derivatives,
+        execution_tape=execution_tape if isinstance(execution_tape, dict) else None,
+    )
     features["microstructure"] = {
         "available": bool(live.get("data_complete")),
         "depth_imbalance": live.get("depth_imbalance"),
@@ -1014,13 +1086,66 @@ def _refresh_causal_context_from_live(candidate: dict[str, Any], live: dict[str,
     contradictions = list(context.get("contradictions", []))
     if direction != "NEUTRAL" and higher_bias not in {"NEUTRAL", direction}:
         contradictions.append("higher_timeframe_regime_conflicts")
+    structure = features.get("market_structure") or {}
+    playbook_evaluation = evaluate_story_playbook(
+        primary_story=features.get("market_story") or {},
+        higher_story=candidate.get("higher_timeframe_story") or {},
+        direction=direction,
+        primary_phase=str(structure.get("phase", "RANGING")),
+        higher_phase=str(structure.get("higher_timeframe_phase", "UNAVAILABLE")),
+        vwap_context=features.get("vwap_context") or {},
+        volume_profile=features.get("volume_profile") or {},
+    )
+    if direction != "NEUTRAL" and not playbook_evaluation["passed"]:
+        story_view = playbook_evaluation.get("directional_view") or {}
+        if not story_view.get("actionable"):
+            contradictions.append(
+                f"market_story_{str(story_view.get('state', 'not_actionable')).lower()}"
+            )
+        else:
+            reason_code = str(
+                playbook_evaluation.get("reason_code", "playbook_not_confirmed")
+            ).lower()
+            contradictions.append(f"structure_playbook_{reason_code}")
+    contradictions = list(dict.fromkeys(contradictions))
+    directional_view = playbook_evaluation.get("directional_view") or {}
+    structure_confirmation = {
+        "passed": bool(playbook_evaluation["passed"]),
+        "playbook": playbook_evaluation["playbook"],
+        "story_state": directional_view.get("state"),
+        "actionable": bool(directional_view.get("actionable")),
+        "reason": playbook_evaluation.get("reason"),
+        "reason_code": playbook_evaluation.get("reason_code"),
+        "event_quality_ready": bool(
+            (playbook_evaluation.get("checks") or {}).get("structure_event_quality_ready")
+        ),
+        "higher_timeframe_aligned": higher_bias == direction,
+        "selected_event": playbook_evaluation.get("selected_event"),
+        "checks": playbook_evaluation.get("checks", {}),
+    }
+    causal_ready = (
+        direction != "NEUTRAL"
+        and context.get("status") == "SETUP_CANDIDATE"
+        and structure_confirmation["passed"]
+        and not contradictions
+    )
     candidate.update({
         "score": int(round(context.get("score", 0))),
         "direction": direction,
         "market_context": context,
         "positioning": features["positioning"],
         "contradictions": contradictions,
-        "risk_flags": list(dict.fromkeys(candidate.get("risk_flags", []) + contradictions)),
+        # Rebuild all direction-dependent flags. Carrying the initial flags
+        # forward could leave a bullish playbook attached after live flow
+        # changed the candidate to bearish.
+        "risk_flags": contradictions,
+        "structure_confirmation": structure_confirmation,
+        "status": (
+            "CAUSAL_CONTEXT_PENDING_LIVE_CONFIRMATION"
+            if causal_ready
+            else "WAIT_FOR_ALIGNED_EVIDENCE"
+        ),
+        "quality_badge": "CAUSAL_CONTEXT" if causal_ready else "EVIDENCE_INCOMPLETE",
         "coverage": context.get("coverage", {}),
         "evidence_tags": [
             name.replace("_", " ")
@@ -1113,6 +1238,10 @@ async def _ai_score_candidates(
     wasting API calls on low-quality setups. The final blended score combines
     deterministic analysis (40%) with AI conviction (60%).
     """
+    raise RuntimeError(
+        "Legacy blended Radar AI scoring is retired. Radar decisions use the "
+        "auditable Bare Eye evidence contract."
+    )
     from app.settings import get_settings
     from app.ai_client import build_async_ai_client, get_model_for_task, safe_async_chat_completion
     from app.brains.prompts.loader import load_prompt

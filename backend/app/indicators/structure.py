@@ -4,7 +4,6 @@ from __future__ import annotations
 from typing import Any
 
 from app.data_sources.binance_public import Candle, completed_candles
-from app.indicators.trend import analyze_trend
 
 
 def classify_market_phase(candles: list[Candle]) -> str:
@@ -84,79 +83,18 @@ def find_swing_points(candles: list[Candle], N: int = 3) -> tuple[list[dict[str,
 
 
 def detect_bos(candles: list[Candle]) -> dict[str, Any]:
-    """Detect Break of Structure (BOS) in the direction of the dominant trend."""
-    closed = completed_candles(candles)
-    if len(closed) < 20:
-        return {"detected": False, "direction": "none", "reason": "need_more_candles"}
+    """Return the most recent causally reconstructed completed-candle BOS."""
+    # Local import avoids a module cycle: market_story uses find_swing_points.
+    from app.indicators.market_story import build_market_story, observable_structure_events
 
-    swing_highs, swing_lows = find_swing_points(closed, N=3)
-    if not swing_highs or not swing_lows:
-        return {"detected": False, "direction": "none", "reason": "no_swing_points_found"}
-
-    last_high = swing_highs[-1]["price"]
-    last_low = swing_lows[-1]["price"]
-    current_close = closed[-1].close
-    
-    trend = analyze_trend(closed)
-    is_bullish = trend.get("status") == "bullish"
-    is_bearish = trend.get("status") == "bearish"
-
-    if is_bullish and current_close > last_high:
-        return {
-            "detected": True,
-            "direction": "bullish",
-            "broken_level": last_high,
-            "current_close": current_close,
-            "type": "BOS",
-        }
-    elif is_bearish and current_close < last_low:
-        return {
-            "detected": True,
-            "direction": "bearish",
-            "broken_level": last_low,
-            "current_close": current_close,
-            "type": "BOS",
-        }
-
-    return {"detected": False, "direction": "none", "reason": "no_structure_break"}
+    return observable_structure_events(build_market_story(candles))["bos"]
 
 
 def detect_choch(candles: list[Candle]) -> dict[str, Any]:
-    """Detect Change of Character (CHoCH) signifying trend structure reversals."""
-    closed = completed_candles(candles)
-    if len(closed) < 20:
-        return {"detected": False, "direction": "none", "reason": "need_more_candles"}
+    """Return the most recent causally reconstructed completed-candle CHoCH."""
+    from app.indicators.market_story import build_market_story, observable_structure_events
 
-    swing_highs, swing_lows = find_swing_points(closed, N=3)
-    if not swing_highs or not swing_lows:
-        return {"detected": False, "direction": "none", "reason": "no_swing_points_found"}
-
-    last_high = swing_highs[-1]["price"]
-    last_low = swing_lows[-1]["price"]
-    current_close = closed[-1].close
-    
-    trend = analyze_trend(closed)
-    is_bullish = trend.get("status") == "bullish"
-    is_bearish = trend.get("status") == "bearish"
-
-    if is_bullish and current_close < last_low:
-        return {
-            "detected": True,
-            "direction": "bearish",
-            "broken_level": last_low,
-            "current_close": current_close,
-            "type": "CHoCH",
-        }
-    elif is_bearish and current_close > last_high:
-        return {
-            "detected": True,
-            "direction": "bullish",
-            "broken_level": last_high,
-            "current_close": current_close,
-            "type": "CHoCH",
-        }
-
-    return {"detected": False, "direction": "none", "reason": "no_trend_reversal_detected"}
+    return observable_structure_events(build_market_story(candles))["choch"]
 
 
 def find_order_blocks(candles: list[Candle]) -> list[dict[str, Any]]:

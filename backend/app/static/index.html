@@ -10,7 +10,7 @@
   <link
     href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap"
     rel="stylesheet">
-  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="styles.css?v=20260729-tape1">
 </head>
 
 <body class="single-page">
@@ -309,8 +309,8 @@
               <select id="timeframe-select">
                 <option value="1m">1m (Scalping)</option>
                 <option value="5m">5m (Intraday)</option>
-                <option value="15m">15m (Confluence)</option>
-                <option value="1h" selected>1h (Swing)</option>
+                <option value="15m" selected>15m (Confluence)</option>
+                <option value="1h">1h (Swing)</option>
                 <option value="4h">4h (Macro Swing)</option>
                 <option value="1d">1d (Position)</option>
               </select>
@@ -351,7 +351,7 @@
         </div>
 
         <!-- SIGNAL CONFIRMATION EVIDENCE CARD -->
-        <div class="card confirmation-evidence-card" style="margin-top: 0.75rem;">
+        <div class="card confirmation-evidence-card" style="margin-top: 0.75rem;position: sticky;top: 10%;">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
             <h3>Signal Confirmation Evidence</h3>
             <span class="telemetry-badge" id="confirmation-status-badge"
@@ -409,120 +409,72 @@
           <!-- Live Execution Checks Strip -->
           <div class="confirmation-exec-strip" id="confirmation-exec-strip" style="margin-top: 0.5rem;"></div>
 
-          <!-- Shared Bybit + Coinbase execution evidence -->
+          <!-- Shared Binance + Bybit spot/perpetual execution tape -->
           <section class="venue-evidence-panel" id="venue-evidence-panel" aria-live="polite">
             <div class="venue-evidence-head">
               <div>
-                <span class="venue-evidence-kicker">Public execution network</span>
-                <strong>Bybit Perpetual + Coinbase Spot</strong>
+                <span class="venue-evidence-kicker">Live market-order intelligence</span>
+                <strong>Actual Buy / Sell Pressure</strong>
               </div>
-              <span class="venue-evidence-badge starting" id="venue-evidence-status">STARTING</span>
+              <span class="venue-evidence-badge starting" id="tape-evidence-status">STARTING</span>
             </div>
             <div class="venue-evidence-grid">
               <div class="venue-evidence-metric">
-                <span>Flow consensus</span>
-                <strong id="venue-flow-value">WAITING FOR BOTH VENUES</strong>
+                <span>Execution verdict</span>
+                <strong id="tape-verdict-value">WARMING TAPE</strong>
               </div>
               <div class="venue-evidence-metric">
-                <span>Bybit perpetual</span>
-                <strong id="venue-bybit-value">SYNCING</strong>
+                <span>Active aggressor</span>
+                <strong id="tape-aggressor-value">UNAVAILABLE</strong>
               </div>
               <div class="venue-evidence-metric">
-                <span>Coinbase spot</span>
-                <strong id="venue-coinbase-value">SYNCING</strong>
+                <span>Aggressive buys</span>
+                <strong id="tape-buy-value">AWAITING TRADES</strong>
+              </div>
+              <div class="venue-evidence-metric">
+                <span>Aggressive sells</span>
+                <strong id="tape-sell-value">AWAITING TRADES</strong>
+              </div>
+              <div class="venue-evidence-metric">
+                <span>Net delta · CVD</span>
+                <strong id="tape-delta-value">UNAVAILABLE</strong>
+              </div>
+              <div class="venue-evidence-metric">
+                <span>Price response</span>
+                <strong id="tape-response-value">UNAVAILABLE</strong>
+              </div>
+              <div class="venue-evidence-metric">
+                <span>Absorption</span>
+                <strong id="tape-absorption-value">NOT DETECTED</strong>
+              </div>
+              <div class="venue-evidence-metric">
+                <span>Exhaustion</span>
+                <strong id="tape-exhaustion-value">NONE</strong>
+              </div>
+              <div class="venue-evidence-metric">
+                <span>Spot × perpetual</span>
+                <strong id="tape-alignment-value">WARMING</strong>
               </div>
               <div class="venue-evidence-metric">
                 <span>Liquidation tape</span>
-                <strong id="venue-liquidation-value">NOT OBSERVED</strong>
+                <strong id="tape-liquidation-value">NOT OBSERVED</strong>
               </div>
               <div class="venue-evidence-metric">
-                <span>Quote stability</span>
-                <strong id="venue-stability-value">UNQUALIFIED</strong>
+                <span>Data confidence</span>
+                <strong id="tape-confidence-value">UNAVAILABLE</strong>
               </div>
               <div class="venue-evidence-metric">
                 <span>Displayed-depth capacity</span>
-                <strong id="venue-capacity-value">AWAITING PLAN</strong>
+                <strong id="tape-capacity-value">AWAITING PLAN</strong>
               </div>
             </div>
-            <p id="venue-evidence-note">
-              Direction is qualified only when both public venues are fresh and meet the minimum trade-flow evidence.
+            <p id="tape-evidence-note">
+              Binance and Bybit spot/perpetual feeds share one bounded server-side tape. Source agreement raises confidence but is not mandatory.
             </p>
           </section>
         </div>
 
-        <!-- RISK CALCULATOR CARD -->
-        <div class="card risk-card">
-          <h3>Risk & Position Size Calculator</h3>
-          <div class="risk-info-grid" id="risk-info-display">
-            <div class="risk-metric">
-              <span class="label">Side</span>
-              <span class="value" id="risk-side">-</span>
-            </div>
-            <div class="risk-metric">
-              <span class="label">Entry Ref</span>
-              <span class="value font-mono" id="risk-entry">-</span>
-            </div>
-            <div class="risk-metric">
-              <span class="label">Calculated Stop</span>
-              <span class="value font-mono" id="risk-stop">-</span>
-            </div>
-            <div class="risk-metric">
-              <span class="label">Calculated Target</span>
-              <span class="value font-mono" id="risk-target">-</span>
-            </div>
-          </div>
 
-          <div class="stop-loss-selector">
-            <span class="label">Stop Method:</span>
-            <div class="selector-options">
-              <label class="radio-label">
-                <input type="radio" name="stop-method" id="stop-method-retail" value="retail" checked />
-                <span class="radio-btn"></span>
-                <span>AI Target Stop</span>
-              </label>
-              <label class="radio-label">
-                <input type="radio" name="stop-method" id="stop-method-smart" value="smart" />
-                <span class="radio-btn"></span>
-                <span>Smart Wall Stop (<span id="wall-price-display" class="font-mono">-</span>)</span>
-              </label>
-            </div>
-          </div>
-
-          <div class="risk-calculator-inputs">
-            <div class="input-inline">
-              <label for="acc-size-input">Capital Size ($)</label>
-              <input type="number" id="acc-size-input" value="1000" min="10" step="10" />
-            </div>
-            <div class="input-inline">
-              <label for="risk-pct-input">Max Risk (%)</label>
-              <input type="number" id="risk-pct-input" value="0.5" min="0.1" max="10" step="0.1" />
-            </div>
-          </div>
-
-          <!-- KELLY SIZING WITH RAG MEMORY -->
-          <div class="kelly-toggle-container">
-            <label for="kelly-toggle" class="toggle-label">
-              <span>Apply RAG Kelly Sizing</span>
-              <input type="checkbox" id="kelly-toggle" />
-              <span class="slider"></span>
-            </label>
-            <div class="kelly-recommendation hidden" id="kelly-rec-box">
-              <span>Rec Sizing: <strong id="kelly-rec-val" class="font-mono">0.00%</strong></span>
-              <span class="kelly-status-badge" id="kelly-status-text">No History</span>
-            </div>
-          </div>
-
-          <div class="sizing-output" id="sizing-output-display">
-            <div class="sizing-row">
-              <span>Allowed Risk Amount:</span>
-              <strong id="risk-amt-val" class="font-mono">$0.00</strong>
-            </div>
-            <div class="sizing-row">
-              <span>Position Size Units:</span>
-              <strong id="sizing-units-val" class="font-mono">0.00 units</strong>
-            </div>
-          </div>
-        </div>
 
 
       </section>
@@ -588,7 +540,8 @@
                 <i><b id="validation-supplemental-fill"></b></i>
               </div>
             </div>
-            <p id="validation-manifest-detail">Required controls fail closed. Missing supplemental feeds remain explicit unknowns.</p>
+            <p id="validation-manifest-detail">Required controls fail closed. Missing supplemental feeds remain explicit
+              unknowns.</p>
           </section>
           <footer class="market-context-footer">
             <span id="context-coverage">0 / 8 required domains</span>
@@ -607,6 +560,45 @@
           </div>
           <section class="monitor-confirmation-scenarios" id="monitor-confirmation-scenarios"
             aria-label="Confirmation scenario" hidden></section>
+          <section class="market-story-panel monitor-market-story" id="monitor-market-story"
+            aria-label="Completed-candle market story">
+            <header class="market-story-header">
+              <div>
+                <span class="market-story-kicker">Completed-candle sequence</span>
+                <strong>Market Story</strong>
+              </div>
+              <div class="market-story-badges">
+                <span class="market-story-badge" id="monitor-story-state">AWAITING STORY</span>
+                <span class="market-story-badge direction" id="monitor-story-direction">NO DIRECTION</span>
+              </div>
+            </header>
+            <div class="market-story-metadata" aria-label="Active market event">
+              <span><b>Event</b><strong id="monitor-story-event">—</strong></span>
+              <span><b>Age</b><strong id="monitor-story-age">—</strong></span>
+              <span><b>Level</b><strong id="monitor-story-level">—</strong></span>
+              <span><b>Invalidation</b><strong id="monitor-story-invalidation">—</strong></span>
+            </div>
+            <div class="market-story-sequence">
+              <article class="market-story-step happened">
+                <span>01 · What happened</span>
+                <p id="monitor-story-happened">Waiting for a completed-candle structure event.</p>
+              </article>
+              <article class="market-story-step current">
+                <span>02 · Happening now</span>
+                <p id="monitor-story-now">The current price location has not been classified yet.</p>
+              </article>
+              <article class="market-story-step next">
+                <span>03 · What can happen next</span>
+                <p id="monitor-story-next">The next conditional scenario will appear after the story is reconstructed.
+                </p>
+                <small id="monitor-story-failure">No invalidation branch is available yet.</small>
+              </article>
+            </div>
+            <footer class="market-story-action" id="monitor-story-action">
+              <i aria-hidden="true"></i>
+              <span>OBSERVATION ONLY · WAITING FOR A QUALIFIED EVENT</span>
+            </footer>
+          </section>
           <section class="monitor-evidence-hero scanning" id="monitor-evidence-hero" aria-label="Evidence state">
             <div>
               <span class="monitor-eyebrow" id="monitor-evidence-state">EVIDENCE STATE · SCANNING</span>
@@ -626,7 +618,10 @@
             <span class="monitor-gate-chip"><b>Structure</b><strong>SCANNING</strong></span>
             <span class="monitor-gate-chip"><b>Liquidity</b><strong>SCANNING</strong></span>
             <span class="monitor-gate-chip"><b>Order flow</b><strong>SCANNING</strong></span>
+            <span class="monitor-gate-chip"><b>Actual flow</b><strong>SCANNING</strong></span>
             <span class="monitor-gate-chip"><b>Positioning</b><strong>SCANNING</strong></span>
+            <span class="monitor-gate-chip"><b>Publication inputs</b><strong>SCANNING</strong></span>
+            <span class="monitor-gate-chip"><b>Signal confirmation</b><strong>SCANNING</strong></span>
             <span class="monitor-gate-chip"><b>Macro</b><strong>SCANNING</strong></span>
           </div>
           <div class="monitor-command-row">
@@ -729,6 +724,51 @@
               <p id="setup-reason-val">Waiting for a qualified setup.</p>
             </div>
             <span class="setup-evidence-mark" id="setup-evidence-mark">—</span>
+          </section>
+          <section class="market-story-panel setup-market-story" id="setup-market-story"
+            aria-label="Trade setup market story">
+            <header class="market-story-header">
+              <div>
+                <span class="market-story-kicker">Entry-timing control</span>
+                <strong>Event Lifecycle</strong>
+              </div>
+              <div class="market-story-badges">
+                <span class="market-story-badge" id="setup-story-state">AWAITING STORY</span>
+                <span class="market-story-badge direction" id="setup-story-direction">NO DIRECTION</span>
+              </div>
+            </header>
+            <div class="market-story-metadata">
+              <span><b>Event</b><strong id="setup-story-event">—</strong></span>
+              <span><b>Age</b><strong id="setup-story-age">—</strong></span>
+              <span><b>Event level</b><strong id="setup-story-level">—</strong></span>
+              <span><b>Invalidation</b><strong id="setup-story-invalidation">—</strong></span>
+            </div>
+            <div class="market-story-reward" id="setup-story-reward" data-reward-tone="unknown">
+              <div>
+                <span>Remaining reward to liquidity objective</span>
+                <strong id="setup-story-reward-state">ASSESSING</strong>
+              </div>
+              <p id="setup-story-reward-detail">Reward capacity will be measured from the current entry location.</p>
+            </div>
+            <div class="market-story-sequence compact">
+              <article class="market-story-step happened">
+                <span>What happened</span>
+                <p id="setup-story-happened">No completed event is attached to this plan.</p>
+              </article>
+              <article class="market-story-step current">
+                <span>Entry status now</span>
+                <p id="setup-story-now">Waiting for the entry-timing engine.</p>
+              </article>
+              <article class="market-story-step next">
+                <span>Conditional next step</span>
+                <p id="setup-story-next">No entry is authorized until the event remains valid and reviewable.</p>
+                <small id="setup-story-failure">No invalidation branch is available yet.</small>
+              </article>
+            </div>
+            <footer class="market-story-action" id="setup-story-action">
+              <i aria-hidden="true"></i>
+              <span>NO ALLOCATION · WAITING FOR EVENT VALIDITY</span>
+            </footer>
           </section>
           <div class="setup-provenance" id="setup-provenance" aria-label="Measured level provenance">
             <span class="setup-provenance-chip" id="setup-entry-source-val">ENTRY SOURCE · —</span>
@@ -920,6 +960,83 @@
           </div>
           <div class="signal-history-list" id="signal-history-list">
             <div class="monitor-empty">No published signals yet.</div>
+          </div>
+        </div>
+
+
+
+
+        <!-- RISK CALCULATOR CARD -->
+        <div class="card risk-card">
+          <h3>Risk & Position Size Calculator</h3>
+          <div class="risk-info-grid" id="risk-info-display">
+            <div class="risk-metric">
+              <span class="label">Side</span>
+              <span class="value" id="risk-side">-</span>
+            </div>
+            <div class="risk-metric">
+              <span class="label">Entry Ref</span>
+              <span class="value font-mono" id="risk-entry">-</span>
+            </div>
+            <div class="risk-metric">
+              <span class="label">Calculated Stop</span>
+              <span class="value font-mono" id="risk-stop">-</span>
+            </div>
+            <div class="risk-metric">
+              <span class="label">Calculated Target</span>
+              <span class="value font-mono" id="risk-target">-</span>
+            </div>
+          </div>
+
+          <div class="stop-loss-selector">
+            <span class="label">Stop Method:</span>
+            <div class="selector-options">
+              <label class="radio-label">
+                <input type="radio" name="stop-method" id="stop-method-retail" value="retail" checked />
+                <span class="radio-btn"></span>
+                <span>AI Target Stop</span>
+              </label>
+              <label class="radio-label">
+                <input type="radio" name="stop-method" id="stop-method-smart" value="smart" />
+                <span class="radio-btn"></span>
+                <span>Smart Wall Stop (<span id="wall-price-display" class="font-mono">-</span>)</span>
+              </label>
+            </div>
+          </div>
+
+          <div class="risk-calculator-inputs">
+            <div class="input-inline">
+              <label for="acc-size-input">Capital Size ($)</label>
+              <input type="number" id="acc-size-input" value="1000" min="10" step="10" />
+            </div>
+            <div class="input-inline">
+              <label for="risk-pct-input">Max Risk (%)</label>
+              <input type="number" id="risk-pct-input" value="0.5" min="0.1" max="10" step="0.1" />
+            </div>
+          </div>
+
+          <!-- KELLY SIZING WITH RAG MEMORY -->
+          <div class="kelly-toggle-container">
+            <label for="kelly-toggle" class="toggle-label">
+              <span>Apply RAG Kelly Sizing</span>
+              <input type="checkbox" id="kelly-toggle" />
+              <span class="slider"></span>
+            </label>
+            <div class="kelly-recommendation hidden" id="kelly-rec-box">
+              <span>Rec Sizing: <strong id="kelly-rec-val" class="font-mono">0.00%</strong></span>
+              <span class="kelly-status-badge" id="kelly-status-text">No History</span>
+            </div>
+          </div>
+
+          <div class="sizing-output" id="sizing-output-display">
+            <div class="sizing-row">
+              <span>Allowed Risk Amount:</span>
+              <strong id="risk-amt-val" class="font-mono">$0.00</strong>
+            </div>
+            <div class="sizing-row">
+              <span>Position Size Units:</span>
+              <strong id="sizing-units-val" class="font-mono">0.00 units</strong>
+            </div>
           </div>
         </div>
 
@@ -1428,7 +1545,7 @@
       };
     })();
   </script>
-  <script src="app.js"></script>
+  <script src="app.js?v=20260729-tape1"></script>
   <script>
     // Sci-Fi neural constellation background
     const canvas = document.getElementById('scifi-canvas');

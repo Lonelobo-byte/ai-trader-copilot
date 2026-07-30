@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSo
 from pydantic import BaseModel, Field
 
 from ..analysis_pipeline import run_full_analysis
-from ..data_sources.binance_public import BinancePublicClient, Candle
+from ..data_sources.binance_public import Candle
 from ..data_sources.data_aggregator import fetch_market_intelligence_cached
 from ..data_sources.binance_ws import BinanceWSSubscriber
 from ..settings import get_settings
@@ -100,7 +100,6 @@ async def research_capacity(user: User = Depends(require_active_subscription)):
 async def analyze(request: AnalyzeRequest, user: User = Depends(_reserved_rest_research_slot)):
     settings = get_settings()
     symbol = request.symbol.upper().strip()
-    client = BinancePublicClient(settings.binance_public_base_url)
 
     try:
         # Fetch one complete snapshot for the entire analysis. The snapshot

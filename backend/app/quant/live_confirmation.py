@@ -9,8 +9,14 @@ from time import time
 from typing import Any
 
 from app.data_sources.binance_public import Candle, completed_candles
-from app.indicators.liquidity import detect_liquidity_sweep
-from app.indicators.structure import classify_market_phase, find_swing_points
+from app.indicators.market_story import (
+    build_market_story,
+    evaluate_story_direction,
+    evaluate_story_playbook,
+    observable_liquidity_sweep,
+    observable_structure_events,
+)
+from app.indicators.structure import classify_market_phase
 from app.quant.market_context import build_volume_profile, build_vwap_context
 
 
@@ -48,21 +54,8 @@ def _rsi(prices: list[float], period: int = 14) -> float:
 
 
 def _observable_structure_events(candles: list[Candle]) -> dict[str, dict[str, Any]]:
-    """Read completed swing breaks without an indicator-derived trend gate."""
-    highs, lows = find_swing_points(candles, N=3)
-    if not highs or not lows:
-        unavailable = {"detected": False, "direction": "none", "reason": "insufficient_confirmed_swing_points"}
-        return {"bos": unavailable, "choch": unavailable.copy()}
-    close = _number(candles[-1].close)
-    if close > _number(highs[-1]["price"]):
-        bos = {"detected": True, "direction": "bullish", "broken_level": highs[-1]["price"], "current_close": close, "type": "BOS"}
-    elif close < _number(lows[-1]["price"]):
-        bos = {"detected": True, "direction": "bearish", "broken_level": lows[-1]["price"], "current_close": close, "type": "BOS"}
-    else:
-        bos = {"detected": False, "direction": "none", "reason": "no_completed_swing_break"}
-    # A CHoCH needs a confirmed historical swing sequence.  Do not invent one
-    # from a moving-average trend label; an explicit opposite BOS is the veto.
-    return {"bos": bos, "choch": {"detected": False, "direction": "none", "reason": "requires_historical_structure_sequence"}}
+    """Compatibility projection from the canonical completed-candle story."""
+    return observable_structure_events(build_market_story(candles))
 
 
 def apply_live_confirmation(candidate: dict[str, Any], live: dict[str, Any]) -> None:
@@ -73,32 +66,77 @@ def apply_live_confirmation(candidate: dict[str, Any], live: dict[str, Any]) -> 
     funding = _number(live.get("funding_rate"))
     oi_change = live.get("oi_change_pct")
     spread_bps = live.get("spread_bps")
-    multi_venue = live.get("multi_venue") if isinstance(live.get("multi_venue"), dict) else {}
-    cross_venue_confirmed = bool(multi_venue.get("flow_confirmed"))
-    cross_venue_consensus = str(multi_venue.get("flow_consensus", "UNAVAILABLE")).upper()
-    opposite_direction = "BEARISH" if direction == "BULLISH" else "BULLISH"
-    cross_venue_opposed = cross_venue_confirmed and cross_venue_consensus == opposite_direction
-    quote_stability = multi_venue.get("displayed_liquidity_stability", {}) or {}
-    quote_stability_status = str(quote_stability.get("status", "UNAVAILABLE")).upper()
-    displayed_liquidity_stable = not bool(quote_stability.get("publication_veto"))
-    cross_venue_status = (
-        "UNAVAILABLE"
-        if not cross_venue_confirmed
-        else "OPPOSED"
-        if cross_venue_opposed
-        else "SUPPORTIVE"
-        if cross_venue_consensus == direction
-        else cross_venue_consensus
+    execution_tape = (
+        live.get("execution_tape")
+        if isinstance(live.get("execution_tape"), dict)
+        else live.get("multi_venue")
+        if isinstance(live.get("multi_venue"), dict)
+        else {}
     )
-
+    actual_flow = execution_tape.get("actual_flow", {}) or {}
+    tape_available = bool(actual_flow.get("available"))
+    tape_bias = str(actual_flow.get("bias", "UNAVAILABLE")).upper()
+    tape_verdict = str(actual_flow.get("status", "UNAVAILABLE")).upper()
+    opposite_direction = "BEARISH" if direction == "BULLISH" else "BULLISH"
+    tape_opposed = tape_available and tape_bias == opposite_direction
+    tape_direction_confirmed = (
+        tape_available
+        and tape_bias == direction
+        and (
+            (direction == "BULLISH" and tape_verdict == "BUYING_CONFIRMED")
+            or (direction == "BEARISH" and tape_verdict == "SELLING_CONFIRMED")
+        )
+    )
+    quote_stability = execution_tape.get("displayed_liquidity_stability", {}) or {}
+    quote_stability_status = str(quote_stability.get("status", "UNAVAILABLE")).upper()
+    context_actionability = ((candidate.get("market_context") or {}).get("actionability") or {})
+    market_story_evaluated = context_actionability.get("actionable") is not None
+    market_story_actionable = bool(context_actionability.get("actionable")) if market_story_evaluated else True
+    story_event = (
+        context_actionability.get("aligned_event")
+        or context_actionability.get("selected_event")
+        or {}
+    )
+    story_event_level = _number(story_event.get("break_level"))
+    story_event_atr = _number(story_event.get("atr_at_event"))
+    live_price = _number(live.get("current_price"))
+    story_event_direction = str(story_event.get("direction", "")).upper()
+    story_live_location_evaluated = bool(
+        market_story_evaluated
+        and live_price > 0
+        and story_event_level > 0
+        and story_event_atr > 0
+        and story_event_direction == direction
+    )
+    story_live_distance_atr = (
+        (live_price - story_event_level) / story_event_atr
+        if story_live_location_evaluated and direction == "BULLISH"
+        else (story_event_level - live_price) / story_event_atr
+        if story_live_location_evaluated
+        else None
+    )
+    story_live_location_not_chased = (
+        story_live_distance_atr <= 2.5
+        if story_live_distance_atr is not None
+        else not candidate.get("causal_radar") or not market_story_evaluated
+    )
+    structure_confirmation = candidate.get("structure_confirmation") or {}
+    structure_gate_evaluated = "passed" in structure_confirmation
+    structure_gate_passed = bool(structure_confirmation.get("passed")) if structure_gate_evaluated else True
     depth_aligned = (
         imbalance is not None
         and ((direction == "BULLISH" and imbalance >= 0.02) or (direction == "BEARISH" and imbalance <= -0.02))
     )
-    flow_aligned = (
+    legacy_flow_aligned = (
         taker_ratio is not None
-        and ((direction == "BULLISH" and taker_ratio >= 1.02) or (direction == "BEARISH" and taker_ratio <= 0.98))
+        and (
+            (direction == "BULLISH" and taker_ratio >= 1.02)
+            or (direction == "BEARISH" and taker_ratio <= 0.98)
+        )
     )
+    # Prefer the live normalized taker tape. The candle/REST taker ratio is
+    # only a fallback while no public tape source has completed warm-up.
+    flow_aligned = tape_direction_confirmed if tape_available else legacy_flow_aligned
     price_change = live.get("price_change_pct")
     positioning_aligned = (
         oi_change is not None and abs(_number(oi_change)) >= 0.10
@@ -143,36 +181,67 @@ def apply_live_confirmation(candidate: dict[str, Any], live: dict[str, Any]) -> 
         "price_oi_aligned": positioning_aligned,
         "funding_not_crowded": not crowded,
         "execution_evidence_confirmed": execution_evidence_confirmed,
-        "cross_venue_not_opposed": not cross_venue_opposed,
-        "displayed_liquidity_stable": displayed_liquidity_stable,
+        "actual_flow_aligned": flow_aligned,
+        "actual_flow_not_opposed": not tape_opposed,
         "execution_capacity_sufficient": execution_capacity_sufficient,
+        "market_story_actionable": market_story_actionable,
+        "market_story_live_location_not_chased": story_live_location_not_chased,
+        "shared_structure_playbook_passed": structure_gate_passed,
     }
     risk_flags = candidate.setdefault("risk_flags", [])
     messages = {
         "data_complete": "Live depth, funding, open-interest, or taker-flow data is incomplete.",
         "spread_within_limit": "Live spread exceeds the execution-quality limit.",
         "depth_aligned": "Displayed 20-level order-book depth does not support the proposed direction (a snapshot only; not used as a standalone veto).",
-        "taker_flow_aligned": "Recent taker buy/sell flow does not support the proposed direction.",
+        "taker_flow_aligned": "Measured market-order aggression does not support the proposed direction.",
         "price_oi_aligned": "Price and open interest do not form an aligned positioning regime.",
         "funding_not_crowded": "Funding is crowded in the proposed direction; squeeze/flush risk is elevated.",
-        "execution_evidence_confirmed": "Aggressive flow and price/OI positioning are not jointly aligned.",
-        "cross_venue_not_opposed": "Healthy Bybit/Coinbase aggressive flow is aligned against the proposed direction.",
-        "displayed_liquidity_stable": "Incremental Bybit and Coinbase books both show elevated displayed-liquidity instability.",
+        "execution_evidence_confirmed": "Actual aggressor flow and price/OI positioning are not jointly aligned.",
+        "actual_flow_aligned": (
+            f"Binance/Bybit execution tape is {tape_verdict.lower().replace('_', ' ')} "
+            f"with {tape_bias.lower()} pressure; confirmed {direction.lower()} aggression is required."
+        ),
+        "actual_flow_not_opposed": "The normalized execution tape is actively opposed to the proposed direction.",
         "execution_capacity_sufficient": "Planned notional exceeds 10% of the displayed 20-level opposing-side depth.",
+        "market_story_actionable": (
+            f"Completed-candle market story is {context_actionability.get('state', 'not actionable')}: "
+            f"{context_actionability.get('reason') or 'the original entry is no longer available.'}"
+        ),
+        "market_story_live_location_not_chased": (
+            f"Live price is {story_live_distance_atr:.2f} event ATR beyond the completed-candle "
+            "level; the Radar review location has moved away."
+            if story_live_distance_atr is not None
+            else "Live price could not be reconciled to the originating completed-candle event."
+        ),
+        "shared_structure_playbook_passed": (
+            f"Shared structure playbook is not ready: "
+            f"{structure_confirmation.get('reason') or 'event quality or higher-timeframe alignment is incomplete.'}"
+        ),
     }
     required_names = (
-        "data_complete", "spread_within_limit", "taker_flow_aligned",
-        "price_oi_aligned", "funding_not_crowded",
-        "execution_evidence_confirmed", "cross_venue_not_opposed",
-        "displayed_liquidity_stable", "execution_capacity_sufficient",
+        "data_complete", "spread_within_limit", "funding_not_crowded",
+        "execution_evidence_confirmed", "execution_capacity_sufficient",
     )
+    if candidate.get("causal_radar") and market_story_evaluated:
+        required_names = (
+            *required_names,
+            "market_story_actionable",
+            "market_story_live_location_not_chased",
+        )
+    if candidate.get("causal_radar") and structure_gate_evaluated:
+        required_names = (*required_names, "shared_structure_playbook_passed")
     required_checks = {key: checks[key] for key in required_names}
     risk_flags.extend(message for key, message in messages.items() if key in required_checks and not checks[key])
     supporting_warnings = [messages["depth_aligned"]] if not depth_aligned else []
-    if cross_venue_status == "UNAVAILABLE":
-        supporting_warnings.append("Cross-venue public flow is partial or unavailable; it was not counted as neutral confirmation.")
-    elif cross_venue_status in {"MIXED", "NEUTRAL"}:
-        supporting_warnings.append(f"Cross-venue public flow is {cross_venue_status.lower()}, so it adds no directional confirmation.")
+    if not tape_available:
+        supporting_warnings.append(
+            "The Binance/Bybit execution tape is warming or unavailable; completed taker-volume evidence is being used as a fallback."
+        )
+    elif not tape_direction_confirmed:
+        supporting_warnings.append(
+            f"Actual-flow verdict is {tape_verdict.lower().replace('_', ' ')}; "
+            "aggression without matching price progress is not directional confirmation."
+        )
     if quote_stability_status == "UNAVAILABLE":
         supporting_warnings.append(
             "Incremental quote stability is not yet qualified; spoofing cannot be inferred from the available public data."
@@ -190,6 +259,19 @@ def apply_live_confirmation(candidate: dict[str, Any], live: dict[str, Any]) -> 
         "depth_evidence": "SUPPORTIVE" if depth_aligned else "CONTRADICTORY_SNAPSHOT",
         "supporting_warnings": supporting_warnings,
         "live_points": live_points,
+        "market_story_live_location": {
+            "evaluated": story_live_location_evaluated,
+            "current_price": live_price if live_price > 0 else None,
+            "event_level": story_event_level if story_event_level > 0 else None,
+            "event_atr": story_event_atr if story_event_atr > 0 else None,
+            "distance_atr": (
+                round(story_live_distance_atr, 3)
+                if story_live_distance_atr is not None
+                else None
+            ),
+            "maximum_distance_atr": 2.5,
+            "passed": story_live_location_not_chased,
+        },
         "execution_capacity": {
             "evaluated": execution_capacity_evaluated,
             "planned_notional_usd": round(planned_notional, 2),
@@ -197,12 +279,24 @@ def apply_live_confirmation(candidate: dict[str, Any], live: dict[str, Any]) -> 
             "maximum_notional_at_10pct_depth": round(opposing_depth * 0.10, 2),
         },
         "displayed_liquidity_stability": quote_stability,
-        "cross_venue_evidence": {
-            "status": cross_venue_status,
-            "confirmed": cross_venue_confirmed,
-            "consensus": cross_venue_consensus,
-            "flow_score": multi_venue.get("flow_score"),
-            "fresh_venue_count": multi_venue.get("fresh_venue_count", 0),
+        "actual_flow_evidence": {
+            "available": tape_available,
+            "status": tape_verdict,
+            "bias": tape_bias,
+            "aligned": tape_direction_confirmed,
+            "active_aggressor": actual_flow.get("active_aggressor", "UNAVAILABLE"),
+            "buy_notional": actual_flow.get("buy_notional"),
+            "sell_notional": actual_flow.get("sell_notional"),
+            "net_delta_usd": actual_flow.get("net_delta_usd"),
+            "cvd_trend": actual_flow.get("cvd_trend", "UNAVAILABLE"),
+            "price_response": actual_flow.get("price_response", "UNAVAILABLE"),
+            "absorption": actual_flow.get("absorption", "NOT_DETECTED"),
+            "exhaustion": actual_flow.get("exhaustion", "NONE"),
+            "confidence": actual_flow.get("confidence", "UNAVAILABLE"),
+            "cross_market_alignment": actual_flow.get(
+                "cross_market_alignment", "UNAVAILABLE"
+            ),
+            "qualified_source_count": actual_flow.get("qualified_source_count", 0),
         },
     }
     accepted = all(required_checks.values()) and candidate["score"] >= (65 if candidate.get("causal_radar") else 75)
@@ -232,6 +326,44 @@ def verify_main_signal_snapshot(
         "completed_higher_candles": len(higher) >= 55,
     }
     risk_flags: list[str] = []
+    # Build observational evidence before the directional fail-closed branch.
+    # A HOLD/NEUTRAL result still needs to explain the completed-candle phase,
+    # structure, liquidity event and participation visible to the researcher.
+    primary_phase = classify_market_phase(primary) if structure_checks["completed_primary_candles"] else "UNAVAILABLE"
+    higher_phase = classify_market_phase(higher) if structure_checks["completed_higher_candles"] else "UNAVAILABLE"
+    latest = primary[-1] if primary else None
+    candle_range = (
+        max(_number(latest.high) - _number(latest.low), 1e-12)
+        if latest is not None else 0.0
+    )
+    body_ratio = (
+        abs(_number(latest.close) - _number(latest.open)) / candle_range
+        if latest is not None and candle_range > 0 else 0.0
+    )
+    average_volume = (
+        sum(_number(c.quote_volume) for c in primary[-21:-1]) / 20.0
+        if len(primary) >= 21 else 0.0
+    )
+    rvol = (
+        _number(latest.quote_volume) / average_volume
+        if latest is not None and average_volume > 0 else 0.0
+    )
+    primary_story = build_market_story(primary) if primary else {
+        "available": False,
+        "current_state": "UNAVAILABLE",
+        "structure_events": [],
+        "liquidity_events": [],
+    }
+    higher_story = build_market_story(higher) if structure_checks["completed_higher_candles"] else {
+        "available": False,
+        "current_state": "UNAVAILABLE",
+        "structure_events": [],
+        "liquidity_events": [],
+    }
+    events = observable_structure_events(primary_story)
+    bos, choch = events["bos"], events["choch"]
+    observed_sweep = primary_story.get("latest_liquidity_event") or {}
+    observed_event = primary_story.get("latest_event") or {}
     # Tactical observation is allowed to evaluate a valid primary-timeframe
     # setup without demanding a higher-timeframe confirmation. It still fails
     # closed if there is no direction or no completed primary structure.
@@ -245,30 +377,72 @@ def verify_main_signal_snapshot(
             "passed": False, "status": "STRUCTURE_REJECTED", "quality_badge": "STRUCTURE CHECK FAILED",
             "structure_checks": structure_checks, "live_checks": {}, "risk_flags": risk_flags,
             "reason": risk_flags[0], "evaluation_mode": "causal_regime_aware_live_confirmation",
+            "metrics": {
+                "playbook": "NONE",
+                "primary_phase": primary_phase,
+                "higher_phase": higher_phase,
+                "rvol": round(rvol, 2),
+                "body_ratio": round(body_ratio, 3),
+                "event_rvol": round(_number(observed_event.get("relative_volume", rvol)), 2),
+                "event_body_ratio": round(_number(observed_event.get("body_ratio", body_ratio)), 3),
+                "sweep": observed_sweep,
+                "bos": bos,
+                "choch": choch,
+                "selected_structure_event": observed_event,
+                "structure_story": {
+                    "schema_version": "structure_story.v1",
+                    "primary_latest_event": primary_story.get("latest_event"),
+                    "higher_latest_event": higher_story.get("latest_event"),
+                    "setup_state": primary_story.get("current_state", "NO_ACTIVE_EVENT"),
+                },
+            },
+            "structure_story": {
+                "schema_version": "structure_story.v1",
+                "primary": primary_story,
+                "higher": higher_story,
+                "setup_state": primary_story.get("current_state", "NO_ACTIVE_EVENT"),
+            },
             "scenarios": {
                 "institutional": {"passed": False, "status": "UNAVAILABLE", "reason": risk_flags[0]},
                 "tactical": {"passed": False, "candidate": False, "status": "UNAVAILABLE", "reason": risk_flags[0]},
             },
         }
 
-    primary_phase = classify_market_phase(primary)
-    higher_phase = classify_market_phase(higher) if structure_checks["completed_higher_candles"] else "UNAVAILABLE"
     phase_direction = {"MARKUP": "BULLISH", "ACCUMULATION": "BULLISH", "MARKDOWN": "BEARISH", "DISTRIBUTION": "BEARISH"}
     primary_direction = phase_direction.get(primary_phase, "NEUTRAL")
     higher_direction = phase_direction.get(higher_phase, "NEUTRAL")
-    prior_high = max(_number(c.high) for c in primary[-21:-1])
-    prior_low = min(_number(c.low) for c in primary[-21:-1])
-    latest = primary[-1]
-    candle_range = max(_number(latest.high) - _number(latest.low), 1e-12)
-    body_ratio = abs(_number(latest.close) - _number(latest.open)) / candle_range
     close_location = ((_number(latest.close) - _number(latest.low)) / candle_range if direction == "BULLISH"
                       else (_number(latest.high) - _number(latest.close)) / candle_range)
-    average_volume = sum(_number(c.quote_volume) for c in primary[-21:-1]) / 20.0
-    rvol = _number(latest.quote_volume) / average_volume if average_volume > 0 else 0.0
-    events = _observable_structure_events(primary)
-    bos, choch = events["bos"], events["choch"]
-    choch_opposes = bool(choch.get("detected")) and choch.get("direction") != direction.lower()
-    breakout = _number(latest.close) > prior_high if direction == "BULLISH" else _number(latest.close) < prior_low
+    story_view = evaluate_story_direction(primary_story, direction)
+    higher_story_view = evaluate_story_direction(higher_story, direction)
+    aligned_structure_event = story_view.get("aligned_structure_event") or {}
+    aligned_liquidity_event = story_view.get("aligned_liquidity_event") or {}
+    opposing_event = story_view.get("opposing_event") or {}
+    structure_opposed = (
+        bool(opposing_event)
+        and int(opposing_event.get("event_index", -1))
+        > int(aligned_structure_event.get("event_index", -1))
+    )
+    sweep_opposed = (
+        bool(opposing_event)
+        and int(opposing_event.get("event_index", -1))
+        > int(aligned_liquidity_event.get("event_index", -1))
+    )
+    structure_event_actionable = (
+        bool(aligned_structure_event.get("detected"))
+        and bool(aligned_structure_event.get("actionable"))
+        and not structure_opposed
+    )
+    breakout = structure_event_actionable
+    event_rvol = _number(aligned_structure_event.get("relative_volume"))
+    event_body_ratio = _number(aligned_structure_event.get("body_ratio"))
+    event_close_location = _number(aligned_structure_event.get("close_location"))
+    higher_opposing_event = higher_story_view.get("opposing_event") or {}
+    higher_structure_opposed = (
+        bool(higher_opposing_event)
+        and int(higher_opposing_event.get("event_index", -1))
+        > int((higher_story_view.get("aligned_event") or {}).get("event_index", -1))
+    )
     trend_playbook = primary_direction == direction and higher_direction == direction
     # A lower-timeframe accumulation/distribution phase can be the internal
     # auction of a higher-timeframe range.  It is not trend alignment, but it
@@ -280,14 +454,36 @@ def verify_main_signal_snapshot(
         and primary_phase in {"RANGING", "ACCUMULATION", "DISTRIBUTION"}
         and primary_direction in {"NEUTRAL", direction}
     )
-    sweep = detect_liquidity_sweep(primary)
+    sweep = observable_liquidity_sweep(primary_story)
     vwap = build_vwap_context(primary)
     profile = build_volume_profile(primary)
-    sweep_aligned = bool(sweep.get("detected")) and str(sweep.get("direction", "")).startswith(direction.lower())
+    sweep_aligned = (
+        bool(aligned_liquidity_event.get("detected"))
+        and bool(aligned_liquidity_event.get("actionable"))
+        and not sweep_opposed
+    )
     expected_vwap = "ABOVE_ALL" if direction == "BULLISH" else "BELOW_ALL"
     expected_profile = "ABOVE_POC_ACCEPTANCE" if direction == "BULLISH" else "BELOW_POC_ACCEPTANCE"
     vwap_aligned = bool(vwap.get("available")) and vwap.get("price_relation") == expected_vwap
     profile_aligned = bool(profile.get("available")) and profile.get("location") == expected_profile
+    institutional_story_playbook = evaluate_story_playbook(
+        primary_story=primary_story,
+        higher_story=higher_story,
+        direction=direction,
+        primary_phase=primary_phase,
+        higher_phase=higher_phase,
+        vwap_context=vwap,
+        volume_profile=profile,
+    )
+    tactical_story_playbook = evaluate_story_playbook(
+        primary_story=primary_story,
+        higher_story=None,
+        direction=direction,
+        primary_phase=primary_phase,
+        vwap_context=vwap,
+        volume_profile=profile,
+        require_higher_timeframe=False,
+    )
 
     # This is the primary-timeframe scenario. It is intentionally strict on
     # measured structure and live execution, but it does not turn an HTF
@@ -295,7 +491,7 @@ def verify_main_signal_snapshot(
     tactical_structure_checks: dict[str, bool] = {
         "directional_plan": structure_checks["directional_plan"],
         "completed_primary_candles": structure_checks["completed_primary_candles"],
-        "structure_not_opposed": not choch_opposes,
+        "structure_not_opposed": True,
     }
     tactical_risk_flags: list[str] = []
     if primary_direction == direction:
@@ -303,15 +499,21 @@ def verify_main_signal_snapshot(
         tactical_structure_checks.update({
             "primary_trend_aligned": True,
             "confirmed_completed_breakout": breakout,
-            "relative_volume_confirmed": rvol >= 1.5,
-            "decisive_candle": body_ratio >= 0.55 and close_location >= 0.60,
+            "recent_structure_event_actionable": structure_event_actionable,
+            "relative_volume_confirmed": event_rvol >= 1.5,
+            "decisive_candle": event_body_ratio >= 0.55 and event_close_location >= 0.60,
+            "structure_not_opposed": not structure_opposed,
+            "shared_story_playbook_passed": tactical_story_playbook["passed"],
         })
         if not breakout:
-            tactical_risk_flags.append("Primary timeframe has not closed through the relevant 20-candle structure level.")
-        if rvol < 1.5:
-            tactical_risk_flags.append(f"Primary relative volume {rvol:.2f}x is below the 1.50x tactical threshold.")
-        if body_ratio < 0.55 or close_location < 0.60:
-            tactical_risk_flags.append("Primary continuation candle lacks decisive body or close location.")
+            tactical_risk_flags.append(
+                f"Primary market story is {story_view.get('state', 'unavailable')}: "
+                f"{story_view.get('reason') or 'no fresh actionable structure event is available.'}"
+            )
+        if event_rvol < 1.5:
+            tactical_risk_flags.append(f"Structure-event relative volume {event_rvol:.2f}x is below the 1.50x tactical threshold.")
+        if event_body_ratio < 0.55 or event_close_location < 0.60:
+            tactical_risk_flags.append("The originating structure-event candle lacks decisive body or close location.")
     elif primary_phase in {"RANGING", "ACCUMULATION", "DISTRIBUTION"} and primary_direction in {"NEUTRAL", direction}:
         tactical_playbook = "PRIMARY_RANGE_SWEEP_REVERSAL"
         tactical_structure_checks.update({
@@ -319,6 +521,8 @@ def verify_main_signal_snapshot(
             "liquidity_sweep_aligned": sweep_aligned,
             "vwap_acceptance_aligned": vwap_aligned,
             "profile_acceptance_aligned": profile_aligned,
+            "structure_not_opposed": not sweep_opposed,
+            "shared_story_playbook_passed": tactical_story_playbook["passed"],
         })
         if not sweep_aligned:
             tactical_risk_flags.append(f"No completed {direction.lower()} primary-timeframe liquidity-sweep reversal is present.")
@@ -338,16 +542,24 @@ def verify_main_signal_snapshot(
         structure_checks.update({
             "trend_regime_aligned": True,
             "confirmed_completed_breakout": breakout,
-            "relative_volume_confirmed": rvol >= 1.5,
-            "decisive_candle": body_ratio >= 0.55 and close_location >= 0.60,
-            "structure_not_opposed": not choch_opposes,
+            "recent_structure_event_actionable": structure_event_actionable,
+            "relative_volume_confirmed": event_rvol >= 1.5,
+            "decisive_candle": event_body_ratio >= 0.55 and event_close_location >= 0.60,
+            "structure_not_opposed": not structure_opposed,
+            "higher_structure_not_opposed": not higher_structure_opposed,
+            "shared_story_playbook_passed": institutional_story_playbook["passed"],
         })
         if not structure_checks["confirmed_completed_breakout"]:
-            risk_flags.append("Latest completed candle has not closed through the relevant 20-candle structure level.")
+            risk_flags.append(
+                f"Completed-candle market story is {story_view.get('state', 'unavailable')}: "
+                f"{story_view.get('reason') or 'no fresh actionable structure event is available.'}"
+            )
         if not structure_checks["relative_volume_confirmed"]:
-            risk_flags.append(f"Relative volume {rvol:.2f}x is below the 1.50x continuation threshold.")
+            risk_flags.append(f"Structure-event relative volume {event_rvol:.2f}x is below the 1.50x continuation threshold.")
         if not structure_checks["decisive_candle"]:
-            risk_flags.append("Latest completed continuation candle lacks decisive body/close location.")
+            risk_flags.append("The originating structure-event candle lacks decisive body/close location.")
+        if not structure_checks["higher_structure_not_opposed"]:
+            risk_flags.append("A newer higher-timeframe structure event opposes the proposed direction.")
     elif range_playbook:
         # A range is not a failed trend.  It gets its own strict, causal
         # playbook: a completed sweep back inside the range, then acceptance
@@ -365,7 +577,9 @@ def verify_main_signal_snapshot(
             "liquidity_sweep_aligned": sweep_aligned,
             "vwap_acceptance_aligned": vwap_aligned,
             "profile_acceptance_aligned": profile_aligned,
-            "structure_not_opposed": not choch_opposes,
+            "structure_not_opposed": not sweep_opposed,
+            "higher_structure_not_opposed": not higher_structure_opposed,
+            "shared_story_playbook_passed": institutional_story_playbook["passed"],
         })
         if not sweep_aligned:
             risk_flags.append(
@@ -375,6 +589,8 @@ def verify_main_signal_snapshot(
             risk_flags.append(f"Range reversal has not accepted {expected_vwap.replace('_', ' ').lower()}.")
         if not profile_aligned:
             risk_flags.append(f"Range reversal has not accepted {expected_profile.replace('_', ' ').lower()}.")
+        if not structure_checks["higher_structure_not_opposed"]:
+            risk_flags.append("A newer higher-timeframe structure event opposes the proposed direction.")
     else:
         playbook = "NONE"
         structure_checks.update({"approved_regime_playbook": False})
@@ -398,15 +614,21 @@ def verify_main_signal_snapshot(
         and "funding_rate" in funding
         and not funding.get("error")
     )
+    execution_tape = multi_venue or {}
+    tape_flow_ready = bool((execution_tape.get("actual_flow") or {}).get("available"))
+    taker_flow_ready = bool(taker.get("available")) or tape_flow_ready
     live = {
-        "data_complete": bool(bids and asks and funding_available and oi_history.get("available") and taker.get("available")),
+        "data_complete": bool(
+            bids and asks and funding_available
+            and oi_history.get("available") and taker_flow_ready
+        ),
         "depth_imbalance": (bid_notional - ask_notional) / (bid_notional + ask_notional) if bid_notional + ask_notional else None,
         "spread_bps": (best_ask - best_bid) / midpoint * 10_000 if midpoint else None,
         "funding_rate": _number(funding.get("funding_rate")),
         "oi_change_pct": _number(oi_history.get("oi_change_pct")) if oi_history.get("available") else None,
         "price_change_pct": ((_number(primary[-1].close) - _number(primary[-6].close)) / _number(primary[-6].close) * 100.0) if _number(primary[-6].close) else 0.0,
         "taker_buy_sell_ratio": _number(taker.get("ratio", taker.get("buy_sell_ratio"))) if taker.get("available") else None,
-        "multi_venue": multi_venue or {},
+        "execution_tape": execution_tape,
         "planned_notional_usd": _number(planned_notional_usd),
         "opposing_depth_notional": ask_notional if direction == "BULLISH" else bid_notional,
     }
@@ -414,20 +636,33 @@ def verify_main_signal_snapshot(
         "order_book": bool(bids and asks),
         "funding": funding_available,
         "oi_history": bool(oi_history.get("available")),
-        "taker_flow": bool(taker.get("available")),
+        "taker_flow": taker_flow_ready,
     }
     publication_coverage = {
         "ready": all(coverage_requirements.values()),
+        "inputs_complete": all(coverage_requirements.values()),
+        "confirmation_ready": False,
         "requirements": coverage_requirements,
         "missing": [name for name, available in coverage_requirements.items() if not available],
-        "label": "PUBLICATION DATA READY" if all(coverage_requirements.values()) else "PUBLICATION DATA PARTIAL",
+        "label": "PUBLICATION INPUTS COMPLETE" if all(coverage_requirements.values()) else "PUBLICATION INPUTS PARTIAL",
+        "taker_flow_source": (
+            "live_execution_tape"
+            if tape_flow_ready
+            else "binance_rest_taker_fallback"
+            if taker.get("available")
+            else "unavailable"
+        ),
         "supplemental": {
-            "multi_venue_flow": {
-                "ready": bool((multi_venue or {}).get("flow_confirmed")),
-                "status": (multi_venue or {}).get("status", "UNAVAILABLE"),
-                "consensus": (multi_venue or {}).get("flow_consensus", "UNAVAILABLE"),
+            "execution_tape": {
+                "ready": tape_flow_ready,
+                "status": (execution_tape.get("actual_flow") or {}).get(
+                    "status", "UNAVAILABLE"
+                ),
+                "bias": (execution_tape.get("actual_flow") or {}).get(
+                    "bias", "UNAVAILABLE"
+                ),
             },
-            "displayed_liquidity_stability": (multi_venue or {}).get(
+            "displayed_liquidity_stability": execution_tape.get(
                 "displayed_liquidity_stability",
                 {"status": "UNAVAILABLE", "publication_veto": False},
             ),
@@ -437,6 +672,17 @@ def verify_main_signal_snapshot(
     apply_live_confirmation(candidate, live)
     live_checks = candidate["advanced_confirmation"]["checks"]
     passed = all(structure_checks.values()) and candidate["status"] == "LIVE_CONFIRMED_REVIEW"
+    publication_coverage.update({
+        "confirmation_ready": passed,
+        "signal_publication_ready": passed,
+        "confirmation_status": (
+            "CONFIRMED"
+            if passed
+            else "AWAITED"
+            if publication_coverage["inputs_complete"]
+            else "INPUTS_PARTIAL"
+        ),
+    })
     status = "LIVE_CONFIRMED_REVIEW" if passed else ("STRUCTURE_REJECTED" if not all(structure_checks.values()) else "LIVE_CONFIRMATION_REJECTED")
     tactical_candidate = {
         "symbol": symbol, "direction": direction,
@@ -469,11 +715,38 @@ def verify_main_signal_snapshot(
             "higher_direction": higher_direction,
             "rvol": round(rvol, 2),
             "body_ratio": round(body_ratio, 3),
+            "event_rvol": round(event_rvol, 2),
+            "event_body_ratio": round(event_body_ratio, 3),
+            "event_close_location": round(event_close_location, 3),
             "sweep": sweep,
             "vwap": vwap,
             "volume_profile": profile,
             "bos": bos,
             "choch": choch,
+            "selected_structure_event": aligned_structure_event,
+            "structure_confirmation": institutional_story_playbook,
+            "tactical_structure_confirmation": tactical_story_playbook,
+            "structure_story": {
+                "schema_version": "structure_story.v1",
+                "directional_view": story_view,
+                "higher_directional_view": higher_story_view,
+                "primary_latest_event": primary_story.get("latest_event"),
+                "higher_latest_event": higher_story.get("latest_event"),
+                "setup_state": story_view.get("state", "NO_ACTIVE_EVENT"),
+            },
+        },
+        "structure_story": {
+            "schema_version": "structure_story.v1",
+            "primary": primary_story,
+            "higher": higher_story,
+            "directional_view": story_view,
+            "higher_directional_view": higher_story_view,
+            "alignment": {
+                "phase_aligned": higher_direction == direction,
+                "higher_structure_opposed": higher_structure_opposed,
+                "direction": direction,
+            },
+            "setup_state": story_view.get("state", "NO_ACTIVE_EVENT"),
         },
         "live_evidence": candidate["advanced_confirmation"],
         "publication_coverage": publication_coverage,
@@ -490,6 +763,11 @@ def verify_main_signal_snapshot(
             "playbook": playbook,
             "higher_timeframe_aligned": higher_direction == direction,
             "higher_timeframe_state": higher_phase,
+            "market_story_state": story_view.get("state", "NO_ACTIVE_EVENT"),
+            "market_story_actionable": bool(story_view.get("actionable")),
+            "market_story_reason": story_view.get("reason"),
+            "selected_event": institutional_story_playbook.get("selected_event"),
+            "structure_confirmation": institutional_story_playbook,
         },
         "tactical": {
             "passed": tactical_passed,
@@ -508,6 +786,11 @@ def verify_main_signal_snapshot(
             "playbook": tactical_playbook,
             "higher_timeframe_aligned": higher_direction == direction,
             "higher_timeframe_state": higher_phase,
+            "market_story_state": story_view.get("state", "NO_ACTIVE_EVENT"),
+            "market_story_actionable": bool(story_view.get("actionable")),
+            "market_story_reason": story_view.get("reason"),
+            "selected_event": tactical_story_playbook.get("selected_event"),
+            "structure_confirmation": tactical_story_playbook,
         },
     }
     return result

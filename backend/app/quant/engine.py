@@ -37,7 +37,12 @@ def build_quantitative_assessment(
             }
         )
     microstructure = analyze_microstructure(
-        order_book, candles, multi_venue=context_features.get("multi_venue", {})
+        order_book,
+        candles,
+        multi_venue=(
+            context_features.get("execution_tape")
+            or context_features.get("multi_venue", {})
+        ),
     )
     regime = classify_market_state(statistics, microstructure)
     probability = forecast_distribution(

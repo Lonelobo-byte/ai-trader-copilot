@@ -5,6 +5,7 @@ from app.brains.signal_lifecycle import (
     build_signal_seed,
     build_signal_view,
     evaluate_signal_approval,
+    market_story_matches_signal,
 )
 
 
@@ -31,6 +32,22 @@ def _ai():
             "pre_mortem_analyst": {"severity_score": 3},
         },
     }
+
+
+def _story_setup(event_id: str = "BOS:BULLISH:1:100") -> dict:
+    setup = _setup()
+    setup["market_story"] = {
+        "state": "ACTIONABLE_NOW",
+        "actionable": True,
+        "selected_event": {
+            "event_id": event_id,
+            "direction": "BULLISH",
+            "break_level": 100.0,
+            "atr_at_event": 1.0,
+            "state": "ACTIONABLE_NOW",
+        },
+    }
+    return setup
 
 
 def test_signal_requires_full_approval() -> None:
@@ -108,6 +125,23 @@ def test_final_publication_contract_rejects_missing_canonical_council_approval()
     assert any("canonical" in blocker.lower() for blocker in approval["blockers"])
 
 
+def test_publication_rechecks_live_quote_distance_from_originating_event() -> None:
+    approval = evaluate_signal_approval(
+        decision=_decision(),
+        trade_setup=_story_setup(),
+        risk_idea={"risk_reward": 2.0, "entry_zone_low": 99.5, "entry_zone_high": 100.5},
+        trend={"status": "bullish"},
+        momentum={"bias": "bullish"},
+        order_book={"pressure": "buyers"},
+        data_freshness={"passed": True},
+        liquidity={"passed": True},
+        ai_result=_ai(),
+        current_price=103.0,
+    )
+    assert approval["approved"] is False
+    assert any("3.00 ATR beyond" in blocker for blocker in approval["blockers"])
+
+
 def test_trade_setup_preserves_low_price_pair_precision() -> None:
     from app.brains.signal_builder import build_ai_driven_trade_setup
     from app.settings import get_settings
@@ -132,6 +166,77 @@ def test_trade_setup_preserves_low_price_pair_precision() -> None:
     assert setup["stop"]["selected"] == 0.00001183
     assert setup["entry"]["reference"] != 999.0
     assert setup["targets"]["tp1_1r"] > setup["entry"]["reference"]
+
+
+def test_signal_story_updates_require_origin_event_identity_and_direction() -> None:
+    now = datetime.now(timezone.utc)
+    seed = build_signal_seed(
+        symbol="BTCUSDT",
+        timeframe="15m",
+        decision=_decision(),
+        trade_setup=_story_setup("origin-event"),
+        approval={"side": "LONG"},
+        current_price=100.0,
+        context={},
+        ai_review=_ai(),
+        now=now,
+    )
+    assert seed["context"]["structure_event_id"] == "origin-event"
+    assert seed["context"]["structure_event_direction"] == "BULLISH"
+
+    unrelated_story = {
+        "state": "INVALIDATED",
+        "reason": "A newer unrelated setup failed.",
+        "selected_event": {
+            "event_id": "different-event",
+            "direction": "BULLISH",
+            "state": "INVALIDATED",
+        },
+    }
+    assert market_story_matches_signal(seed, unrelated_story) is False
+    unchanged = advance_signal(
+        seed,
+        current_price=100.0,
+        market_context={"market_story": unrelated_story},
+        now=now + timedelta(seconds=10),
+    )
+    assert unchanged["status"] == "PENDING_ENTRY"
+
+    wrong_direction_story = {
+        "state": "INVALIDATED",
+        "selected_event": {
+            "event_id": "origin-event",
+            "direction": "BEARISH",
+            "state": "INVALIDATED",
+        },
+    }
+    assert market_story_matches_signal(seed, wrong_direction_story) is False
+    still_unchanged = advance_signal(
+        unchanged,
+        current_price=100.0,
+        market_context={"market_story": wrong_direction_story},
+        now=now + timedelta(seconds=20),
+    )
+    assert still_unchanged["status"] == "PENDING_ENTRY"
+
+    origin_invalidated = {
+        "state": "INVALIDATED",
+        "reason": "The originating completed-candle event failed.",
+        "selected_event": {
+            "event_id": "origin-event",
+            "direction": "BULLISH",
+            "state": "INVALIDATED",
+        },
+    }
+    assert market_story_matches_signal(seed, origin_invalidated) is True
+    invalidated = advance_signal(
+        still_unchanged,
+        current_price=100.0,
+        market_context={"market_story": origin_invalidated},
+        now=now + timedelta(seconds=30),
+    )
+    assert invalidated["status"] == "INVALIDATED"
+    assert "originating" in invalidated["exit_reason"]
 
 
 def test_signal_advances_targets_and_locks_profit() -> None:
@@ -194,7 +299,7 @@ def test_legacy_tp3_signal_is_finalised_as_success() -> None:
     assert finalised["target_stage"] == 3
     assert "successful" in finalised["exit_reason"].lower()
 
-def test_signal_exits_when_stop_or_thesis_breaks() -> None:
+def test_signal_exits_at_stop_but_ignores_legacy_indicator_reversal() -> None:
     now = datetime.now(timezone.utc)
     seed = build_signal_seed(
         symbol="BTCUSDT",
@@ -217,7 +322,7 @@ def test_signal_exits_when_stop_or_thesis_breaks() -> None:
     left_zone = advance_signal(seed, current_price=101.0, now=now + timedelta(seconds=30))
     active = advance_signal(left_zone, current_price=100.0, now=now + timedelta(minutes=1))
 
-    invalidated = advance_signal(
+    unchanged = advance_signal(
         active,
         current_price=98.7,
         market_context={
@@ -227,5 +332,4 @@ def test_signal_exits_when_stop_or_thesis_breaks() -> None:
         },
         now=now + timedelta(minutes=1),
     )
-    assert invalidated["status"] == "INVALIDATED"
-    assert "reversed" in invalidated["exit_reason"].lower()
+    assert unchanged["status"] == "ACTIVE"

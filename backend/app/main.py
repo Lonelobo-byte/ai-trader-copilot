@@ -40,7 +40,10 @@ async def lifespan(app: FastAPI):
     from .db.database import init_db
     from .autonomous_scanner import autonomous_scanner_loop
     from .radar_service import radar_warm_loop
-    from .data_sources.multi_venue_ws import get_multi_venue_hub, multi_venue_market_data_loop
+    from .data_sources.execution_tape_ws import (
+        execution_tape_market_data_loop,
+        get_execution_tape_hub,
+    )
 
     settings = get_settings()
     if settings.app_env.lower() not in {"local", "test", "development"} and not settings.auth_jwt_secret:
@@ -61,8 +64,13 @@ async def lifespan(app: FastAPI):
     if settings.multi_venue_ws_enabled:
         # Validate endpoints/configuration synchronously so production cannot
         # start with a collector task that failed before its first await.
-        get_multi_venue_hub(settings)
-        tasks.append(asyncio.create_task(multi_venue_market_data_loop(), name="multi-venue-public-market-data"))
+        get_execution_tape_hub(settings)
+        tasks.append(
+            asyncio.create_task(
+                execution_tape_market_data_loop(),
+                name="binance-bybit-execution-tape",
+            )
+        )
     if settings.background_jobs_enabled:
         tasks.extend([
             asyncio.create_task(signal_monitor_loop()),

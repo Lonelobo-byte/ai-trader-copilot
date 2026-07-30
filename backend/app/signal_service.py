@@ -13,6 +13,7 @@ from app.brains.signal_lifecycle import (
     build_signal_seed,
     build_signal_view,
     evaluate_signal_approval,
+    market_story_matches_signal,
 )
 from app.db.database import AsyncSessionLocal
 from app.db.models import TradeSignal
@@ -125,6 +126,8 @@ async def reconcile_signal(
     liquidity: Mapping[str, Any],
     ai_result: Mapping[str, Any] | None,
     council_approval: Mapping[str, Any] | None = None,
+    execution_tape: Mapping[str, Any] | None = None,
+    causal_market_context: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Advance the open signal or publish exactly one new, fully approved signal."""
     key = (symbol, timeframe)
@@ -135,10 +138,11 @@ async def reconcile_signal(
             if len(_SIGNAL_LOCKS) < _MAX_SIGNAL_LOCKS:
                 break
     lock = _SIGNAL_LOCKS.setdefault(key, asyncio.Lock())
+    latest_market_story = trade_setup.get("market_story", {})
     market_context = {
-        "trend_status": trend.get("status"),
-        "momentum_bias": momentum.get("bias"),
-        "order_book_pressure": order_book.get("pressure"),
+        "market_story": latest_market_story,
+        "execution_tape": dict(execution_tape or {}),
+        "causal_market_context": dict(causal_market_context or {}),
     }
     async with lock:
         try:
@@ -159,9 +163,20 @@ async def reconcile_signal(
                 if active:
                     old_status = active.status
                     old_stage = active.target_stage
+                    active_data = _record_data(active)
+                    active_market_context = {
+                        **market_context,
+                        "market_story": (
+                            latest_market_story
+                            if market_story_matches_signal(active_data, latest_market_story)
+                            else {}
+                        ),
+                    }
                     updated = advance_signal(
-                    _record_data(active), current_price=current_price, market_context=market_context,
-                )
+                        active_data,
+                        current_price=current_price,
+                        market_context=active_market_context,
+                    )
                     _apply(active, updated)
                     await db.commit()
                 
@@ -245,7 +260,10 @@ async def list_signal_history(limit: int = 20) -> list[dict[str, Any]]:
         return [_view(signal) for signal in result.scalars().all()]
 
 
-async def monitor_open_signals(price_lookup: Any) -> bool:
+async def monitor_open_signals(
+    price_lookup: Any,
+    market_context_lookup: Any | None = None,
+) -> bool:
     """Background fallback when no dashboard websocket is connected."""
     await ensure_signal_database()
     async with AsyncSessionLocal() as db:
@@ -258,7 +276,23 @@ async def monitor_open_signals(price_lookup: Any) -> bool:
                 price = float(await price_lookup(signal.symbol))
             except Exception:
                 continue
-            updated = advance_signal(_record_data(signal), current_price=price)
+            market_context: Mapping[str, Any] | None = None
+            if market_context_lookup is not None:
+                try:
+                    market_context = await market_context_lookup(
+                        signal.symbol,
+                        signal.timeframe,
+                        signal.side,
+                    )
+                except Exception:
+                    # Price protection must continue even if the slower causal
+                    # candle refresh is temporarily unavailable.
+                    market_context = None
+            updated = advance_signal(
+                _record_data(signal),
+                current_price=price,
+                market_context=market_context,
+            )
             _apply(signal, updated)
         await db.commit()
         return True

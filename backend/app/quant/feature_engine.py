@@ -31,8 +31,13 @@ from app.indicators.trend import analyze_trend, detect_market_regime, calculate_
 from app.indicators.momentum import analyze_momentum
 from app.indicators.volatility import atr as compute_atr
 from app.indicators.volume import obv as compute_obv, cmf as compute_cmf, mfi as compute_mfi, vwap as compute_vwap
-from app.indicators.liquidity import analyze_liquidity, analyze_order_book, detect_liquidity_sweep
-from app.indicators.structure import classify_market_phase, detect_bos, detect_choch, find_fair_value_gaps, find_order_blocks
+from app.indicators.liquidity import analyze_liquidity, analyze_order_book
+from app.indicators.market_story import (
+    build_market_story,
+    observable_liquidity_sweep,
+    observable_structure_events,
+)
+from app.indicators.structure import classify_market_phase, find_fair_value_gaps, find_order_blocks
 from app.indicators.funding import analyze_funding_oi_divergence
 from app.indicators.liquidation_heatmap import calculate_liquidation_heatmap
 from app.quant.statistics import build_statistical_features
@@ -326,7 +331,11 @@ def compute_quant_features(
     macro = intelligence.get("macro", {})
     sentiment = intelligence.get("sentiment", {})
     calendar = intelligence.get("calendar", [])
-    multi_venue = intelligence.get("multi_venue", {}) or {}
+    execution_tape = (
+        intelligence.get("execution_tape")
+        or intelligence.get("multi_venue")
+        or {}
+    )
 
     closed = completed_candles(candles) if candles else []
     closes = [c.close for c in closed] if closed else []
@@ -402,7 +411,7 @@ def compute_quant_features(
     # Keep all candle-derived evidence on completed bars. The ticker/order
     # book may be live, but a partially formed OHLCV bar is not stable enough
     # for a directional decision.
-    micro = analyze_microstructure(order_book, closed, multi_venue=multi_venue)
+    micro = analyze_microstructure(order_book, closed, multi_venue=execution_tape)
 
     # Trade flow from recent trades
     whale_trades = {"whale_buy_count": 0, "whale_sell_count": 0, "whale_buy_volume": 0.0, "whale_sell_volume": 0.0, "whale_bias": "NEUTRAL"}
@@ -486,23 +495,43 @@ def compute_quant_features(
     # ── Liquidity & sweep ────────────────────────────────────────────────
     liquidity = analyze_liquidity(ticker, order_book) if ticker else {}
     order_book_analysis = analyze_order_book(order_book) if order_book else {}
-    sweep = detect_liquidity_sweep(candles) if candles else {}
+    market_story = build_market_story(candles) if candles else {
+        "available": False,
+        "current_state": "NO_ACTIVE_EVENT",
+        "structure_events": [],
+        "liquidity_events": [],
+    }
+    higher_market_stories = {
+        tf_key: build_market_story(tf_candles)
+        for tf_key, tf_candles in multi_tf.items()
+        if tf_candles
+    }
+    story_events = observable_structure_events(market_story)
+    sweep = observable_liquidity_sweep(market_story)
     # Shared SMC structure is computed once from completed candles and passed
     # directly to the committee; it is no longer merely a dashboard-side idea.
     market_structure = {
         "phase": classify_market_phase(candles) if candles else "RANGING",
-        "bos": detect_bos(candles) if candles else {"detected": False, "direction": "none"},
-        "choch": detect_choch(candles) if candles else {"detected": False, "direction": "none"},
+        "bos": story_events["bos"],
+        "choch": story_events["choch"],
+        "liquidity_sweep": sweep,
+        "story_state": market_story.get("current_state"),
+        "story_actionability": market_story.get("actionability", {}),
+        "story_as_of_close_time": market_story.get("as_of_close_time"),
         "order_blocks": find_order_blocks(candles) if candles else [],
         "fair_value_gaps": find_fair_value_gaps(candles) if candles else [],
-        "limitations": "Structure labels are confluence evidence, not proof of institutional intent.",
+        "limitations": "Completed-candle story labels are causal context, not proof of participant identity or certainty about the next move.",
     }
     liquidity_map = build_liquidity_map(candles, atr_val) if candles else {"available": False, "reason": "candles_unavailable", "pools": []}
-    positioning = classify_positioning(candles, {
-        "funding_rate": funding_rate,
-        "oi_history": oi_hist,
-        "taker_volume": taker_vol,
-    }) if candles else {"available": False, "state": "UNKNOWN", "reason": "candles_unavailable"}
+    positioning = classify_positioning(
+        candles,
+        {
+            "funding_rate": funding_rate,
+            "oi_history": oi_hist,
+            "taker_volume": taker_vol,
+        },
+        execution_tape=execution_tape,
+    ) if candles else {"available": False, "state": "UNKNOWN", "reason": "candles_unavailable"}
     volatility_context = build_volatility_context(candles) if candles else {"available": False, "reason": "candles_unavailable"}
     volume_profile = build_volume_profile(candles) if candles else {"available": False, "reason": "candles_unavailable"}
     vwap_context = build_vwap_context(candles) if candles else {"available": False, "reason": "candles_unavailable"}
@@ -582,7 +611,8 @@ def compute_quant_features(
             "volume_ratio": round(vol_ratio, 2),
         },
         "microstructure": micro,
-        "multi_venue": multi_venue,
+        "execution_tape": execution_tape,
+        "multi_venue": execution_tape,
         "trade_flow": {
             "available": trade_flow_available,
             "buy_ratio": round(trade_flow_ratio, 4),
@@ -609,6 +639,8 @@ def compute_quant_features(
         "order_book": order_book_analysis,
         "sweep": sweep,
         "market_structure": market_structure,
+        "market_story": market_story,
+        "higher_timeframe_market_stories": higher_market_stories,
         "positioning": positioning,
         "volatility_context": volatility_context,
         "volume_profile": volume_profile,
@@ -653,11 +685,22 @@ def _data_quality(intelligence: dict[str, Any], closed: list[Candle], current_pr
         and "funding_rate" in funding
         and not funding.get("error")
     )
+    execution_tape = (
+        intelligence.get("execution_tape")
+        or intelligence.get("multi_venue")
+        or {}
+    )
+    tape_flow_available = bool(
+        (execution_tape.get("actual_flow") or {}).get("available")
+    )
     publication_requirements = {
         "order_book": bool((intelligence.get("order_book", {}) or {}).get("bids") and (intelligence.get("order_book", {}) or {}).get("asks")),
         "funding": funding_available,
         "oi_history": bool((derivatives.get("oi_history", {}) or {}).get("available")),
-        "taker_flow": bool((derivatives.get("taker_buy_sell_volume", {}) or {}).get("available")),
+        "taker_flow": (
+            bool((derivatives.get("taker_buy_sell_volume", {}) or {}).get("available"))
+            or tape_flow_available
+        ),
     }
     publication_missing = [name for name, available_now in publication_requirements.items() if not available_now]
     return {
@@ -670,9 +713,13 @@ def _data_quality(intelligence: dict[str, Any], closed: list[Candle], current_pr
         "reason": "complete_core_snapshot" if passed else "missing_core_market_data",
         "publication_coverage": {
             "ready": not publication_missing,
+            "inputs_complete": not publication_missing,
+            # Feature assembly can report input presence, but only the shared
+            # live-confirmation gate may authorize signal publication.
+            "confirmation_ready": None,
             "requirements": publication_requirements,
             "missing": publication_missing,
-            "label": "PUBLICATION DATA READY" if not publication_missing else "PUBLICATION DATA PARTIAL",
+            "label": "PUBLICATION INPUTS COMPLETE" if not publication_missing else "PUBLICATION INPUTS PARTIAL",
         },
     }
 

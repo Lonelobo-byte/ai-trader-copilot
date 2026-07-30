@@ -10,9 +10,21 @@
   <link
     href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap"
     rel="stylesheet">
-  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="styles.css?v=20260729-tape1">
   <style>
     /* Radar custom layout adjustments */
+    html,
+    body.single-page {
+      width: 100%;
+      max-width: 100%;
+      overflow-x: hidden;
+    }
+
+    .main-wrapper,
+    .radar-container {
+      min-width: 0;
+    }
+
     .radar-header-actions {
       display: flex;
       gap: 1rem;
@@ -43,6 +55,30 @@
 
     .radar-summary-card.hot-zones {
       border-left-color: var(--neon-gold);
+    }
+
+    .radar-summary-metric {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+      gap: 0.9rem;
+      margin-top: 0.5rem;
+      min-width: 0;
+    }
+
+    .radar-summary-metric > h2 {
+      flex: 0 1 auto;
+      min-width: 0;
+    }
+
+    .radar-summary-caption {
+      flex: 0 1 10.5rem;
+      min-width: 7rem;
+      margin-bottom: 2px;
+      white-space: normal;
+      text-align: right;
+      line-height: 1.3;
+      overflow-wrap: anywhere;
     }
 
     .radar-filters {
@@ -127,6 +163,8 @@
       background: var(--card-bg);
       border: 1px solid rgba(255, 255, 255, 0.04);
       border-radius: 12px;
+      contain: inline-size;
+      max-width: 100%;
       overflow-x: auto;
       box-shadow: var(--shadow-sm);
     }
@@ -135,6 +173,25 @@
       width: 100%;
       border-collapse: collapse;
       text-align: left;
+    }
+
+    .radar-table th:last-child,
+    .radar-table td:last-child {
+      position: sticky;
+      right: 0;
+      z-index: 2;
+      min-width: 9.5rem;
+      background: rgba(11, 17, 29, 0.97);
+      box-shadow: -10px 0 18px rgba(0, 0, 0, 0.2);
+    }
+
+    .radar-table th:last-child {
+      z-index: 3;
+      background: rgba(8, 13, 23, 0.99);
+    }
+
+    .radar-table tr:hover td:last-child {
+      background: rgba(14, 22, 36, 0.99);
     }
 
     .radar-table th {
@@ -1104,6 +1161,226 @@
       cursor: pointer;
     }
 
+    .radar-lifecycle {
+      --story-color: var(--neon-blue);
+      display: grid;
+      gap: .16rem;
+      min-width: 128px;
+      max-width: 190px;
+      margin-top: .38rem;
+      padding: .38rem .42rem;
+      border: 1px solid rgba(62, 151, 255, .18);
+      border-radius: 6px;
+      background: rgba(62, 151, 255, .045);
+    }
+
+    .radar-lifecycle.actionable {
+      --story-color: var(--neon-green);
+      border-color: rgba(80, 205, 137, .22);
+      background: rgba(80, 205, 137, .045);
+    }
+
+    .radar-lifecycle.stale {
+      --story-color: var(--neon-gold);
+      border-color: rgba(241, 188, 0, .23);
+      background: rgba(241, 188, 0, .045);
+    }
+
+    .radar-lifecycle.invalidated {
+      --story-color: var(--neon-red);
+      border-color: rgba(241, 65, 108, .24);
+      background: rgba(241, 65, 108, .045);
+    }
+
+    .radar-lifecycle span {
+      overflow: hidden;
+      color: var(--story-color);
+      font: 800 .48rem var(--font-mono);
+      letter-spacing: .055em;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .radar-lifecycle strong {
+      overflow-wrap: anywhere;
+      color: var(--text-secondary);
+      font: 800 .54rem/1.3 var(--font-mono);
+    }
+
+    .radar-lifecycle small {
+      overflow: hidden;
+      color: var(--text-muted);
+      font: 700 .46rem var(--font-mono);
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .priority-badge.lifecycle-stale,
+    .research-brief-state.stale {
+      border-color: rgba(241, 188, 0, .3);
+      color: var(--neon-gold);
+      background: rgba(241, 188, 0, .08);
+    }
+
+    .priority-badge.lifecycle-invalid,
+    .research-brief-state.invalid {
+      border-color: rgba(241, 65, 108, .32);
+      color: var(--neon-red);
+      background: rgba(241, 65, 108, .08);
+    }
+
+    .radar-story-detail {
+      --story-color: var(--neon-blue);
+      overflow: hidden;
+      margin: .78rem 0;
+      border: 1px solid rgba(62, 151, 255, .2);
+      border-radius: 9px;
+      background:
+        radial-gradient(circle at 95% 0, rgba(62, 151, 255, .08), transparent 36%),
+        rgba(4, 9, 17, .58);
+    }
+
+    .radar-story-detail.actionable {
+      --story-color: var(--neon-green);
+      border-color: rgba(80, 205, 137, .24);
+      background:
+        radial-gradient(circle at 95% 0, rgba(80, 205, 137, .08), transparent 36%),
+        rgba(4, 13, 15, .6);
+    }
+
+    .radar-story-detail.stale {
+      --story-color: var(--neon-gold);
+      border-color: rgba(241, 188, 0, .25);
+      background:
+        radial-gradient(circle at 95% 0, rgba(241, 188, 0, .08), transparent 36%),
+        rgba(15, 12, 4, .6);
+    }
+
+    .radar-story-detail.invalidated {
+      --story-color: var(--neon-red);
+      border-color: rgba(241, 65, 108, .26);
+      background:
+        radial-gradient(circle at 95% 0, rgba(241, 65, 108, .08), transparent 36%),
+        rgba(15, 5, 10, .6);
+    }
+
+    .radar-story-detail > header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: .7rem;
+      padding: .7rem .72rem .55rem;
+    }
+
+    .radar-story-detail > header span,
+    .radar-story-detail > header strong {
+      display: block;
+    }
+
+    .radar-story-detail > header span {
+      margin-bottom: .18rem;
+      color: var(--story-color);
+      font: 800 .5rem var(--font-mono);
+      letter-spacing: .09em;
+    }
+
+    .radar-story-detail > header strong {
+      color: var(--text-primary);
+      font-size: .7rem;
+    }
+
+    .radar-story-detail > header b {
+      flex: 0 0 auto;
+      padding: .25rem .4rem;
+      border: 1px solid currentColor;
+      border-radius: 999px;
+      color: var(--story-color);
+      font: 800 .49rem var(--font-mono);
+    }
+
+    .radar-story-meta {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 1px;
+      margin: 0 .72rem;
+      overflow: hidden;
+      border: 1px solid rgba(255, 255, 255, .06);
+      border-radius: 6px;
+      background: rgba(255, 255, 255, .05);
+    }
+
+    .radar-story-meta > span {
+      min-width: 0;
+      padding: .43rem .47rem;
+      background: rgba(2, 6, 13, .8);
+    }
+
+    .radar-story-meta small,
+    .radar-story-meta strong {
+      display: block;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .radar-story-meta small {
+      margin-bottom: .14rem;
+      color: var(--text-muted);
+      font: 800 .46rem var(--font-mono);
+    }
+
+    .radar-story-meta strong {
+      color: var(--text-secondary);
+      font: 800 .53rem var(--font-mono);
+    }
+
+    .radar-story-sequence {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: .4rem;
+      padding: .55rem .72rem;
+    }
+
+    .radar-story-sequence article {
+      min-width: 0;
+      padding: .5rem .52rem;
+      border: 1px solid rgba(255, 255, 255, .06);
+      border-radius: 7px;
+      background: rgba(0, 0, 0, .15);
+    }
+
+    .radar-story-sequence article > span {
+      color: var(--story-color);
+      font: 800 .47rem var(--font-mono);
+      letter-spacing: .055em;
+    }
+
+    .radar-story-sequence p {
+      margin: .32rem 0 0;
+      color: var(--text-secondary);
+      font-size: .58rem;
+      line-height: 1.45;
+    }
+
+    .radar-story-sequence small {
+      display: block;
+      margin-top: .31rem;
+      padding-top: .28rem;
+      border-top: 1px solid rgba(255, 255, 255, .055);
+      color: var(--text-muted);
+      font-size: .5rem;
+      line-height: 1.4;
+    }
+
+    .radar-story-detail > footer {
+      padding: .46rem .72rem;
+      border-top: 1px solid rgba(255, 255, 255, .055);
+      color: var(--story-color);
+      background: rgba(0, 0, 0, .13);
+      font: 800 .5rem var(--font-mono);
+      letter-spacing: .055em;
+    }
+
     /* Calm operational feedback: Radar animates state changes, never prices. */
     .radar-summary-card,
     .radar-table-container,
@@ -1188,6 +1465,18 @@
       .top-research-btn {
         max-width: 100%;
       }
+
+      .radar-story-detail > header {
+        flex-direction: column;
+      }
+
+      .radar-story-meta {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .radar-story-sequence {
+        grid-template-columns: 1fr;
+      }
     }
   </style>
 </head>
@@ -1251,31 +1540,31 @@
       </div>
     </header>
 
-    <main class="radar-container">
+    <main class="radar-container flight-deck-container">
       <!-- SUMMARY BANNER CARDS -->
       <div class="radar-summary-cards">
         <div class="card radar-summary-card active-breakouts">
           <h3>Aligned Contexts</h3>
-          <div style="display: flex; justify-content: space-between; align-items: flex-end; margin-top: 0.5rem;">
+          <div class="radar-summary-metric">
             <h2 id="summary-breakout-count" style="font-size: 2rem; font-weight: 700; line-height: 1;">0</h2>
-            <span class="label" style="margin-bottom: 2px;">live-confirmed review candidates</span>
+            <span class="label radar-summary-caption">live-confirmed review candidates</span>
           </div>
         </div>
         <div class="card radar-summary-card hot-zones">
           <h3>Highest Evidence Score</h3>
-          <div style="display: flex; justify-content: space-between; align-items: flex-end; margin-top: 0.5rem;">
+          <div class="radar-summary-metric">
             <h2 id="summary-top-score"
               style="font-size: 2rem; font-weight: 700; line-height: 1; font-family: var(--font-mono); color: var(--neon-gold);">
               -</h2>
-            <span id="summary-top-symbol" class="label" style="margin-bottom: 2px; font-weight: 700;">-</span>
+            <span id="summary-top-symbol" class="label radar-summary-caption" style="font-weight: 700;">-</span>
           </div>
         </div>
         <div class="card radar-summary-card">
           <h3>Volatility Regime</h3>
-          <div style="display: flex; justify-content: space-between; align-items: flex-end; margin-top: 0.5rem;">
+          <div class="radar-summary-metric">
             <h2 id="summary-vol-state"
               style="font-size: 1.5rem; font-weight: 700; line-height: 1; color: var(--neon-blue);">STABLE</h2>
-            <span class="label" style="margin-bottom: 2px;">dominant realized-volatility state</span>
+            <span class="label radar-summary-caption">dominant realized-volatility state</span>
           </div>
         </div>
         <div class="card radar-summary-card"
@@ -1398,9 +1687,75 @@
     </div>
 
     <script>
+      // The source keeps the legacy table as a no-JavaScript fallback. The
+      // interactive surface is rebuilt into the approved Causal Flight Deck
+      // before any Radar state or DOM references are initialized.
+      const radarContainer = document.querySelector('main.radar-container');
+      radarContainer.innerHTML = `
+        <section class="flight-deck" aria-label="Causal Flight Deck">
+          <header class="flight-ribbon">
+            <div class="flight-pulse">
+              <span class="flight-radar-mini" aria-hidden="true"></span>
+              <span class="flight-pulse-copy"><small class="flight-eyebrow">Market pulse</small><strong>SCAN ACTIVE</strong></span>
+            </div>
+            <div class="flight-metrics" aria-label="Radar summary">
+              <span class="flight-metric review"><small class="flight-eyebrow">Recommended</small><strong id="summary-breakout-count">0</strong></span>
+              <span class="flight-metric score"><small class="flight-eyebrow">Top evidence</small><strong><span id="summary-top-score">-</span> <small id="summary-top-symbol">-</small></strong></span>
+              <span class="flight-metric volatility"><small class="flight-eyebrow">Volatility</small><strong id="summary-vol-state">NORMAL</strong></span>
+            </div>
+            <div class="flight-controls">
+              <div class="flight-filter-group">
+                <button class="filter-btn active" data-filter="all">All</button>
+                <button class="filter-btn" data-filter="recommended">Candidates</button>
+                <button class="filter-btn" data-filter="bullish">Bullish</button>
+                <button class="filter-btn" data-filter="bearish">Bearish</button>
+              </div>
+              <select id="scan-mode-select" class="flight-scan-select" aria-label="Radar scan mode">
+                <option value="5m,1h">Scalp · 5m / 1h</option>
+                <option value="15m,4h" selected>Intraday · 15m / 4h</option>
+                <option value="1h,1d">Swing · 1h / 1d</option>
+              </select>
+              <button id="ai-radar-btn" class="top-research-btn" type="button" onclick="buildTopResearchBriefs()">
+                <span>Build Top-3 Briefs</span>
+                <span class="top-research-btn-state" id="top-research-btn-state">READY</span>
+              </button>
+            </div>
+          </header>
+          <div class="flight-main">
+            <aside class="flight-opportunities" aria-label="Ranked market opportunities">
+              <div class="flight-pane-heading">
+                <strong>Ranked Opportunities</strong>
+                <span class="flight-refresh"><span class="radar-refresh-spinner" id="refresh-spinner"></span><span id="refresh-text">Next scan in 30s</span></span>
+              </div>
+              <div class="flight-opportunity-list" id="radar-records-tbody" role="listbox" aria-label="Ranked market opportunities" aria-live="polite"></div>
+            </aside>
+            <section class="flight-intelligence" id="flight-intelligence" aria-live="polite">
+              <div class="flight-stage" id="flight-intelligence-stage">
+                <div class="flight-stage-empty"><div>
+                  <span class="flight-radar-mini flight-stage-radar" aria-hidden="true"></span>
+                  <strong>Building the causal intelligence stage</strong>
+                  <p>Radar is aligning completed-candle structure, liquidity, positioning and order flow. Select an opportunity when the shared scan completes.</p>
+                </div></div>
+              </div>
+              <section class="radar-research-briefs" id="radar-research-briefs" hidden aria-live="polite">
+                <div class="radar-research-heading">
+                  <div>
+                    <span class="research-kicker">Deterministic evidence · manual research</span>
+                    <h2>Top-3 Research Briefs</h2>
+                    <p id="research-briefs-summary">Each brief explains the current context without changing Radar's ranking or authorizing a trade.</p>
+                  </div>
+                  <span class="research-run-status" id="research-run-status">READY</span>
+                </div>
+                <div class="research-brief-list" id="research-brief-list"></div>
+              </section>
+            </section>
+          </div>
+        </section>`;
+
       // State management
       let activeFilter = 'all';
       let rawBreakouts = [];
+      let selectedRadarSymbol = '';
       let isBuildingResearchBriefs = false;
       let radarScanReady = false;
       let refreshTimer = null;
@@ -1432,6 +1787,7 @@
       const topSymbolEl = document.getElementById('summary-top-symbol');
       const volStateEl = document.getElementById('summary-vol-state');
       const spinner = document.getElementById('refresh-spinner');
+      const flightIntelligenceStage = document.getElementById('flight-intelligence-stage');
 
       const modalOverlay = document.getElementById('ai-modal-overlay');
       const modalCloseBtn = document.getElementById('modal-close-btn');
@@ -1440,26 +1796,25 @@
       let radarEvidenceStageTimer = null;
 
       const radarEvidenceLoadingMarkup = () => `
-        <tr><td colspan="9">
-          <div class="radar-evidence-loading is-active" role="status" aria-live="polite">
-            <div class="evidence-radar-orbit" aria-hidden="true"><span></span><i></i></div>
-            <div class="evidence-loading-copy">
-              <div class="evidence-loading-meta">Live collection in progress</div>
-              <h3>Acquiring market evidence</h3>
-              <p>Mapping liquidity, positioning, and order-flow context before Radar ranks an opportunity.</p>
-              <div class="evidence-loading-stages" aria-label="Evidence collection stages">
-                <div class="evidence-stage active"><span class="evidence-stage-label">Liquidity map</span><div class="evidence-stage-bar"></div></div>
-                <div class="evidence-stage"><span class="evidence-stage-label">Positioning</span><div class="evidence-stage-bar"></div></div>
-                <div class="evidence-stage"><span class="evidence-stage-label">Order flow</span><div class="evidence-stage-bar"></div></div>
-              </div>
-              <div class="evidence-loading-progress" aria-hidden="true"><span></span></div>
+        <div class="radar-evidence-loading is-active" role="status" aria-live="polite">
+          <div class="evidence-radar-orbit" aria-hidden="true"><span></span><i></i></div>
+          <div class="evidence-loading-copy">
+            <div class="evidence-loading-meta">Live collection in progress</div>
+            <h3>Acquiring market evidence</h3>
+            <p>Mapping liquidity, positioning, and order-flow context before Radar ranks an opportunity.</p>
+            <div class="evidence-loading-stages" aria-label="Evidence collection stages">
+              <div class="evidence-stage active"><span class="evidence-stage-label">Liquidity map</span><div class="evidence-stage-bar"></div></div>
+              <div class="evidence-stage"><span class="evidence-stage-label">Positioning</span><div class="evidence-stage-bar"></div></div>
+              <div class="evidence-stage"><span class="evidence-stage-label">Order flow</span><div class="evidence-stage-bar"></div></div>
             </div>
+            <div class="evidence-loading-progress" aria-hidden="true"><span></span></div>
           </div>
-        </td></tr>`;
+        </div>`;
 
       function showRadarEvidenceLoading() {
         window.clearInterval(radarEvidenceStageTimer);
         recordsTbody.innerHTML = radarEvidenceLoadingMarkup();
+        flightIntelligenceStage.innerHTML = `<div class="flight-stage-empty"><div><span class="flight-radar-mini flight-stage-radar" aria-hidden="true"></span><strong>Synchronizing the flight deck</strong><p>The previous selection is paused while the shared market snapshot refreshes.</p></div></div>`;
         const stages = [...recordsTbody.querySelectorAll('.evidence-stage')];
         let activeIndex = 0;
         radarEvidenceStageTimer = window.setInterval(() => {
@@ -1687,6 +2042,135 @@
       // Causal Radar renderer. This definition intentionally replaces the
       // retired breakout/indicator table above while preserving the existing
       // filter and review-modal wiring.
+      function radarStoryView(payload = {}) {
+        const story = payload.market_story || payload.market_structure?.story || {};
+        const directional = payload.market_context?.actionability || payload.actionability || story.actionability || {};
+        const directionalOwnsEvent = Object.prototype.hasOwnProperty.call(directional, 'aligned_event')
+          || Object.prototype.hasOwnProperty.call(directional, 'selected_event');
+        const event = directional.aligned_event
+          || directional.selected_event
+          || (directionalOwnsEvent ? {} : story.latest_event)
+          || {};
+        const baseState = directional.state || story.current_state || story.actionability?.status || 'NO_ACTIVE_EVENT';
+        const liveLocation = payload.advanced_confirmation?.market_story_live_location || {};
+        const liveLocationExtended = liveLocation.evaluated === true && liveLocation.passed === false;
+        const state = liveLocationExtended ? 'LIVE_LOCATION_EXTENDED' : baseState;
+        const rawDirection = directional.direction || event.direction || story.actionability?.direction || payload.direction || 'NEUTRAL';
+        const direction = rawDirection === 'LONG' ? 'BULLISH' : rawDirection === 'SHORT' ? 'BEARISH' : rawDirection;
+        const explicitActionable = typeof directional.actionable === 'boolean'
+          ? directional.actionable
+          : story.actionability?.actionable;
+        const actionable = explicitActionable === true;
+        // The directional view owns lifecycle state when it exists. The
+        // story-level actionability may describe a newer event on the opposite
+        // side, so OR-ing both values can incorrectly mark a valid retest as
+        // "do not chase".
+        const explicitChaseRule = typeof directional.chase_prohibited === 'boolean'
+          ? directional.chase_prohibited
+          : directionalOwnsEvent
+            ? false
+            : story.actionability?.chase_prohibited;
+        const chaseProhibited = liveLocationExtended || explicitChaseRule === true
+          || ['EXTENDED_DO_NOT_CHASE', 'MISSED', 'INVALIDATED', 'EXPIRED'].includes(String(state).toUpperCase());
+        const eventType = event.type || story.actionability?.event_type || 'NO ACTIVE EVENT';
+        const age = event.age_bars ?? story.actionability?.event_age_bars;
+        const level = event.break_level ?? event.broken_level ?? event.swept_level ?? story.actionability?.event_level;
+        const invalidation = event.invalidation_level;
+        const eventMatchesLatest = !event.event_id || !story.latest_event?.event_id || event.event_id === story.latest_event.event_id;
+        const nextScenarios = eventMatchesLatest && Array.isArray(story.next_scenarios) ? story.next_scenarios : [];
+        const continuation = nextScenarios.find(item => item?.scenario === 'CONTINUATION') || null;
+        const failure = nextScenarios.find(item => item?.scenario === 'FAILURE_OR_REVERSAL') || null;
+        const happened = eventMatchesLatest && story.what_happened
+          ? story.what_happened
+          : event.detected || event.event_id
+            ? `A ${String(direction).toLowerCase()} ${researchLabel(eventType, 'market event').toLowerCase()} occurred ${Number(age) === 0 ? 'on the latest completed candle' : `${age ?? 'an unknown number of'} completed bars ago`} through ${formatResearchPrice(level)}.`
+            : 'No recent completed-candle structure break or liquidity sweep is active.';
+        const happeningNow = liveLocationExtended
+          ? `Live price moved ${Number(liveLocation.distance_atr).toFixed(2)} event ATR beyond the completed-candle level; the review location has moved away.`
+          : directional.reason || story.what_is_happening || 'Current price location is awaiting completed-candle classification.';
+        const next = continuation?.condition || (
+          String(direction).toUpperCase() === 'BULLISH'
+            ? 'Continuation requires completed closes to hold the event level while causal evidence remains bullish.'
+            : String(direction).toUpperCase() === 'BEARISH'
+              ? 'Continuation requires completed closes to hold below the event level while causal evidence remains bearish.'
+              : 'Wait for a fresh completed event with aligned causal evidence.'
+        );
+        const failureCondition = failure?.condition || (
+          String(direction).toUpperCase() === 'BULLISH'
+            ? 'A completed close below invalidation, or a newer bearish event, cancels this branch.'
+            : String(direction).toUpperCase() === 'BEARISH'
+              ? 'A completed close above invalidation, or a newer bullish event, cancels this branch.'
+              : 'Remain in observation mode until a directional event becomes active.'
+        );
+        const normalizedState = String(state).toUpperCase();
+        const tone = normalizedState === 'INVALIDATED'
+          ? 'invalidated'
+          : chaseProhibited
+            ? 'stale'
+            : actionable
+              ? 'actionable'
+              : 'monitoring';
+        return {
+          available: story.available === true || Boolean(event.detected || event.event_id),
+          state,
+          direction,
+          actionable,
+          chaseProhibited,
+          tone,
+          eventType,
+          eventId: event.event_id || story.actionability?.event_id || null,
+          age,
+          level,
+          invalidation,
+          happened,
+          happeningNow,
+          next,
+          failureCondition,
+        };
+      }
+
+      function radarLifecycleMarkup(payload) {
+        const story = radarStoryView(payload);
+        const age = story.age === null || story.age === undefined
+          ? 'AGE UNAVAILABLE'
+          : `${story.age} BAR${Number(story.age) === 1 ? '' : 'S'} AGO`;
+        return `<div class="radar-lifecycle ${story.tone}">
+          <span>${escapeResearch(researchLabel(story.state, 'NO ACTIVE EVENT'))}</span>
+          <strong>${escapeResearch(researchLabel(story.eventType, 'NO ACTIVE EVENT'))} · ${escapeResearch(researchLabel(story.direction, 'NEUTRAL'))}</strong>
+          <small>${escapeResearch(age)} · LEVEL ${escapeResearch(formatResearchPrice(story.level))}</small>
+        </div>`;
+      }
+
+      function renderRadarStoryDetail(payload, compact = false) {
+        const story = radarStoryView(payload);
+        const age = story.age === null || story.age === undefined
+          ? 'UNAVAILABLE'
+          : `${story.age} BAR${Number(story.age) === 1 ? '' : 'S'}`;
+        const actionText = story.chaseProhibited
+          ? `${researchLabel(story.state)} · DO NOT CHASE`
+          : story.actionable
+            ? 'FRESH EVENT · MANUAL REVIEW ONLY'
+            : `${researchLabel(story.state)} · OBSERVATION ONLY`;
+        return `<section class="radar-story-detail ${story.tone}${compact ? ' compact' : ''}">
+          <header>
+            <div><span>COMPLETED-CANDLE MARKET STORY</span><strong>What happened → now → conditional next</strong></div>
+            <b>${escapeResearch(researchLabel(story.state))}</b>
+          </header>
+          <div class="radar-story-meta">
+            <span><small>EVENT</small><strong>${escapeResearch(researchLabel(story.eventType, 'NO ACTIVE EVENT'))}</strong></span>
+            <span><small>DIRECTION</small><strong>${escapeResearch(researchLabel(story.direction, 'NEUTRAL'))}</strong></span>
+            <span><small>AGE</small><strong>${escapeResearch(age)}</strong></span>
+            <span><small>LEVEL / INVALIDATION</small><strong>${escapeResearch(formatResearchPrice(story.level))} / ${escapeResearch(formatResearchPrice(story.invalidation))}</strong></span>
+          </div>
+          <div class="radar-story-sequence">
+            <article><span>01 · WHAT HAPPENED</span><p>${escapeResearch(story.happened)}</p></article>
+            <article><span>02 · HAPPENING NOW</span><p>${escapeResearch(story.happeningNow)}</p></article>
+            <article><span>03 · CONDITIONAL NEXT</span><p>${escapeResearch(story.next)}</p><small>Failure: ${escapeResearch(story.failureCondition)}</small></article>
+          </div>
+          <footer>${escapeResearch(actionText)}</footer>
+        </section>`;
+      }
+
       function renderTable() {
         const filtered = rawBreakouts.filter(item => {
           if (activeFilter === 'recommended') return item.review_status === 'REVIEW_CANDIDATE';
@@ -1708,27 +2192,245 @@
           const volatility = item.volatility_context || {};
           const coverage = item.coverage || context.coverage || {};
           const flow = components.order_flow || {};
-          const venueFlow = item.advanced_confirmation?.cross_venue_evidence || {};
+          const actualFlow = item.advanced_confirmation?.actual_flow_evidence || {};
           const isLong = item.direction === 'BULLISH';
           const directionClass = isLong ? 'bullish' : item.direction === 'BEARISH' ? 'bearish' : 'neutral';
           const scoreClass = item.score >= 70 ? 'score-high' : item.score >= 55 ? 'score-medium' : 'score-low';
           const scoreFill = item.score >= 70 ? 'score-high-fill' : item.score >= 55 ? 'score-medium-fill' : 'score-low-fill';
-          const thesis = item.direction === 'NEUTRAL' ? 'WAIT — no aligned causal thesis' : `${item.direction} context`;
+          const story = radarStoryView(item);
+          const reviewReady = item.review_status === 'REVIEW_CANDIDATE' && story.actionable && !story.chaseProhibited;
+          const thesis = story.chaseProhibited
+            ? 'PAST ENTRY WINDOW — DO NOT CHASE'
+            : story.actionable
+              ? `${item.direction} FRESH-EVENT CONTEXT`
+              : item.direction === 'NEUTRAL' ? 'WAIT — no aligned causal thesis' : `${item.direction} context`;
           const contradictions = (item.contradictions || []).map(label).join(', ');
-          const state = item.review_status === 'REVIEW_CANDIDATE' ? '<span class="priority-badge high">REVIEW CANDIDATE</span>' : '<span class="priority-badge low">WAIT / WATCH</span>';
+          const state = String(story.state).toUpperCase() === 'INVALIDATED'
+            ? '<span class="priority-badge lifecycle-invalid">INVALIDATED</span>'
+            : story.chaseProhibited
+              ? '<span class="priority-badge lifecycle-stale">DO NOT CHASE</span>'
+              : reviewReady
+                ? '<span class="priority-badge high">REVIEW CANDIDATE</span>'
+                : '<span class="priority-badge low">WAIT / WATCH</span>';
           return `
-            <tr class="${item.review_status === 'REVIEW_CANDIDATE' ? 'row-verified' : ''}">
-              <td class="symbol-cell"><div style="display:flex;flex-direction:column;gap:4px"><strong style="font-size:.95rem">${item.symbol}</strong><span class="top-badge-tag ${item.review_status === 'REVIEW_CANDIDATE' ? 'badge-verified' : 'badge-quant'}">${thesis}</span><span style="font-size:.62rem;color:var(--text-muted)">${contradictions ? `Contradiction: ${contradictions}` : 'Evidence aligned so far'}</span></div></td>
+            <tr class="${reviewReady ? 'row-verified' : ''}">
+              <td class="symbol-cell"><div style="display:flex;flex-direction:column;gap:4px"><strong style="font-size:.95rem">${escapeResearch(item.symbol)}</strong><span class="top-badge-tag ${reviewReady ? 'badge-verified' : 'badge-quant'}">${escapeResearch(thesis)}</span><span style="font-size:.62rem;color:var(--text-muted)">${escapeResearch(contradictions ? `Contradiction: ${contradictions}` : 'Evidence aligned so far')}</span></div></td>
               <td><div class="score-cell"><span class="score-badge ${scoreClass}">${item.score}</span><div class="score-bar"><div class="score-fill ${scoreFill}" style="width:${item.score}%"></div></div></div></td>
-              <td><span class="direction-badge ${directionClass}">${label(structure.phase)} · ${label(volatility.state)}</span></td>
+              <td><span class="direction-badge ${directionClass}">${escapeResearch(label(structure.phase))} · ${escapeResearch(label(volatility.state))}</span>${radarLifecycleMarkup(item)}</td>
               <td class="value-mono">${poolText(item.target_pool)}</td>
               <td class="value-mono">${label(positioning.state)}${positioning.oi_change_pct !== undefined ? ` · ${Number(positioning.oi_change_pct).toFixed(2)}%` : ''}</td>
-              <td class="value-mono">${label(flow.bias || 'UNAVAILABLE')}<span style="display:block;margin-top:3px;font-size:.58rem;color:var(--text-muted)">Bybit + Coinbase: ${label(venueFlow.status || 'PENDING')}</span></td>
+              <td class="value-mono">${label(actualFlow.active_aggressor || flow.bias || 'UNAVAILABLE')}<span style="display:block;margin-top:3px;font-size:.58rem;color:var(--text-muted)">Tape: ${label(actualFlow.status || 'WARMING')}</span></td>
               <td class="value-mono">${coverage.available_domains || 0}/${coverage.required_domains || 4} domains</td>
               <td>${state}</td>
               <td><div class="radar-action-group"><button class="action-btn-sm" type="button" onclick="verifySetupWithAI('${item.symbol}')">Review</button><a class="action-btn-sm research-btn" href="index.html?symbol=${encodeURIComponent(item.symbol)}" target="_blank" rel="noopener" title="Open ${item.symbol} research in a new tab">Research ↗</a></div></td>
             </tr>`;
         }).join('');
+      }
+
+      // Flight Deck renderer. This final definition replaces the legacy table
+      // renderers while reusing their canonical story interpretation.
+      function filteredRadarItems() {
+        return rawBreakouts.filter(item => {
+          if (activeFilter === 'recommended') return item.review_status === 'REVIEW_CANDIDATE';
+          if (activeFilter === 'bullish') return item.direction === 'BULLISH';
+          if (activeFilter === 'bearish') return item.direction === 'BEARISH';
+          return true;
+        });
+      }
+
+      function flightStatusMeta(item, story = radarStoryView(item)) {
+        const invalidated = String(story.state).toUpperCase() === 'INVALIDATED';
+        const reviewReady = item.review_status === 'REVIEW_CANDIDATE' && story.actionable && !story.chaseProhibited;
+        if (invalidated) return { copy: 'INVALIDATED', tone: 'invalidated', cardTone: 'invalidated' };
+        if (story.chaseProhibited) return { copy: 'DO NOT CHASE', tone: 'stale', cardTone: 'stale' };
+        if (reviewReady) return { copy: 'CANDIDATE READY', tone: 'actionable', cardTone: 'actionable' };
+        if (story.actionable) return { copy: 'MANUAL REVIEW', tone: 'actionable', cardTone: 'actionable' };
+        return { copy: 'OBSERVATION ONLY', tone: 'monitoring', cardTone: 'monitoring' };
+      }
+
+      function flightRewardRisk(item, story) {
+        if (item.close_price == null || item.target_pool?.price == null || story.invalidation == null) {
+          return null;
+        }
+        const entry = Number(item.close_price);
+        const target = Number(item.target_pool?.price);
+        const invalidation = Number(story.invalidation);
+        const reward = Math.abs(target - entry);
+        const risk = Math.abs(entry - invalidation);
+        if (![entry, target, invalidation, reward, risk].every(Number.isFinite) || risk <= 0) return null;
+        return reward / risk;
+      }
+
+      function renderFlightStage(item) {
+        if (!item) {
+          flightIntelligenceStage.innerHTML = `<div class="flight-stage-empty"><div><span class="flight-radar-mini flight-stage-radar" aria-hidden="true"></span><strong>No opportunity selected</strong><p>Choose a ranked market context to inspect its completed-candle story and causal evidence.</p></div></div>`;
+          return;
+        }
+        const story = radarStoryView(item);
+        const status = flightStatusMeta(item, story);
+        const context = item.market_context || {};
+        const components = context.components || {};
+        const structure = item.market_structure || {};
+        const positioning = item.positioning || {};
+        const volatility = item.volatility_context || {};
+        const coverage = item.coverage || context.coverage || {};
+        const flow = components.order_flow || {};
+        const actualFlow = item.advanced_confirmation?.actual_flow_evidence || {};
+        const availableDomains = Math.max(0, Number(coverage.available_domains || 0));
+        const requiredDomains = Math.max(4, Number(coverage.required_domains || 4));
+        const evidenceBars = Array.from({ length: requiredDomains }, (_, index) => `<i class="${index < availableDomains ? 'available' : ''}"></i>`).join('');
+        const [ltf] = (scanModeSelect.value || '15m,4h').split(',');
+        const age = story.age === null || story.age === undefined ? 'UNAVAILABLE' : `${story.age} BARS / ${ltf.toUpperCase()}`;
+        const liquidityReference = item.target_pool
+          ? `${researchLabel(item.target_pool.kind)} · ${formatResearchPrice(item.target_pool.price)}`
+          : `EVENT LEVEL · ${formatResearchPrice(story.level)}`;
+        const hasOiChange = positioning.oi_change_pct !== null && positioning.oi_change_pct !== undefined;
+        const oiChange = hasOiChange ? Number(positioning.oi_change_pct) : Number.NaN;
+        const positioningCopy = `${researchLabel(positioning.state)}${Number.isFinite(oiChange) ? ` · ${oiChange.toFixed(2)}% OI` : ''}`;
+        const flowCopy = `${researchLabel(actualFlow.active_aggressor || flow.bias)} · ${researchLabel(actualFlow.status || item.advanced_confirmation?.state || 'WARMING')}`;
+        const rewardRisk = flightRewardRisk(item, story);
+        const rrCopy = rewardRisk === null ? 'UNAVAILABLE' : `${rewardRisk.toFixed(2)}R PROJECTED`;
+        const actionTone = status.tone === 'actionable' ? 'good' : status.tone === 'stale' ? 'watch' : status.tone === 'invalidated' ? 'risk' : '';
+        const eventId = story.eventId ? `ID: ${story.eventId}` : 'DETERMINISTIC SNAPSHOT';
+        const direction = researchLabel(story.direction, 'NEUTRAL');
+        const phase = researchLabel(structure.phase, 'UNAVAILABLE');
+        const volState = researchLabel(volatility.state, 'UNAVAILABLE');
+        const summary = `${story.happened} ${story.happeningNow}`;
+        const encodedSymbol = encodeURIComponent(item.symbol);
+
+        flightIntelligenceStage.innerHTML = `
+          <article class="flight-stage">
+            <header class="flight-stage-header">
+              <div>
+                <div class="flight-stage-heading">
+                  <span class="flight-state-pill ${status.tone}">${escapeResearch(status.copy)}</span>
+                  <span class="flight-eyebrow">${escapeResearch(eventId)}</span>
+                  <h2>${escapeResearch(item.symbol)} <span>Intelligence Stage</span></h2>
+                </div>
+                <p class="flight-stage-summary">${escapeResearch(summary)}</p>
+              </div>
+              <div class="flight-stage-side">
+                <div class="flight-evidence-meter"><span>EVIDENCE ${availableDomains}/${requiredDomains}</span><span class="flight-evidence-bars">${evidenceBars}</span></div>
+                <span class="flight-context-pill ${String(item.direction || '').toLowerCase()}">${escapeResearch(direction)} · ${escapeResearch(phase)} · ${escapeResearch(volState)}</span>
+                <button class="flight-stage-link" type="button" onclick="verifySetupWithAI('${escapeResearch(item.symbol)}')">VIEW RAW TELEMETRY ↗</button>
+              </div>
+            </header>
+            <div class="flight-stage-metrics">
+              <div class="flight-stage-metric"><small>Event age</small><strong>${escapeResearch(age)}</strong></div>
+              <div class="flight-stage-metric"><small>Liquidity reference</small><strong>${escapeResearch(liquidityReference)}</strong></div>
+              <div class="flight-stage-metric"><small>Price × OI</small><strong>${escapeResearch(positioningCopy)}</strong></div>
+              <div class="flight-stage-metric"><small>Actual buy / sell pressure</small><strong class="${actualFlow.bias === item.direction ? 'good' : ''}">${escapeResearch(flowCopy)}</strong></div>
+              <div class="flight-stage-metric"><small>Terminal protection</small><strong class="risk">${escapeResearch(formatResearchPrice(story.invalidation))}</strong></div>
+            </div>
+            <section class="flight-story">
+              <div class="flight-story-title"><strong>Completed-candle market story</strong><span class="flight-state-pill ${status.tone}">${escapeResearch(researchLabel(story.state))}</span></div>
+              <div class="flight-story-sequence">
+                <article class="flight-story-step">
+                  <header><span class="flight-story-index">01</span><strong>What happened</strong></header>
+                  <div class="flight-story-card"><p>${escapeResearch(story.happened)}</p></div>
+                </article>
+                <article class="flight-story-step">
+                  <header><span class="flight-story-index">02</span><strong>Happening now</strong></header>
+                  <div class="flight-story-card"><p>${escapeResearch(story.happeningNow)}</p></div>
+                </article>
+                <article class="flight-story-step">
+                  <header><span class="flight-story-index">03</span><strong>Conditional next</strong></header>
+                  <div class="flight-story-card"><p>${escapeResearch(story.next)}</p><small class="flight-failure"><b>Failure condition</b><br>${escapeResearch(story.failureCondition)}</small></div>
+                </article>
+              </div>
+              <div class="flight-action-bar">
+                <div class="flight-action-metrics">
+                  <span class="flight-action-metric"><small>Reward / risk</small><strong>${escapeResearch(rrCopy)}</strong></span>
+                  <span class="flight-action-metric"><small>Status</small><strong class="${actionTone}">${escapeResearch(status.copy)} · MANUAL RESEARCH ONLY</strong></span>
+                  <span class="flight-action-metric"><small>Invalidation</small><strong class="risk">${escapeResearch(formatResearchPrice(story.invalidation))}</strong></span>
+                </div>
+                <div class="flight-stage-actions">
+                  <button class="action-btn-sm primary" type="button" onclick="verifySetupWithAI('${escapeResearch(item.symbol)}')">Verify Analysis</button>
+                  <a class="action-btn-sm research-btn" href="index.html?symbol=${encodedSymbol}" target="_blank" rel="noopener" title="Open ${escapeResearch(item.symbol)} research in a new tab">Research Symbol ↗</a>
+                </div>
+              </div>
+            </section>
+          </article>`;
+      }
+
+      function selectRadarOpportunity(symbol) {
+        const item = rawBreakouts.find(candidate => candidate.symbol === symbol);
+        if (!item) return;
+        selectedRadarSymbol = symbol;
+        recordsTbody.querySelectorAll('[data-radar-symbol]').forEach(card => {
+          const selected = card.dataset.radarSymbol === symbol;
+          card.classList.toggle('selected', selected);
+          card.setAttribute('aria-selected', String(selected));
+        });
+        renderFlightStage(item);
+      }
+
+      function renderTable() {
+        stopRadarEvidenceLoading();
+        const filtered = filteredRadarItems();
+        if (!filtered.length) {
+          selectedRadarSymbol = '';
+          recordsTbody.innerHTML = `<div class="radar-empty-state"><span class="icon">⌛</span><p>No aligned causal context matches this filter.</p></div>`;
+          renderFlightStage(null);
+          return;
+        }
+        if (!filtered.some(item => item.symbol === selectedRadarSymbol)) {
+          selectedRadarSymbol = (filtered.find(item => item.review_status === 'REVIEW_CANDIDATE') || filtered[0]).symbol;
+        }
+
+        recordsTbody.innerHTML = filtered.map((item, index) => {
+          const story = radarStoryView(item);
+          const status = flightStatusMeta(item, story);
+          const context = item.market_context || {};
+          const coverage = item.coverage || context.coverage || {};
+          const structure = item.market_structure || {};
+          const volatility = item.volatility_context || {};
+          const contradictions = (item.contradictions || []).map(value => researchLabel(value)).join(' · ');
+          const thesis = story.chaseProhibited
+            ? 'Past entry window. Preserve the event as context; do not chase current price.'
+            : story.actionable
+              ? story.happeningNow
+              : contradictions || story.happeningNow;
+          const selected = item.symbol === selectedRadarSymbol;
+          const score = Number(item.score || 0);
+          const directionTone = item.direction === 'BULLISH' ? 'bullish' : item.direction === 'BEARISH' ? 'bearish' : 'neutral';
+          return `<article class="flight-opportunity ${status.cardTone} ${selected ? 'selected' : ''}" tabindex="0" role="option" aria-selected="${selected}" data-radar-symbol="${escapeResearch(item.symbol)}">
+            <div class="flight-opportunity-head">
+              <div><span class="flight-rank">CANDIDATE #${String(index + 1).padStart(2, '0')}</span><strong class="flight-symbol">${escapeResearch(item.symbol)}</strong></div>
+              <span class="flight-score ${score >= 70 ? 'high' : ''}">${score} SCORE</span>
+            </div>
+            <div class="flight-opportunity-meta">
+              <span class="flight-context-pill ${directionTone}">${escapeResearch(researchLabel(item.direction))} · ${escapeResearch(researchLabel(structure.phase))}</span>
+              <span class="flight-state-pill ${status.tone}">${escapeResearch(status.copy)}</span>
+              <span class="flight-context-pill">${escapeResearch(researchLabel(volatility.state))} VOL</span>
+            </div>
+            <p class="flight-opportunity-thesis">${escapeResearch(thesis)}</p>
+            <div class="flight-opportunity-footer">
+              <span class="flight-coverage">EVIDENCE ${coverage.available_domains || 0}/${coverage.required_domains || 4} DOMAINS · ${story.age ?? '—'} BARS</span>
+              <button class="flight-review-inline" type="button" data-review-symbol="${escapeResearch(item.symbol)}">Review</button>
+            </div>
+          </article>`;
+        }).join('');
+
+        recordsTbody.querySelectorAll('[data-radar-symbol]').forEach(card => {
+          card.addEventListener('click', event => {
+            if (!event.target.closest('[data-review-symbol]')) selectRadarOpportunity(card.dataset.radarSymbol);
+          });
+          card.addEventListener('keydown', event => {
+            if (event.key === 'Enter' || event.key === ' ') {
+              event.preventDefault();
+              selectRadarOpportunity(card.dataset.radarSymbol);
+            }
+          });
+        });
+        recordsTbody.querySelectorAll('[data-review-symbol]').forEach(button => {
+          button.addEventListener('click', event => {
+            event.stopPropagation();
+            selectRadarOpportunity(button.dataset.reviewSymbol);
+            verifySetupWithAI(button.dataset.reviewSymbol);
+          });
+        });
+        renderFlightStage(filtered.find(item => item.symbol === selectedRadarSymbol) || filtered[0]);
       }
 
       // Trigger causal review modal
@@ -1888,8 +2590,11 @@
         modalOverlay.classList.add('active');
         modalBodyContent.innerHTML = `<div class="ai-loading-box"><div class="ai-loader-ring"></div><p style="color:var(--text-secondary);font-size:.9rem">Mapping liquidity, profile, VWAP and the live depth snapshot…</p></div>`;
         try {
+          const [ltf, htf] = (scanModeSelect.value || '5m,1h').split(',');
           const response = await premiumRadarFetch('/quant/verify-setup', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ symbol })
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ symbol, ltf, htf }),
           });
           const data = await response.json();
           if (!response.ok) throw new Error(data.detail || 'Causal review query failed.');
@@ -1908,11 +2613,12 @@
         const vwap = data.vwap_context || {};
         const label = value => String(value || 'UNAVAILABLE').replace(/_/g, ' ');
         const pool = data.target_pool ? `${label(data.target_pool.kind)} · ${data.target_pool.price}` : 'No directional pool mapped';
-        const limitations = (data.limitations || []).map(item => `<li>${item}</li>`).join('');
+        const limitations = (data.limitations || []).map(item => `<li>${escapeResearch(item)}</li>`).join('');
         const contradictions = (context.contradictions || []).map(label).join(', ') || 'None reported';
         modalBodyContent.innerHTML = `
           <div class="ai-verdict-banner ${data.verdict === 'REVIEW_CANDIDATE' ? 'verdict-continuation' : 'verdict-reversal'}"><span>${label(data.verdict)}</span><span>Evidence score: ${data.evidence_score ?? 0}/100</span></div>
           <div class="ai-levels-grid"><div class="ai-level-item"><span>Regime</span><strong>${label(data.market_structure?.phase)}</strong></div><div class="ai-level-item"><span>Liquidity target</span><strong>${pool}</strong></div><div class="ai-level-item invalid"><span>Contradictions</span><strong>${contradictions}</strong></div></div>
+          ${renderRadarStoryDetail(data)}
           <div class="ai-reasoning-section"><h4>Causal evidence</h4><ul class="ai-reasoning-list"><li>Positioning: ${label(positioning.state)}</li><li>Volume profile: ${label(profile.location)}</li><li>VWAP: ${label(vwap.price_relation)}</li><li>Coverage: ${(context.coverage || {}).available_domains || 0}/${(context.coverage || {}).required_domains || 4} required domains</li></ul></div>
           <div class="ai-reasoning-section"><h4>Known limitations</h4><ul class="ai-reasoning-list">${limitations}</ul></div>
           <p style="font-size:.78rem;color:var(--text-muted);margin:1rem 0 0">${data.trade_instruction || 'Radar does not authorize execution.'}</p>`;
@@ -1928,6 +2634,7 @@
       }
 
       function formatResearchPrice(value) {
+        if (value === null || value === undefined || value === '') return 'UNAVAILABLE';
         const numeric = Number(value);
         return Number.isFinite(numeric) ? numeric.toLocaleString(undefined, { maximumFractionDigits: 6 }) : 'UNAVAILABLE';
       }
@@ -1979,12 +2686,27 @@
           const levels = detail.levels || {};
           const contradictions = context.contradictions || candidate.contradictions || [];
           const limitations = detail.limitations || [];
-          const review = detail.verdict === 'REVIEW_CANDIDATE';
           const direction = detail.direction || candidate.direction || 'WAIT';
-          const thesis = `${researchLabel(structure.phase)} on the primary timeframe within ${researchLabel(structure.higher_timeframe_phase)} higher-timeframe context. ${researchLabel(direction)} context requires the listed liquidity and execution controls to remain intact.`;
+          const storyPayload = {
+            ...candidate,
+            ...detail,
+            direction,
+            market_story: detail.market_story || candidate.market_story || {},
+            market_context: detail.market_context || candidate.market_context || {},
+          };
+          const story = radarStoryView(storyPayload);
+          const invalidated = String(story.state).toUpperCase() === 'INVALIDATED';
+          const review = detail.verdict === 'REVIEW_CANDIDATE' && story.actionable && !story.chaseProhibited;
+          const briefStateClass = invalidated ? 'invalid' : story.chaseProhibited ? 'stale' : review ? 'review' : 'watch';
+          const briefStateCopy = invalidated ? 'INVALIDATED' : story.chaseProhibited ? 'DO NOT CHASE' : review ? 'RESEARCH READY' : 'WATCH CONTEXT';
+          const thesis = `${story.happened} ${story.happeningNow}`;
           const controlText = contradictions.length ? contradictions.map(researchLabel).join(' · ') : 'No contradiction reported in this brief';
           const limitationsText = limitations.length ? limitations[0] : 'No additional limitation was reported.';
           const cells = [
+            ['Event lifecycle', `${researchLabel(story.eventType)} · ${researchLabel(story.state)}`, story.chaseProhibited || invalidated ? 'risk' : ''],
+            ['Event age', story.age === null || story.age === undefined ? 'UNAVAILABLE' : `${story.age} completed bar${Number(story.age) === 1 ? '' : 's'}`, ''],
+            ['Event level', formatResearchPrice(story.level), ''],
+            ['Event invalidation', formatResearchPrice(story.invalidation), 'risk'],
             ['Liquidity target', target ? `${researchLabel(target.kind)} · ${formatResearchPrice(target.price)}` : 'No directional pool mapped', ''],
             ['Invalidation reference', formatResearchPrice(levels.invalidation_level), 'risk'],
             ['Positioning', `${researchLabel(positioning.state)}${positioning.oi_change_pct !== undefined ? ` · ${Number(positioning.oi_change_pct).toFixed(2)}% OI` : ''}`, ''],
@@ -1996,10 +2718,11 @@
             <div class="research-brief-summary" role="button" tabindex="0" onclick="toggleResearchBrief(${index})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleResearchBrief(${index})}">
               <span class="research-rank">${index + 1}</span>
               <div class="research-brief-title"><strong>${escapeResearch(candidate.symbol)}</strong><span>${escapeResearch(thesis)}</span></div>
-              <span class="research-brief-state ${review ? 'review' : 'watch'}">${review ? 'RESEARCH READY' : 'WATCH CONTEXT'}</span>
+              <span class="research-brief-state ${briefStateClass}">${briefStateCopy}</span>
             </div>
             <div class="research-brief-detail">
               <p class="research-thesis">${escapeResearch(thesis)}</p>
+              ${renderRadarStoryDetail(storyPayload, true)}
               <div class="research-evidence-grid">${cells.map(([label, value, tone]) => `<div class="research-evidence-cell ${tone}"><span>${escapeResearch(label)}</span><strong>${escapeResearch(value)}</strong></div>`).join('')}</div>
               <div class="research-brief-footer"><div class="research-note risk"><b>Contradictory evidence</b>${escapeResearch(controlText)}</div><div class="research-note"><b>Known limitation</b>${escapeResearch(limitationsText)}</div></div>
               <button class="research-expand" type="button" onclick="toggleResearchBrief(${index})">Collapse brief</button>

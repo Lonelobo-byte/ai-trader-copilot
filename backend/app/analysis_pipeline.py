@@ -19,7 +19,7 @@ from app.quant.feature_engine import compute_quant_features
 from app.quant.live_confirmation import verify_main_signal_snapshot
 from app.signal_service import reconcile_signal
 from app.data_sources.data_aggregator import (
-    attach_live_multi_venue_snapshot,
+    attach_live_execution_tape_snapshot,
     fetch_market_intelligence,
 )
 
@@ -86,6 +86,7 @@ def _build_analysis_snapshot(
         "symbol": symbol,
         "timeframe": timeframe,
         "primary_candle": primary_candle,
+        "completed_story_as_of": (features.get("market_story", {}) or {}).get("as_of_close_time"),
         "source_coverage": features.get("data_quality", {}),
         "source_meta": intelligence.get("meta", {}),
         "market": {
@@ -98,6 +99,7 @@ def _build_analysis_snapshot(
         "causal": {
             "market_context": features.get("market_context", {}),
             "market_structure": features.get("market_structure", {}),
+            "market_story": features.get("market_story", {}),
             "liquidity_map": features.get("liquidity_map", {}),
             "liquidity_sweep": features.get("sweep", {}),
             "positioning": features.get("positioning", {}),
@@ -107,7 +109,11 @@ def _build_analysis_snapshot(
         },
         "execution": {
             "order_book_pressure": features.get("order_book", {}),
-            "multi_venue": intelligence.get("multi_venue", {}) or features.get("multi_venue", {}),
+            "execution_tape": (
+                intelligence.get("execution_tape")
+                or features.get("execution_tape")
+                or {}
+            ),
             "derivatives": {
                 "taker_buy_sell_volume": derivatives.get("taker_volume", {}),
                 "oi_history": derivatives.get("oi_history", {}),
@@ -167,7 +173,7 @@ async def run_full_analysis(
         intel = await fetch_market_intelligence(symbol, timeframe, settings)
     else:
         intel = market_intelligence
-    intel = attach_live_multi_venue_snapshot(intel, symbol, settings)
+    intel = attach_live_execution_tape_snapshot(intel, symbol, settings)
     # The explicit route arguments remain authoritative for streaming callers.
     intel["candles"], intel["ticker"], intel["order_book"] = candles, ticker, order_book_raw
     features = compute_quant_features(intel)
@@ -344,7 +350,7 @@ async def run_full_analysis(
         # Council work can take seconds. Refresh the zero-I/O shared snapshot
         # immediately before the live gate so an expired book cannot veto or
         # confirm the final setup.
-        intel = attach_live_multi_venue_snapshot(intel, symbol, settings)
+        intel = attach_live_execution_tape_snapshot(intel, symbol, settings)
         confirmation_timeframes = {
             "1m": "5m", "5m": "1h", "15m": "4h", "1h": "1d", "4h": "1d", "1d": "1w",
         }
@@ -355,7 +361,7 @@ async def run_full_analysis(
             symbol=symbol, timeframe=timeframe, side=direction_side, candles=candles,
             higher_candles=higher_candles, order_book=order_book_raw,
             funding=intel.get("funding", {}) or {}, derivatives=intel.get("derivatives", {}) or {},
-            multi_venue=intel.get("multi_venue", {}) or {},
+            multi_venue=intel.get("execution_tape", {}) or {},
             planned_notional_usd=(trade_setup.get("position") or {}).get("notional_usd"),
         )
     if cio_result.get("institutional_dossier"):
@@ -407,6 +413,8 @@ async def run_full_analysis(
             liquidity=liquidity,
             ai_result=cio_result,
             council_approval=approval,
+            execution_tape=intel.get("execution_tape", {}) or {},
+            causal_market_context=features.get("market_context", {}) or {},
         )
     elif historical_replay:
         signal_monitor = {
@@ -431,8 +439,24 @@ async def run_full_analysis(
     # lower-confidence research watch; it cannot create or alter a signal.
     signal_monitor["confirmation_scenarios"] = (cio_result.get("live_confirmation") or {}).get("scenarios", {})
     signal_monitor["publication_coverage"] = (cio_result.get("live_confirmation") or {}).get("publication_coverage", {})
-    signal_monitor["multi_venue_evidence"] = (
-        ((cio_result.get("live_confirmation") or {}).get("live_evidence") or {}).get("cross_venue_evidence", {})
+    macro_blockout = cio_result.get("macro_blockout") or {}
+    signal_monitor["macro_control"] = {
+        "clear": not bool(macro_blockout.get("active")),
+        "status": "BLOCKED" if macro_blockout.get("active") else "CLEAR",
+        "reason": macro_blockout.get("reason"),
+    }
+    signal_monitor["actual_flow_evidence"] = (
+        ((cio_result.get("live_confirmation") or {}).get("live_evidence") or {}).get(
+            "actual_flow_evidence", {}
+        )
+    )
+    signal_monitor["structure_story"] = (cio_result.get("live_confirmation") or {}).get(
+        "structure_story",
+        features.get("market_story", {}),
+    )
+    signal_monitor["market_story_actionability"] = (
+        ((cio_result.get("live_confirmation") or {}).get("structure_story") or {}).get("directional_view")
+        or (features.get("market_context", {}) or {}).get("actionability", {})
     )
     signal_monitor["candidate_setup"] = {
         "side": trade_setup.get("side", "NEUTRAL"),
@@ -517,7 +541,7 @@ async def run_full_analysis(
         },
         "signal_monitor": analysis_snapshot["execution"]["signal_monitor"],
         "trade_setup": analysis_snapshot["execution"]["trade_setup"],
-        "multi_venue": analysis_snapshot["execution"]["multi_venue"],
+        "execution_tape": analysis_snapshot["execution"]["execution_tape"],
         "order_book_pressure": analysis_snapshot["execution"]["order_book_pressure"],
         "liquidity_sweep": analysis_snapshot["causal"]["liquidity_sweep"],
         # Keep this compatibility projection deliberately compact. The full
@@ -549,6 +573,7 @@ async def run_full_analysis(
         "risk_appetite_proxy": analysis_snapshot["telemetry"]["risk_appetite_proxy"],
         "sentiment": analysis_snapshot["telemetry"]["sentiment"],
         "market_structure": analysis_snapshot["causal"]["market_structure"],
+        "market_story": analysis_snapshot["causal"]["market_story"],
         # Primary causal-decision contract for the dashboard. These fields are
         # intentionally separate from legacy indicator telemetry.
         "market_context": analysis_snapshot["causal"]["market_context"],

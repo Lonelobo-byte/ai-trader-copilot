@@ -27,7 +27,7 @@ from app.data_sources.macro import fetch_macro_data
 from app.data_sources.sentiment import fetch_sentiment_snapshot
 from app.data_sources.calendar import fetch_economic_events
 from app.data_sources.global_liquidity import fetch_global_liquidity_index
-from app.data_sources.multi_venue_ws import get_multi_venue_snapshot
+from app.data_sources.execution_tape_ws import get_execution_tape_snapshot
 from app.settings import Settings
 
 logger = logging.getLogger(__name__)
@@ -73,7 +73,33 @@ def _store(key: str, value: Any) -> None:
 
 
 def _snapshot_key(symbol: str, timeframe: str, candle_limit: int) -> str:
-    return f"{symbol.upper().strip()}:{timeframe}:{max(60, min(int(candle_limit), 1000))}"
+    # Market-story identity is standardized on at least 200 candles across
+    # Radar, Research, and the live workspace. Normalize the cache key too so
+    # callers asking for a smaller display window do not trigger duplicate
+    # upstream snapshots that contain the same canonical history.
+    return f"{symbol.upper().strip()}:{timeframe}:{max(200, min(int(candle_limit), 1000))}"
+
+
+def synchronize_ticker_with_order_book(
+    ticker: dict[str, Any],
+    order_book: dict[str, Any],
+) -> dict[str, Any]:
+    """Attach executable best bid/ask from the matching depth snapshot.
+
+    Binance Futures' 24-hour ticker omits spot-style ``bidPrice`` and
+    ``askPrice`` fields. Downstream spread calculations therefore need the
+    concurrently fetched futures book, not zero-filled ticker fields.
+    """
+    result = dict(ticker or {})
+    bids = list((order_book or {}).get("bids") or [])
+    asks = list((order_book or {}).get("asks") or [])
+    if bids:
+        result["bidPrice"] = float(bids[0][0])
+        result["bidQty"] = float(bids[0][1])
+    if asks:
+        result["askPrice"] = float(asks[0][0])
+        result["askQty"] = float(asks[0][1])
+    return result
 
 
 def _fetch_gate(limit: int) -> asyncio.Semaphore:
@@ -85,35 +111,45 @@ def _fetch_gate(limit: int) -> asyncio.Semaphore:
         _FETCH_GATES[bounded_limit] = gate
     return gate
 
-def attach_live_multi_venue_snapshot(
+def attach_live_execution_tape_snapshot(
     intelligence: dict[str, Any], symbol: str, settings: Settings
 ) -> dict[str, Any]:
-    """Attach the latest process-local public-feed evidence without I/O.
+    """Attach the latest process-local Binance/Bybit execution tape without I/O.
 
     Cached REST/context snapshots may be several seconds old. The shared hub
     is read in O(1) here so every analysis tick gets current feed health and
     evidence without opening another upstream connection.
     """
     try:
-        snapshot = get_multi_venue_snapshot(symbol, settings)
+        snapshot = get_execution_tape_snapshot(symbol, settings)
     except Exception as exc:
-        logger.warning("Multi-venue snapshot unavailable for %s: %s", symbol, exc)
+        logger.warning("Execution-tape snapshot unavailable for %s: %s", symbol, exc)
         snapshot = {
+            "schema_version": "execution_tape.v1",
             "available": False,
             "status": "UNAVAILABLE",
             "symbol": symbol.upper().strip(),
-            "reason": "multi_venue_snapshot_error",
-            "venues": {},
+            "reason": "execution_tape_snapshot_error",
+            "sources": {},
+            "actual_flow": {"available": False, "status": "UNAVAILABLE"},
         }
+    intelligence["execution_tape"] = snapshot
+    # Temporary internal alias for older cached snapshots and callers. New UI
+    # and decision logic consume ``execution_tape``.
     intelligence["multi_venue"] = snapshot
     meta = intelligence.setdefault("meta", {})
-    available = [item for item in meta.get("sources_available", []) if item != "multi_venue_ws"]
-    failed = [item for item in meta.get("sources_failed", []) if item != "multi_venue_ws"]
-    (available if snapshot.get("available") else failed).append("multi_venue_ws")
+    legacy_names = {"multi_venue_ws", "execution_tape_ws"}
+    available = [item for item in meta.get("sources_available", []) if item not in legacy_names]
+    failed = [item for item in meta.get("sources_failed", []) if item not in legacy_names]
+    (available if snapshot.get("available") else failed).append("execution_tape_ws")
     meta["sources_available"] = available
     meta["sources_failed"] = failed
     meta["total_sources"] = len(available) + len(failed)
     return intelligence
+
+
+# Compatibility name used by older internal callers during rolling upgrades.
+attach_live_multi_venue_snapshot = attach_live_execution_tape_snapshot
 
 
 async def fetch_market_intelligence_cached(
@@ -137,7 +173,7 @@ async def fetch_market_intelligence_cached(
         cached = _SNAPSHOT_CACHE.get(key)
         if cached and ttl and now - cached[0] <= ttl:
             _SNAPSHOT_CACHE.move_to_end(key)
-            return attach_live_multi_venue_snapshot(deepcopy(cached[1]), symbol, settings)
+            return attach_live_execution_tape_snapshot(deepcopy(cached[1]), symbol, settings)
         if cached:
             _SNAPSHOT_CACHE.pop(key, None)
 
@@ -160,7 +196,7 @@ async def fetch_market_intelligence_cached(
 
     try:
         result = await asyncio.shield(task)
-        return attach_live_multi_venue_snapshot(deepcopy(result), symbol, settings)
+        return attach_live_execution_tape_snapshot(deepcopy(result), symbol, settings)
     finally:
         if task.done():
             async with _SNAPSHOT_LOCK:
@@ -202,7 +238,11 @@ async def fetch_market_intelligence(
         "meta": { "fetch_time_ms", "sources_available", "sources_failed" },
     }
     """
-    spot = BinancePublicClient(settings.binance_public_base_url)
+    # Research and Radar both evaluate perpetual-market structure. Mixing spot
+    # candles with futures OI/funding produced different breaks and sometimes
+    # assigned derivatives positioning to a price event that never occurred on
+    # the derivatives venue.
+    market = BinancePublicClient(settings.binance_futures_base_url, market="futures")
     futures = BinanceFuturesClient(settings.binance_futures_base_url)
 
     # ── Identify higher timeframes for multi-TF analysis ─────────────────
@@ -212,16 +252,16 @@ async def fetch_market_intelligence(
     start = monotonic()
 
     # Core price data (always fresh)
-    safe_candle_limit = max(60, min(int(candle_limit), 1000))
-    candles_task = spot.klines(symbol, timeframe, limit=safe_candle_limit)
-    ticker_task = spot.ticker_24hr(symbol)
-    order_book_task = spot.order_book(symbol, limit=100)
-    trades_task = spot.recent_trades(symbol, limit=200)
+    safe_candle_limit = max(200, min(int(candle_limit), 1000))
+    candles_task = market.klines(symbol, timeframe, limit=safe_candle_limit)
+    ticker_task = market.ticker_24hr(symbol)
+    order_book_task = market.order_book(symbol, limit=100)
+    trades_task = market.recent_trades(symbol, limit=200)
 
     # Multi-timeframe candles
     mtf_tasks = {
         tf: asyncio.wait_for(
-            spot.klines(symbol, tf, limit=200), timeout=DERIVATIVES_TIMEOUT_SECONDS
+            market.klines(symbol, tf, limit=200), timeout=DERIVATIVES_TIMEOUT_SECONDS
         )
         for tf in higher_tfs
     }
@@ -331,6 +371,7 @@ async def fetch_market_intelligence(
         sources_available.append("order_book")
     else:
         sources_failed.append("order_book")
+    ticker = synchronize_ticker_with_order_book(ticker, order_book)
 
     recent_trades = safe(core_results[3], [])
     if recent_trades:
@@ -475,7 +516,7 @@ async def fetch_market_intelligence(
         f"in {elapsed_ms}ms"
     )
 
-    return attach_live_multi_venue_snapshot(intelligence, symbol, settings)
+    return attach_live_execution_tape_snapshot(intelligence, symbol, settings)
 
 
 async def fetch_pair_discovery_data(settings: Settings) -> dict[str, Any]:

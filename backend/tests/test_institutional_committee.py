@@ -160,35 +160,50 @@ def test_on_chain_engine_is_not_part_of_decision_architecture() -> None:
     assert dossier["engines"]["market_structure_engine"]["status"] == "COMPLETE"
 
 
-def test_cross_venue_evidence_reaches_cio_dossier_and_memorandum() -> None:
+def test_execution_tape_evidence_reaches_cio_dossier_and_memorandum() -> None:
     features = _features()
-    cross_venue = {
+    execution_tape = {
         "available": True,
         "status": "HEALTHY",
-        "fresh_venue_count": 2,
-        "flow_venue_count": 2,
-        "flow_confirmed": True,
-        "flow_consensus": "BULLISH",
-        "flow_score": 0.42,
-        "depth_score": 0.18,
-        "price_dispersion_bps": 1.5,
-        "venues": {
-            "bybit": {
+        "actual_flow": {
+            "available": True,
+            "status": "BUYING_CONFIRMED",
+            "bias": "BULLISH",
+            "signed_flow": 0.42,
+            "aggressive_buy_ratio": 0.71,
+            "net_delta_usd": 125_000,
+            "cvd_trend": "RISING",
+            "active_aggressor": "BUYERS",
+            "price_response": "ACCEPTING_HIGHER",
+            "absorption": "NOT_DETECTED",
+            "exhaustion": "NONE",
+            "cross_market_alignment": "ALIGNED",
+            "confidence": "MEDIUM",
+            "qualified_source_count": 2,
+        },
+        "sources": {
+            "binance_spot": {
+                "exchange": "BINANCE",
+                "market": "SPOT",
                 "health": "HEALTHY",
-                "aggressive_buy_ratio": 0.68,
-                "persistent_imbalance": 0.21,
-                "removal_ratio": 0.31,
+                "trade_flow": {
+                    "verdict": "BUYING_CONFIRMED",
+                    "aggressive_buy_ratio": 0.68,
+                },
             },
-            "coinbase": {
+            "bybit_perp": {
+                "exchange": "BYBIT",
+                "market": "PERPETUAL",
                 "health": "HEALTHY",
-                "aggressive_buy_ratio": 0.63,
-                "persistent_imbalance": 0.12,
-                "removal_ratio": 0.28,
+                "trade_flow": {
+                    "verdict": "BUYING_CONFIRMED",
+                    "aggressive_buy_ratio": 0.74,
+                },
             },
         },
         "limitations": ["Displayed public liquidity only."],
     }
-    features["microstructure"]["incremental_public_feeds"] = cross_venue
+    features["microstructure"]["execution_tape"] = execution_tape
     quantitative = _quantitative()
     quantitative["microstructure"] = features["microstructure"]
     dossier = build_institutional_dossier(
@@ -205,12 +220,47 @@ def test_cross_venue_evidence_reaches_cio_dossier_and_memorandum() -> None:
     engine = dossier["engines"]["market_microstructure_engine"]
     evidence = {item["metric"]: item["value"] for item in engine["evidence"]}
     assert engine["status"] == "COMPLETE"
-    assert evidence["cross_venue_flow_consensus"] == "BULLISH"
-    assert evidence["bybit_aggressive_buy_ratio"] == 0.68
-    assert evidence["coinbase_aggressive_buy_ratio"] == 0.63
+    assert evidence["actual_flow_status"] == "BUYING_CONFIRMED"
+    assert evidence["active_aggressor"] == "BUYERS"
+    assert evidence["net_delta_usd"] == 125_000
+    assert evidence["spot_perpetual_alignment"] == "ALIGNED"
+    assert evidence["binance_spot_verdict"] == "BUYING_CONFIRMED"
+    assert evidence["bybit_perp_verdict"] == "BUYING_CONFIRMED"
 
     memo = build_investment_memo({"decision": "WAIT"}, dossier)
-    assert any("cross_venue_flow_consensus=BULLISH" in item for item in memo["supporting_evidence"])
+    assert any("actual_flow_status=BUYING_CONFIRMED" in item for item in memo["supporting_evidence"])
+
+
+def test_absorbed_execution_tape_is_evidence_but_not_a_directional_vote() -> None:
+    features = _features()
+    tape = {
+        "available": True,
+        "actual_flow": {
+            "available": True,
+            "status": "BUYERS_ABSORBED",
+            "signed_flow": 0.75,
+            "active_aggressor": "BUYERS",
+            "absorption": "BUYERS_ABSORBED",
+            "qualified_source_count": 2,
+        },
+        "sources": {},
+    }
+    features["microstructure"]["execution_tape"] = tape
+    quantitative = _quantitative()
+    quantitative["microstructure"] = features["microstructure"]
+    dossier = build_institutional_dossier(
+        symbol="BTCUSDT",
+        timeframe="15m",
+        features=features,
+        intelligence=_intelligence(),
+        quantitative=quantitative,
+        portfolio_state=_portfolio(),
+        macro_blockout={"active": False, "reason": ""},
+        settings=_settings(),
+    )
+    engine = dossier["engines"]["market_microstructure_engine"]
+    assert engine["bias"] == "NEUTRAL"
+    assert any("absorbing" in item.lower() for item in engine["contradictory_evidence"])
 
 
 def test_cio_prompt_projection_preserves_manifest_vetoes_and_engine_evidence() -> None:
@@ -272,6 +322,165 @@ def test_directional_causal_context_gets_a_zero_risk_value_retest_watch() -> Non
     assert setup["stop"]["selected"] < 96.5
     assert setup["position"]["risk_amount_usd"] == 0.0
     assert setup["execution_permitted"] is False
+
+
+def test_trade_plan_refuses_an_extended_structure_event() -> None:
+    event = {
+        "detected": True,
+        "event_id": "extended-long",
+        "type": "BOS",
+        "direction": "BULLISH",
+        "event_index": 55,
+        "age_bars": 2,
+        "break_level": 98.0,
+        "state": "EXTENDED_DO_NOT_CHASE",
+        "actionable": False,
+        "chase_prohibited": True,
+        "reason": "Price is 2.80 ATR beyond the event level; the original entry has moved away.",
+    }
+    setup = build_ai_driven_trade_setup(
+        {
+            "decision": "BUY_WATCH",
+            "confidence_pct": 75,
+            "trade_grade": "A",
+            "institutional_dossier": {
+                "risk_committee": {
+                    "allocation_ceiling": {"risk_fraction": 0.005, "max_notional_usd": 500.0},
+                },
+            },
+        },
+        {
+            "current_price": 103.0,
+            "volatility": {"atr": 1.0},
+            "market_story": {
+                "available": True,
+                "structure_events": [event],
+                "liquidity_events": [],
+                "latest_event": event,
+            },
+            "liquidity_map": {
+                "nearest_below": {"kind": "broken_structure", "price": 97.0},
+                "nearest_above": {"kind": "weekly_high", "price": 108.0},
+            },
+        },
+        _settings(),
+    )
+
+    assert setup["status"] == "WATCH_ONLY"
+    assert setup["execution_permitted"] is False
+    assert setup["position"]["risk_amount_usd"] == 0.0
+    assert setup["entry"]["reference"] == 98.0
+    assert setup["market_story"]["state"] == "EXTENDED_DO_NOT_CHASE"
+    assert "original entry has moved away" in setup["reason"]
+
+
+def test_trade_plan_requires_remaining_reward_before_next_liquidity_pool() -> None:
+    event = {
+        "detected": True,
+        "event_id": "fresh-long",
+        "type": "BOS",
+        "direction": "BULLISH",
+        "event_index": 59,
+        "age_bars": 0,
+        "break_level": 99.5,
+        "state": "ACTIONABLE_NOW",
+        "actionable": True,
+        "chase_prohibited": False,
+        "reason": "Fresh event.",
+    }
+    setup = build_ai_driven_trade_setup(
+        {
+            "decision": "BUY_WATCH",
+            "confidence_pct": 75,
+            "trade_grade": "A",
+            "institutional_dossier": {
+                "risk_committee": {
+                    "allocation_ceiling": {"risk_fraction": 0.005, "max_notional_usd": 500.0},
+                },
+            },
+        },
+        {
+            "current_price": 100.0,
+            "volatility": {"atr": 1.0},
+            "market_story": {
+                "available": True,
+                "structure_events": [event],
+                "liquidity_events": [],
+                "latest_event": event,
+            },
+            "liquidity_map": {
+                "nearest_below": {"kind": "equal_lows", "price": 98.0},
+                "nearest_above": {"kind": "previous_day_high", "price": 100.5},
+            },
+        },
+        _settings(),
+    )
+
+    assert setup["remaining_reward"]["adequate"] is False
+    assert setup["remaining_reward"]["to_liquidity_objective_r"] < 1.5
+    assert setup["execution_permitted"] is False
+    assert setup["position"]["risk_amount_usd"] == 0.0
+    assert setup["entry"]["reference"] == 99.5
+    assert setup["entry"]["mode"] == "completed_structure_event_retest"
+    assert setup["entry"]["reference"] != 100.0
+
+
+def test_trade_plan_blocks_a_live_quote_that_chased_past_a_fresh_event() -> None:
+    event = {
+        "detected": True,
+        "event_id": "fresh-but-live-quote-chased",
+        "type": "BOS",
+        "direction": "BULLISH",
+        "event_index": 59,
+        "age_bars": 0,
+        "break_level": 100.0,
+        "atr_at_event": 1.0,
+        "state": "ACTIONABLE_NOW",
+        "actionable": True,
+        "chase_prohibited": False,
+        "reason": "Latest completed candle was still reviewable.",
+    }
+    setup = build_ai_driven_trade_setup(
+        {
+            "decision": "BUY_WATCH",
+            "confidence_pct": 78,
+            "trade_grade": "A",
+            "institutional_dossier": {
+                "risk_committee": {
+                    "allocation_ceiling": {
+                        "risk_fraction": 0.005,
+                        "max_notional_usd": 500.0,
+                    },
+                },
+            },
+        },
+        {
+            "current_price": 103.0,
+            # Current volatility is much larger than event-time volatility;
+            # chase distance must remain normalized by the immutable event ATR.
+            "volatility": {"atr": 10.0},
+            "market_story": {
+                "available": True,
+                "structure_events": [event],
+                "liquidity_events": [],
+                "latest_event": event,
+            },
+            "liquidity_map": {
+                "nearest_below": {"kind": "equal_lows", "price": 98.0},
+                "nearest_above": {"kind": "weekly_high", "price": 110.0},
+            },
+        },
+        _settings(),
+    )
+
+    assert setup["status"] == "WATCH_ONLY"
+    assert setup["execution_permitted"] is False
+    assert setup["market_story"]["state"] == "EXTENDED_DO_NOT_CHASE"
+    assert setup["market_story"]["live_quote_distance_atr"] == 3.0
+    assert setup["market_story"]["chase_prohibited"] is True
+    assert setup["entry"]["reference"] == 100.0
+    assert setup["entry"]["mode"] == "completed_structure_event_retest"
+    assert setup["position"]["risk_amount_usd"] == 0.0
 
 
 def test_risk_veto_cannot_be_overridden_by_bullish_cio_output() -> None:

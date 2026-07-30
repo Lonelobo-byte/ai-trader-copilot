@@ -86,6 +86,23 @@ decision architecture.
 
 An idea is published for manual review only when the unified market snapshot has the required core data, liquidity is healthy, the setup passes risk/reward checks, and the deterministic Risk Committee and Adversarial Review controls approve it. The system remains research/manual-execution software; it does not guarantee profitability.
 
+### Live production proof
+
+After the Docker application is healthy, run the read-only production proof
+from the repository root:
+
+```powershell
+python backend\scripts\production_proof.py --base-url https://your-domain.example --duration 60
+```
+
+The proof makes no AI calls, payments, account changes, signal publications, or
+trades. It checks the primary Radar page, all shared Radar timeframe pairs,
+the server-synchronized Radar clock, premium Research authentication, and a
+60-second public Binance/Bybit execution-flow window. Individual unsupported
+pairs or venues may remain partial or unavailable; the proof requires qualified
+flow from at least one configured symbol and never treats missing evidence as
+neutral confirmation.
+
 REST analysis now uses one shared snapshot for candles, higher timeframes, order book, trades, derivatives, macro, sentiment, news, and calendar context. The response includes `data_quality` so missing core sources are visible and can block signal publication.
 
 The Breakout Radar is an opportunity-triage screen, not a signal generator. It

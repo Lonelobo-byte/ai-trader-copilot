@@ -404,14 +404,20 @@ const confirmProfileVal = document.getElementById('confirm-profile-val');
 const confirmCandleVal = document.getElementById('confirm-candle-val');
 const confirmChochVal = document.getElementById('confirm-choch-val');
 const confirmExecStrip = document.getElementById('confirmation-exec-strip');
-const venueEvidenceStatus = document.getElementById('venue-evidence-status');
-const venueFlowValue = document.getElementById('venue-flow-value');
-const venueBybitValue = document.getElementById('venue-bybit-value');
-const venueCoinbaseValue = document.getElementById('venue-coinbase-value');
-const venueLiquidationValue = document.getElementById('venue-liquidation-value');
-const venueStabilityValue = document.getElementById('venue-stability-value');
-const venueCapacityValue = document.getElementById('venue-capacity-value');
-const venueEvidenceNote = document.getElementById('venue-evidence-note');
+const tapeEvidenceStatus = document.getElementById('tape-evidence-status');
+const tapeVerdictValue = document.getElementById('tape-verdict-value');
+const tapeAggressorValue = document.getElementById('tape-aggressor-value');
+const tapeBuyValue = document.getElementById('tape-buy-value');
+const tapeSellValue = document.getElementById('tape-sell-value');
+const tapeDeltaValue = document.getElementById('tape-delta-value');
+const tapeResponseValue = document.getElementById('tape-response-value');
+const tapeAbsorptionValue = document.getElementById('tape-absorption-value');
+const tapeExhaustionValue = document.getElementById('tape-exhaustion-value');
+const tapeAlignmentValue = document.getElementById('tape-alignment-value');
+const tapeLiquidationValue = document.getElementById('tape-liquidation-value');
+const tapeConfidenceValue = document.getElementById('tape-confidence-value');
+const tapeCapacityValue = document.getElementById('tape-capacity-value');
+const tapeEvidenceNote = document.getElementById('tape-evidence-note');
 
 // Decision Elements
 const decisionCard = document.getElementById('decision-card-container');
@@ -470,6 +476,18 @@ const monitorMissingEvidence = document.getElementById('monitor-missing-evidence
 const monitorMissingTitle = document.getElementById('monitor-missing-title');
 const monitorMissingDetail = document.getElementById('monitor-missing-detail');
 const monitorConfirmationScenarios = document.getElementById('monitor-confirmation-scenarios');
+const monitorMarketStory = document.getElementById('monitor-market-story');
+const monitorStoryState = document.getElementById('monitor-story-state');
+const monitorStoryDirection = document.getElementById('monitor-story-direction');
+const monitorStoryEvent = document.getElementById('monitor-story-event');
+const monitorStoryAge = document.getElementById('monitor-story-age');
+const monitorStoryLevel = document.getElementById('monitor-story-level');
+const monitorStoryInvalidation = document.getElementById('monitor-story-invalidation');
+const monitorStoryHappened = document.getElementById('monitor-story-happened');
+const monitorStoryNow = document.getElementById('monitor-story-now');
+const monitorStoryNext = document.getElementById('monitor-story-next');
+const monitorStoryFailure = document.getElementById('monitor-story-failure');
+const monitorStoryAction = document.getElementById('monitor-story-action');
 const monitorGateStrip = document.getElementById('monitor-gate-strip');
 const monitorTradeLifecycle = document.getElementById('monitor-trade-lifecycle');
 const monitorWatchPlan = document.getElementById('monitor-watch-plan');
@@ -516,6 +534,21 @@ const setupStopSourceVal = document.getElementById('setup-stop-source-val');
 const setupObjectiveVal = document.getElementById('setup-objective-val');
 const setupAllocationVal = document.getElementById('setup-allocation-val');
 const setupExecutionVal = document.getElementById('setup-execution-val');
+const setupMarketStory = document.getElementById('setup-market-story');
+const setupStoryState = document.getElementById('setup-story-state');
+const setupStoryDirection = document.getElementById('setup-story-direction');
+const setupStoryEvent = document.getElementById('setup-story-event');
+const setupStoryAge = document.getElementById('setup-story-age');
+const setupStoryLevel = document.getElementById('setup-story-level');
+const setupStoryInvalidation = document.getElementById('setup-story-invalidation');
+const setupStoryReward = document.getElementById('setup-story-reward');
+const setupStoryRewardState = document.getElementById('setup-story-reward-state');
+const setupStoryRewardDetail = document.getElementById('setup-story-reward-detail');
+const setupStoryHappened = document.getElementById('setup-story-happened');
+const setupStoryNow = document.getElementById('setup-story-now');
+const setupStoryNext = document.getElementById('setup-story-next');
+const setupStoryFailure = document.getElementById('setup-story-failure');
+const setupStoryAction = document.getElementById('setup-story-action');
 
 // Causal market-context panel. This is deliberately separate from the
 // legacy indicator telemetry so the dashboard explains evidence hierarchy.
@@ -968,22 +1001,271 @@ if (scannerLoopStatus) {
 
 // ── Rendering dashboard logic ──────────────────────────────────────────────
 
-function renderTradeSetup(setup) {
+function marketStoryLabel(value, fallback = 'UNAVAILABLE') {
+  const text = String(value ?? '').trim();
+  return text ? text.replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').toUpperCase() : fallback;
+}
+
+function marketStoryPrice(value) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) && numeric > 0 ? formatCurrency(numeric) : '—';
+}
+
+function resolveMarketStory({
+  marketStory = {},
+  structureStory = {},
+  setupStory = {},
+  preferredDirection = '',
+  preferSetupStory = false,
+} = {}) {
+  const isPopulatedObject = value => Boolean(
+    value
+    && typeof value === 'object'
+    && !Array.isArray(value)
+    && Object.keys(value).length,
+  );
+  const wrappedPrimary = isPopulatedObject(structureStory?.primary) ? structureStory.primary : null;
+  const directStructureStory = (
+    structureStory?.schema_version === 'market_story.v1'
+    || Object.prototype.hasOwnProperty.call(structureStory || {}, 'available')
+  ) ? structureStory : null;
+  const primary = wrappedPrimary
+    || (isPopulatedObject(marketStory) ? marketStory : directStructureStory)
+    || {};
+  const directionalCandidates = preferSetupStory
+    ? [
+      setupStory?.directional_view,
+      setupStory,
+      structureStory?.directional_view,
+      primary.actionability,
+    ]
+    : [
+      structureStory?.directional_view,
+      setupStory?.directional_view,
+      setupStory,
+      primary.actionability,
+    ];
+  const directional = directionalCandidates.find(isPopulatedObject) || {};
+  const directionalOwnsEvent = Object.prototype.hasOwnProperty.call(directional, 'aligned_event')
+    || Object.prototype.hasOwnProperty.call(directional, 'selected_event');
+  const event = directional.aligned_event
+    || directional.selected_event
+    || setupStory.selected_event
+    || (directionalOwnsEvent ? null : primary.latest_event)
+    || {};
+  const state = directional.state
+    || setupStory.state
+    || primary.current_state
+    || primary.actionability?.status
+    || 'NO_ACTIVE_EVENT';
+  const direction = directional.direction
+    || event.direction
+    || primary.actionability?.direction
+    || preferredDirection
+    || 'NEUTRAL';
+  const explicitActionable = [directional.actionable, setupStory.actionable]
+    .find(value => typeof value === 'boolean');
+  const actionabilityKnown = typeof explicitActionable === 'boolean'
+    || typeof primary.actionability?.actionable === 'boolean';
+  const actionable = typeof explicitActionable === 'boolean'
+    ? explicitActionable
+    : primary.actionability?.actionable === true;
+  const explicitChaseRule = [directional.chase_prohibited, setupStory.chase_prohibited]
+    .find(value => typeof value === 'boolean');
+  const chaseProhibited = typeof explicitChaseRule === 'boolean'
+    ? explicitChaseRule
+    : (
+      (!directionalOwnsEvent && primary.actionability?.chase_prohibited === true)
+      || ['EXTENDED_DO_NOT_CHASE', 'MISSED', 'INVALIDATED', 'EXPIRED'].includes(String(state).toUpperCase())
+    );
+  const available = primary.available === true
+    || structureStory?.schema_version === 'structure_story.v1'
+    || Boolean(event.detected || event.event_id);
+  const age = event.age_bars ?? primary.actionability?.event_age_bars;
+  const eventType = event.type || primary.actionability?.event_type;
+  const eventLevel = event.break_level
+    ?? event.broken_level
+    ?? event.swept_level
+    ?? primary.actionability?.event_level;
+  const invalidation = event.invalidation_level;
+  const eventMatchesLatest = !event.event_id
+    || !primary.latest_event?.event_id
+    || event.event_id === primary.latest_event.event_id;
+  const continuation = eventMatchesLatest && Array.isArray(primary.next_scenarios)
+    ? primary.next_scenarios.find(item => item?.scenario === 'CONTINUATION') || primary.next_scenarios[0]
+    : null;
+  const failure = eventMatchesLatest && Array.isArray(primary.next_scenarios)
+    ? primary.next_scenarios.find(item => item?.scenario === 'FAILURE_OR_REVERSAL') || primary.next_scenarios[1]
+    : null;
+  const eventDirection = marketStoryLabel(event.direction || direction, 'NEUTRAL');
+  const generatedHappened = event.detected || event.event_id
+    ? `${eventDirection} ${marketStoryLabel(eventType, 'MARKET EVENT')} occurred ${Number(age) === 0 ? 'on the latest completed candle' : `${age ?? '—'} completed bars ago`} through ${marketStoryPrice(eventLevel)}.`
+    : 'No recent completed-candle structure break or liquidity sweep is active.';
+  const primaryLatestId = primary.latest_event?.event_id;
+  const happened = primary.what_happened && (!event.event_id || !primaryLatestId || event.event_id === primaryLatestId)
+    ? primary.what_happened
+    : generatedHappened;
+  const happeningNow = directional.reason
+    || setupStory.reason
+    || primary.what_is_happening
+    || 'The current price location is waiting for completed-candle classification.';
+  const next = continuation?.condition
+    || (
+      String(direction).toUpperCase() === 'BULLISH'
+        ? 'Continuation requires completed closes to hold the event level while flow and positioning remain bullish.'
+        : String(direction).toUpperCase() === 'BEARISH'
+          ? 'Continuation requires completed closes to hold below the event level while flow and positioning remain bearish.'
+          : 'A fresh completed event with aligned live evidence is required before manual review.'
+    );
+  const failureCondition = failure?.condition
+    || (
+      String(direction).toUpperCase() === 'BULLISH'
+        ? 'A completed close below invalidation, or a newer bearish event, cancels this branch.'
+        : String(direction).toUpperCase() === 'BEARISH'
+          ? 'A completed close above invalidation, or a newer bullish event, cancels this branch.'
+          : 'Remain in observation mode until a directional event becomes active.'
+    );
+  let tone = 'monitoring';
+  if (String(state).toUpperCase() === 'INVALIDATED') tone = 'invalidated';
+  else if (chaseProhibited || ['EXTENDED_DO_NOT_CHASE', 'MISSED', 'EXPIRED'].includes(String(state).toUpperCase())) tone = 'stale';
+  else if (actionable || ['ACTIONABLE_NOW', 'RETESTING'].includes(String(state).toUpperCase())) tone = 'actionable';
+  const actionText = chaseProhibited
+    ? `${marketStoryLabel(state)} · DO NOT CHASE`
+    : actionable
+      ? 'ACTIONABLE FOR MANUAL REVIEW · LIVE CONTROLS STILL APPLY'
+      : available
+        ? `${marketStoryLabel(state)} · OBSERVATION ONLY`
+        : 'OBSERVATION ONLY · WAITING FOR A QUALIFIED EVENT';
+  return {
+    available,
+    state,
+    direction,
+    actionable,
+    actionabilityKnown,
+    chaseProhibited,
+    tone,
+    event,
+    eventType,
+    age,
+    eventLevel,
+    invalidation,
+    happened,
+    happeningNow,
+    next,
+    failureCondition,
+    actionText,
+  };
+}
+
+function renderMarketStorySurface(elements, story) {
+  if (!elements?.panel) return;
+  elements.panel.dataset.storyTone = story.tone;
+  if (elements.state) elements.state.textContent = marketStoryLabel(story.state, 'AWAITING STORY');
+  if (elements.direction) {
+    elements.direction.textContent = marketStoryLabel(story.direction, 'NO DIRECTION');
+    elements.direction.dataset.direction = String(story.direction || '').toLowerCase();
+  }
+  if (elements.event) elements.event.textContent = marketStoryLabel(story.eventType, 'NO ACTIVE EVENT');
+  if (elements.age) elements.age.textContent = story.age === undefined || story.age === null ? '—' : `${story.age} BAR${Number(story.age) === 1 ? '' : 'S'}`;
+  if (elements.level) elements.level.textContent = marketStoryPrice(story.eventLevel);
+  if (elements.invalidation) elements.invalidation.textContent = marketStoryPrice(story.invalidation);
+  if (elements.happened) elements.happened.textContent = story.happened;
+  if (elements.now) elements.now.textContent = story.happeningNow;
+  if (elements.next) elements.next.textContent = story.next;
+  if (elements.failure) elements.failure.textContent = `Failure branch: ${story.failureCondition}`;
+  if (elements.action) {
+    const copy = elements.action.querySelector('span');
+    if (copy) copy.textContent = story.actionText;
+  }
+}
+
+function renderTradeSetup(setup, marketStory = {}, structureStory = {}) {
+  const setupStory = setup?.market_story || {};
+  const remainingReward = setup?.remaining_reward || {};
+  const rewardAdequacyKnown = typeof remainingReward.adequate === 'boolean';
+  const rewardAdequate = remainingReward.adequate === true;
+  const rewardInsufficient = remainingReward.adequate === false;
+  const rewardReason = remainingReward.reason || '';
+  let story = resolveMarketStory({
+    marketStory,
+    structureStory,
+    setupStory,
+    preferredDirection: setup?.side === 'LONG' ? 'BULLISH' : setup?.side === 'SHORT' ? 'BEARISH' : '',
+    preferSetupStory: true,
+  });
+  if (rewardInsufficient) {
+    story = {
+      ...story,
+      actionable: false,
+      chaseProhibited: true,
+      tone: 'stale',
+      happeningNow: rewardReason || 'Too little reward remains between the current entry location and the mapped liquidity objective.',
+      next: 'Wait for a fresh event or a materially better retest location that restores acceptable reward-to-risk.',
+      actionText: 'INSUFFICIENT REMAINING REWARD · DO NOT CHASE',
+    };
+  }
+  renderMarketStorySurface({
+    panel: setupMarketStory,
+    state: setupStoryState,
+    direction: setupStoryDirection,
+    event: setupStoryEvent,
+    age: setupStoryAge,
+    level: setupStoryLevel,
+    invalidation: setupStoryInvalidation,
+    happened: setupStoryHappened,
+    now: setupStoryNow,
+    next: setupStoryNext,
+    failure: setupStoryFailure,
+    action: setupStoryAction,
+  }, story);
+  if (setupStoryReward) {
+    setupStoryReward.dataset.rewardTone = rewardInsufficient ? 'insufficient' : rewardAdequate ? 'adequate' : 'unknown';
+  }
+  if (setupStoryRewardState) {
+    const rewardR = Number(remainingReward.to_liquidity_objective_r);
+    const hasRewardR = remainingReward.to_liquidity_objective_r !== null
+      && remainingReward.to_liquidity_objective_r !== undefined
+      && Number.isFinite(rewardR);
+    setupStoryRewardState.textContent = rewardInsufficient
+      ? `INSUFFICIENT${hasRewardR ? ` · ${rewardR.toFixed(2)}R` : ''} · DO NOT CHASE`
+      : rewardAdequate
+        ? `ADEQUATE${hasRewardR ? ` · ${rewardR.toFixed(2)}R` : ''}`
+        : 'NOT ASSESSED';
+  }
+  if (setupStoryRewardDetail) {
+    const objectiveKind = marketStoryLabel(remainingReward.objective_kind, 'LIQUIDITY OBJECTIVE');
+    const objectivePrice = marketStoryPrice(remainingReward.objective_price);
+    const minimumR = Number(remainingReward.minimum_required_r);
+    const threshold = remainingReward.minimum_required_r !== null
+      && remainingReward.minimum_required_r !== undefined
+      && Number.isFinite(minimumR)
+      ? `${minimumR.toFixed(2)}R minimum`
+      : 'the required minimum';
+    setupStoryRewardDetail.textContent = rewardReason || (
+      rewardAdequacyKnown
+        ? `${objectiveKind} at ${objectivePrice} · compared with ${threshold}.`
+        : 'Reward capacity will be measured from the current entry location.'
+    );
+  }
   const status = setup?.status || 'NO_TRADE';
   const label = value => String(value || 'UNAVAILABLE').replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').toUpperCase();
-  setupStatusVal.textContent = status.replace(/_/g, ' ');
-  setupStatusVal.className = 'setup-status ' + status.toLowerCase();
-  setupReasonVal.textContent = setup?.reason || 'Waiting for a qualified setup.';
-  if (setupLedgerCard) setupLedgerCard.className = `card exact-setup-card setup-ledger-card ledger-${status.toLowerCase()}`;
+  setupStatusVal.textContent = rewardInsufficient ? 'DO NOT CHASE' : status.replace(/_/g, ' ');
+  setupStatusVal.className = `setup-status ${rewardInsufficient ? 'blocked_by_reward' : status.toLowerCase()}`;
+  setupReasonVal.textContent = rewardInsufficient
+    ? rewardReason || 'The setup is mapped, but too little reward remains to justify chasing the move.'
+    : setup?.reason || 'Waiting for a qualified setup.';
+  if (setupLedgerCard) setupLedgerCard.className = `card exact-setup-card setup-ledger-card ledger-${status.toLowerCase()}${rewardInsufficient ? ' reward-insufficient' : ''}`;
   if (setupEvidenceHero) setupEvidenceHero.className = `setup-evidence-hero ${status.toLowerCase()}`;
-  if (setupEvidenceState) setupEvidenceState.textContent = `PLAN STATE · ${label(status)}`;
+  if (setupEvidenceState) setupEvidenceState.textContent = `PLAN STATE · ${rewardInsufficient ? 'INSUFFICIENT REWARD' : label(status)}`;
   if (setupTypeVal) setupTypeVal.textContent = label(setup?.setup_type || 'NO SCENARIO');
-  if (setupEvidenceTitle) setupEvidenceTitle.textContent = status === 'NO_TRADE'
-    ? 'No directional causal scenario is currently established'
+  if (setupEvidenceTitle) setupEvidenceTitle.textContent = rewardInsufficient
+    ? 'Scenario mapped, but remaining reward is insufficient'
+    : status === 'NO_TRADE'
+      ? 'No directional causal scenario is currently established'
     : status === 'WATCH_ONLY' ? 'Directional value-retest scenario mapped'
       : status === 'BLOCKED_BY_MACRO' ? 'Scenario mapped, but macro controls block release'
         : 'Institutional controls passed for manual review';
-  if (setupEvidenceMark) setupEvidenceMark.textContent = status === 'NO_TRADE' ? '—' : status === 'WATCH_ONLY' ? '◌' : status === 'BLOCKED_BY_MACRO' ? '!' : '✓';
+  if (setupEvidenceMark) setupEvidenceMark.textContent = rewardInsufficient ? '×' : status === 'NO_TRADE' ? '—' : status === 'WATCH_ONLY' ? '◌' : status === 'BLOCKED_BY_MACRO' ? '!' : '✓';
 
   if (!setup || status === 'NO_TRADE') {
     setupSideVal.textContent = '-';
@@ -1430,6 +1712,7 @@ function useAnalysisSnapshot(payload) {
     quantitative: snapshot.quantitative || payload.quantitative,
     market_context: causal.market_context || {},
     market_structure: causal.market_structure || {},
+    market_story: causal.market_story || payload.market_story || {},
     liquidity_map: causal.liquidity_map || {},
     liquidity_sweep: causal.liquidity_sweep || {},
     positioning: causal.positioning || {},
@@ -1444,7 +1727,7 @@ function useAnalysisSnapshot(payload) {
     trade_setup: execution.trade_setup || {},
     signal_monitor: execution.signal_monitor || {},
     live_confirmation: execution.live_confirmation || {},
-    multi_venue: execution.multi_venue || {},
+    execution_tape: execution.execution_tape || payload.execution_tape || {},
     gates: {
       ...(payload.gates || {}),
       data_freshness: execution.data_freshness || {},
@@ -1465,7 +1748,26 @@ function renderConfirmationEvidence(data) {
   const metrics = lc.metrics || {};
   const structChecks = lc.structure_checks || {};
   const liveChecks = lc.live_checks || {};
-  const direction = lc.direction || '';
+  const structure = data.market_structure || {};
+  const marketStory = data.market_story || {};
+  const firstEvidenceObject = (...values) => values.find(
+    value => value && typeof value === 'object' && Object.keys(value).length > 0
+  ) || {};
+  const contextDirection = String(data.market_context?.direction || '').toUpperCase();
+  const storyDirection = String(
+    marketStory.actionability?.direction
+      || structure.story_actionability?.direction
+      || ''
+  ).toUpperCase();
+  const direction = String(
+    lc.direction && lc.direction !== 'NEUTRAL'
+      ? lc.direction
+      : contextDirection === 'LONG'
+        ? 'BULLISH'
+        : contextDirection === 'SHORT'
+          ? 'BEARISH'
+          : storyDirection
+  ).toUpperCase();
   const status = lc.status || '';
 
   // Helper: set value + color class
@@ -1481,17 +1783,27 @@ function renderConfirmationEvidence(data) {
     const isConfirmed = status === 'LIVE_CONFIRMED_REVIEW';
     const isRejected = status.includes('REJECTED');
     const isStructureRejected = status === 'STRUCTURE_REJECTED';
+    const directionalPlanAvailable = structChecks.directional_plan !== false
+      && direction !== '' && direction !== 'NEUTRAL';
+    const observedEvidenceAvailable = marketStory.available === true
+      || Boolean(structure.phase)
+      || data.liquidity_sweep?.detected === true
+      || data.vwap_context?.available === true
+      || data.volume_profile?.available === true;
     if (isConfirmed) {
       confirmStatusBadge.textContent = '✓ CONFIRMED';
       confirmStatusBadge.className = 'telemetry-badge confirmed';
-    } else if (isStructureRejected) {
+    } else if (isStructureRejected && directionalPlanAvailable) {
       confirmStatusBadge.textContent = 'STRUCTURE FAIL';
       confirmStatusBadge.className = 'telemetry-badge rejected';
-    } else if (isRejected) {
+    } else if (isRejected && !isStructureRejected) {
       confirmStatusBadge.textContent = 'NOT CONFIRMED';
       confirmStatusBadge.className = 'telemetry-badge rejected';
-    } else if (direction) {
+    } else if (direction && direction !== 'NEUTRAL') {
       confirmStatusBadge.textContent = 'WATCHING';
+      confirmStatusBadge.className = 'telemetry-badge watching';
+    } else if (observedEvidenceAvailable) {
+      confirmStatusBadge.textContent = 'EVIDENCE READY';
       confirmStatusBadge.className = 'telemetry-badge watching';
     } else {
       confirmStatusBadge.textContent = 'SCANNING';
@@ -1501,10 +1813,14 @@ function renderConfirmationEvidence(data) {
 
   // Playbook & Phase
   const playbook = metrics.playbook || '';
-  const primaryPhase = metrics.primary_phase || '';
+  const primaryPhase = metrics.primary_phase || structure.phase || '';
   const higherPhase = metrics.higher_phase || '';
   if (confirmPlaybookVal) {
-    const label = playbook ? playbook.replace(/_/g, ' ') : '—';
+    const label = playbook && playbook !== 'NONE'
+      ? playbook.replace(/_/g, ' ')
+      : direction && direction !== 'NEUTRAL'
+        ? 'DIRECTIONAL WATCH'
+        : 'NO DIRECTIONAL PLAYBOOK';
     confirmPlaybookVal.textContent = label;
     confirmPlaybookVal.style.color = playbook && playbook !== 'NONE'
       ? 'var(--neon-blue)' : 'var(--text-muted)';
@@ -1516,18 +1832,47 @@ function renderConfirmationEvidence(data) {
       : '—';
   }
 
-  // BOS
-  const bos = metrics.bos || {};
+  // Completed-candle structure event. Prefer the canonical selected event so
+  // this card, the setup ledger, and the monitor describe the same event.
+  const selectedStructureEvent = firstEvidenceObject(
+    metrics.selected_structure_event,
+    marketStory.latest_structure_event,
+  );
+  const selectedEventType = String(selectedStructureEvent.type || '').toUpperCase();
+  const bos = selectedStructureEvent.detected && ['BOS', 'CHOCH'].includes(selectedEventType)
+    ? selectedStructureEvent
+    : firstEvidenceObject(metrics.bos, structure.bos);
   if (bos.detected) {
     const dir = String(bos.direction || '').toUpperCase();
-    setVal(confirmBosVal, `${dir} BOS`, dir === 'BULLISH' ? 'positive' : dir === 'BEARISH' ? 'negative' : '');
+    const eventType = marketStoryLabel(bos.type || 'BOS');
+    setVal(confirmBosVal, `${dir} ${eventType}`, dir === 'BULLISH' ? 'positive' : dir === 'BEARISH' ? 'negative' : '');
   } else {
     setVal(confirmBosVal, 'NO BREAK', 'neutral');
   }
 
-  // 20-Candle Breakout
+  // Structure lifecycle. Structured state replaces inference from a reason
+  // sentence when the current backend supports market_story.v1.
+  const compactStory = metrics.structure_story || lc.structure_story || {};
+  const structureState = compactStory.setup_state || compactStory.directional_view?.state;
+  const normalizedStructureState = String(
+    structureState
+      || structure.story_state
+      || marketStory.current_state
+      || marketStory.actionability?.status
+      || ''
+  ).toUpperCase();
   const breakoutConfirmed = structChecks.confirmed_completed_breakout;
-  if (breakoutConfirmed === true) {
+  if (['ACTIONABLE_NOW', 'RETESTING'].includes(normalizedStructureState)) {
+    setVal(confirmBreakoutVal, marketStoryLabel(normalizedStructureState), 'positive');
+  } else if (['EXTENDED_DO_NOT_CHASE', 'MISSED', 'EXPIRED'].includes(normalizedStructureState)) {
+    setVal(confirmBreakoutVal, 'DO NOT CHASE', 'warning');
+  } else if (normalizedStructureState === 'INVALIDATED') {
+    setVal(confirmBreakoutVal, 'INVALIDATED', 'negative');
+  } else if (normalizedStructureState === 'DEVELOPING') {
+    setVal(confirmBreakoutVal, 'MONITORING', 'warning');
+  } else if (normalizedStructureState) {
+    setVal(confirmBreakoutVal, marketStoryLabel(normalizedStructureState), 'neutral');
+  } else if (breakoutConfirmed === true) {
     setVal(confirmBreakoutVal, 'CONFIRMED', 'positive');
   } else if (breakoutConfirmed === false) {
     setVal(confirmBreakoutVal, 'AWAITED', 'warning');
@@ -1536,7 +1881,12 @@ function renderConfirmationEvidence(data) {
   }
 
   // Liquidity Sweep
-  const sweep = metrics.sweep || {};
+  const sweep = firstEvidenceObject(
+    metrics.sweep,
+    data.liquidity_sweep,
+    structure.liquidity_sweep,
+    marketStory.latest_liquidity_event,
+  );
   if (sweep.detected) {
     const dir = String(sweep.direction || '').replace(/_/g, ' ').toUpperCase();
     const quality = sweep.quality === 'strong' ? ' ★' : '';
@@ -1547,8 +1897,13 @@ function renderConfirmationEvidence(data) {
   }
 
   // Relative Volume
-  const rvol = metrics.rvol;
-  if (rvol !== undefined && rvol !== null) {
+  const rvol = Number(
+    metrics.event_rvol
+      ?? metrics.rvol
+      ?? selectedStructureEvent.relative_volume
+      ?? sweep.relative_volume
+  );
+  if (Number.isFinite(rvol)) {
     const passed = rvol >= 1.5;
     setVal(confirmRvolVal, `${rvol.toFixed(2)}x`, passed ? 'positive' : 'warning');
   } else {
@@ -1556,7 +1911,7 @@ function renderConfirmationEvidence(data) {
   }
 
   // VWAP Acceptance
-  const vwap = metrics.vwap || {};
+  const vwap = firstEvidenceObject(metrics.vwap, data.vwap_context);
   if (vwap.available) {
     const relation = String(vwap.price_relation || '').replace(/_/g, ' ');
     const expected = direction === 'BULLISH' ? 'ABOVE ALL' : direction === 'BEARISH' ? 'BELOW ALL' : '';
@@ -1567,7 +1922,7 @@ function renderConfirmationEvidence(data) {
   }
 
   // Volume Profile
-  const profile = metrics.volume_profile || {};
+  const profile = firstEvidenceObject(metrics.volume_profile, data.volume_profile);
   if (profile.available) {
     const loc = String(profile.location || '').replace(/_/g, ' ');
     setVal(confirmProfileVal, loc || 'UNKNOWN',
@@ -1577,8 +1932,13 @@ function renderConfirmationEvidence(data) {
   }
 
   // Decisive Candle
-  const bodyRatio = metrics.body_ratio;
-  if (bodyRatio !== undefined && bodyRatio !== null) {
+  const bodyRatio = Number(
+    metrics.event_body_ratio
+      ?? metrics.body_ratio
+      ?? selectedStructureEvent.body_ratio
+      ?? sweep.body_ratio
+  );
+  if (Number.isFinite(bodyRatio)) {
     const passed = bodyRatio >= 0.55;
     setVal(confirmCandleVal, `Body ${(bodyRatio * 100).toFixed(0)}%`, passed ? 'positive' : 'warning');
   } else {
@@ -1586,7 +1946,7 @@ function renderConfirmationEvidence(data) {
   }
 
   // Structure Opposition (CHoCH)
-  const choch = metrics.choch || {};
+  const choch = firstEvidenceObject(metrics.choch, structure.choch);
   const structNotOpposed = structChecks.structure_not_opposed;
   if (structNotOpposed === true) {
     setVal(confirmChochVal, 'CLEAR', 'positive');
@@ -1609,8 +1969,8 @@ function renderConfirmationEvidence(data) {
       ['Price/OI', liveChecks.price_oi_aligned],
       ['Funding', liveChecks.funding_not_crowded],
       ['Execution', liveChecks.execution_evidence_confirmed],
-      ['Cross-Venue', liveChecks.cross_venue_not_opposed],
-      ['Quote Stability', liveChecks.displayed_liquidity_stable],
+      ['Actual Flow', liveChecks.actual_flow_aligned],
+      ['Tape Opposition', liveChecks.actual_flow_not_opposed],
       ['Depth Capacity', liveChecks.execution_capacity_sufficient],
     ];
     confirmExecStrip.innerHTML = checks.map(([label, passed]) => {
@@ -1619,83 +1979,115 @@ function renderConfirmationEvidence(data) {
     }).join('');
   }
 
-  const multiVenue = data.multi_venue || {};
-  const venues = multiVenue.venues || {};
-  const flowConfirmed = multiVenue.flow_confirmed === true;
-  const flowConsensus = String(multiVenue.flow_consensus || 'UNAVAILABLE').toUpperCase();
-  const networkStatus = String(multiVenue.status || 'UNAVAILABLE').toUpperCase();
-  const setVenueValue = (element, text, tone = 'neutral') => {
+  const executionTape = data.execution_tape || {};
+  const actualFlow = executionTape.actual_flow || lc.live_evidence?.actual_flow_evidence || {};
+  const flowAvailable = actualFlow.available === true;
+  const flowBias = String(actualFlow.bias || 'UNAVAILABLE').toUpperCase();
+  const flowVerdict = String(actualFlow.status || 'UNAVAILABLE').toUpperCase();
+  const networkStatus = String(executionTape.status || 'UNAVAILABLE').toUpperCase();
+  const setTapeValue = (element, text, tone = 'neutral') => {
     if (!element) return;
     element.textContent = text;
     element.dataset.tone = tone;
   };
-  const venueLine = (name) => {
-    const payload = venues[name] || {};
-    const flow = payload.trade_flow || {};
-    const health = String(payload.health || 'UNAVAILABLE').toUpperCase();
-    const buyRatio = Number(flow.aggressive_buy_ratio);
-    const trades = Number(flow.trade_count);
-    if (flow.available === true && Number.isFinite(buyRatio)) {
-      return `${health} / BUY ${(buyRatio * 100).toFixed(0)}% / ${Number.isFinite(trades) ? trades : 0} TRADES`;
-    }
-    return `${health} / ${flow.warmup_complete === false ? 'FLOW WARMING' : 'FLOW UNQUALIFIED'}`;
-  };
-  const flowTone = flowConsensus === 'BULLISH'
+  const compactUsd = (value) => value >= 1_000_000
+    ? `$${(value / 1_000_000).toFixed(1)}M`
+    : value >= 1_000
+      ? `$${(value / 1_000).toFixed(1)}K`
+      : `$${Math.round(value || 0).toLocaleString()}`;
+  const flowTone = flowBias === 'BULLISH'
     ? 'positive'
-    : flowConsensus === 'BEARISH'
+    : flowBias === 'BEARISH'
       ? 'negative'
-      : flowConsensus === 'MIXED'
+      : flowVerdict.includes('ABSORBED') || flowVerdict.includes('EXHAUSTION')
         ? 'warning'
         : 'neutral';
-  const flowScore = Number(multiVenue.flow_score);
-  setVenueValue(
-    venueFlowValue,
-    flowConfirmed
-      ? `${flowConsensus} / SCORE ${Number.isFinite(flowScore) ? flowScore.toFixed(3) : 'N/A'}`
-      : `${flowConsensus} / TWO-VENUE PROOF REQUIRED`,
-    flowConfirmed ? flowTone : 'neutral',
+  const buyNotional = Number(actualFlow.buy_notional);
+  const sellNotional = Number(actualFlow.sell_notional);
+  const netDelta = Number(actualFlow.net_delta_usd);
+  const buyRatio = Number(actualFlow.aggressive_buy_ratio);
+  setTapeValue(
+    tapeVerdictValue,
+    flowAvailable
+      ? `${flowVerdict.replace(/_/g, ' ')} · ${flowBias}`
+      : 'WARMING PUBLIC TAPE',
+    flowAvailable ? flowTone : 'neutral',
   );
-  setVenueValue(
-    venueBybitValue,
-    venueLine('bybit'),
-    venues.bybit?.health === 'HEALTHY' ? 'positive' : 'warning',
+  setTapeValue(
+    tapeAggressorValue,
+    String(actualFlow.active_aggressor || 'UNAVAILABLE').replace(/_/g, ' '),
+    flowTone,
   );
-  setVenueValue(
-    venueCoinbaseValue,
-    venueLine('coinbase'),
-    venues.coinbase?.health === 'HEALTHY' ? 'positive' : 'warning',
+  setTapeValue(
+    tapeBuyValue,
+    Number.isFinite(buyNotional)
+      ? `${compactUsd(buyNotional)}${Number.isFinite(buyRatio) ? ` · ${(buyRatio * 100).toFixed(1)}%` : ''}`
+      : 'AWAITING TRADES',
+    flowBias === 'BULLISH' ? 'positive' : 'neutral',
+  );
+  setTapeValue(
+    tapeSellValue,
+    Number.isFinite(sellNotional)
+      ? `${compactUsd(sellNotional)}${Number.isFinite(buyRatio) ? ` · ${((1 - buyRatio) * 100).toFixed(1)}%` : ''}`
+      : 'AWAITING TRADES',
+    flowBias === 'BEARISH' ? 'negative' : 'neutral',
+  );
+  setTapeValue(
+    tapeDeltaValue,
+    Number.isFinite(netDelta)
+      ? `${netDelta >= 0 ? '+' : '−'}${compactUsd(Math.abs(netDelta))} · ${String(actualFlow.cvd_trend || 'FLAT')}`
+      : 'UNAVAILABLE',
+    flowTone,
+  );
+  setTapeValue(
+    tapeResponseValue,
+    String(actualFlow.price_response || 'UNAVAILABLE').replace(/_/g, ' '),
+    flowVerdict.includes('CONFIRMED') ? 'positive' : flowAvailable ? 'warning' : 'neutral',
+  );
+  const absorption = String(actualFlow.absorption || 'NOT_DETECTED').toUpperCase();
+  setTapeValue(
+    tapeAbsorptionValue,
+    absorption.replace(/_/g, ' '),
+    absorption === 'NOT_DETECTED' ? 'positive' : 'warning',
+  );
+  const exhaustion = String(actualFlow.exhaustion || 'NONE').toUpperCase();
+  setTapeValue(
+    tapeExhaustionValue,
+    exhaustion.replace(/_/g, ' '),
+    exhaustion === 'NONE' ? 'positive' : 'warning',
+  );
+  const alignment = String(actualFlow.cross_market_alignment || 'UNAVAILABLE').toUpperCase();
+  setTapeValue(
+    tapeAlignmentValue,
+    alignment.replace(/_/g, ' '),
+    alignment === 'ALIGNED' ? 'positive' : alignment === 'DIVERGENT' ? 'warning' : 'neutral',
   );
 
-  const liquidation = multiVenue.observed_liquidations || {};
+  const liquidation = executionTape.observed_liquidations || {};
   const longLiquidated = Number(liquidation.long_liquidated_notional);
   const shortLiquidated = Number(liquidation.short_liquidated_notional);
-  setVenueValue(
-    venueLiquidationValue,
-    liquidation.available
+  setTapeValue(
+    tapeLiquidationValue,
+    liquidation.observed
       ? `LONG $${Math.round(longLiquidated || 0).toLocaleString()} / SHORT $${Math.round(shortLiquidated || 0).toLocaleString()}`
-      : 'NOT OBSERVED / FEED UNAVAILABLE',
-    liquidation.available ? 'warning' : 'neutral',
+      : liquidation.available
+        ? 'LIVE · NO EVENTS IN WINDOW'
+        : 'NOT OBSERVED / FEED UNAVAILABLE',
+    liquidation.observed ? 'warning' : liquidation.available ? 'positive' : 'neutral',
   );
-  const stability = multiVenue.displayed_liquidity_stability || lc.live_evidence?.displayed_liquidity_stability || {};
-  const stabilityStatus = String(stability.status || 'UNAVAILABLE').toUpperCase();
-  setVenueValue(
-    venueStabilityValue,
-    stabilityStatus === 'UNAVAILABLE'
-      ? 'UNQUALIFIED / NOT NEUTRAL'
-      : `${stabilityStatus} / ${Number(stability.qualified_venue_count || 0)}/2 QUALIFIED`,
-    stabilityStatus === 'ELEVATED' ? 'negative' : stabilityStatus === 'WATCH' ? 'warning' : stabilityStatus === 'STABLE' ? 'positive' : 'neutral',
+  const confidence = String(actualFlow.confidence || 'UNAVAILABLE').toUpperCase();
+  const sourceCount = Number(actualFlow.qualified_source_count || 0);
+  setTapeValue(
+    tapeConfidenceValue,
+    `${confidence} · ${sourceCount}/4 SOURCES`,
+    confidence === 'HIGH' ? 'positive' : confidence === 'MEDIUM' ? 'warning' : 'neutral',
   );
   const capacity = lc.live_evidence?.execution_capacity || {};
   const capacityEvaluated = capacity.evaluated === true;
   const capacityLimit = Number(capacity.maximum_notional_at_10pct_depth);
   const plannedNotional = Number(capacity.planned_notional_usd);
-  const compactUsd = (value) => value >= 1_000_000
-    ? `$${(value / 1_000_000).toFixed(1)}M`
-    : value >= 1_000
-      ? `$${(value / 1_000).toFixed(1)}K`
-      : `$${Math.round(value).toLocaleString()}`;
-  setVenueValue(
-    venueCapacityValue,
+  setTapeValue(
+    tapeCapacityValue,
     capacityEvaluated
       ? `PLAN ${compactUsd(plannedNotional)} / MAX ${compactUsd(capacityLimit)}`
       : 'NOT EVALUATED',
@@ -1704,17 +2096,16 @@ function renderConfirmationEvidence(data) {
       : 'neutral',
   );
 
-  if (venueEvidenceStatus) {
-    venueEvidenceStatus.textContent = networkStatus;
-    venueEvidenceStatus.className = `venue-evidence-badge ${networkStatus === 'HEALTHY' ? 'healthy' : networkStatus === 'DEGRADED' ? 'degraded' : 'starting'}`;
+  if (tapeEvidenceStatus) {
+    tapeEvidenceStatus.textContent = networkStatus;
+    tapeEvidenceStatus.className = `venue-evidence-badge ${networkStatus === 'HEALTHY' ? 'healthy' : networkStatus === 'PARTIAL' ? 'degraded' : 'starting'}`;
   }
-  if (venueEvidenceNote) {
-    const freshCount = Number(multiVenue.fresh_venue_count || 0);
-    venueEvidenceNote.textContent = networkStatus === 'SUBSCRIBING'
-      ? `The selected market was registered automatically. Bybit and Coinbase are synchronizing books and warming the measured flow window.`
-      : flowConfirmed
-      ? `${freshCount}/2 venues are fresh and flow-qualified. This evidence is included in the CIO dossier and final live gate.`
-      : `${freshCount}/2 venues are fresh. Partial or warming data remains visible but is not treated as neutral confirmation.`;
+  if (tapeEvidenceNote) {
+    tapeEvidenceNote.textContent = networkStatus === 'SUBSCRIBING'
+      ? 'The selected market was registered automatically. Binance and Bybit spot/perpetual feeds are warming one shared server-side tape.'
+      : flowAvailable
+        ? `${sourceCount}/4 sources are flow-qualified. Spot/perpetual agreement changes confidence; it is not a mandatory venue gate.`
+        : 'Live aggressor evidence is partial or warming. The system keeps it unknown instead of treating missing flow as neutral.';
   }
 }
 
@@ -1962,8 +2353,19 @@ function renderDashboard(data) {
 
   // Dynamic signals monitoring and setups
   const signal = data.signal || {};
-  renderTradeSetup(data.trade_setup);
-  renderSignalMonitor(data.signal_monitor);
+  const structureStory = data.live_confirmation?.structure_story || {};
+  renderTradeSetup(data.trade_setup, data.market_story || {}, structureStory);
+  renderSignalMonitor({
+    ...(data.signal_monitor || {}),
+    structure_story: data.signal_monitor?.structure_story || structureStory || {},
+    market_story: data.signal_monitor?.market_story || data.market_story || {},
+    market_story_actionability: (
+      data.signal_monitor?.market_story_actionability
+      || structureStory?.directional_view
+      || data.market_context?.actionability
+      || {}
+    ),
+  });
 
   // Derivatives (regime, funding, OI)
   if (regimeVal) regimeVal.textContent = (data.regime || 'RANGING').replace(/_/g, ' ');
@@ -2498,22 +2900,39 @@ function renderMonitorConfirmationScenario(data) {
   const setup = data.candidate_setup || {};
   const entry = setup.entry || {};
   const stop = setup.stop || {};
-  const levelClass = isInstitutional ? 'institutional' : 'tactical';
+  const scenarioStoryState = String(selected.market_story_state || '').toUpperCase();
+  const scenarioInvalidated = scenarioStoryState === 'INVALIDATED';
+  const scenarioStale = ['EXTENDED_DO_NOT_CHASE', 'MISSED', 'EXPIRED'].includes(scenarioStoryState);
+  const scenarioActionable = selected.market_story_actionable === true && !scenarioInvalidated && !scenarioStale;
+  const levelClass = `${isInstitutional ? 'institutional' : 'tactical'}${scenarioInvalidated ? ' story-invalidated' : scenarioStale ? ' story-stale' : scenarioActionable ? ' story-actionable' : ''}`;
   const headline = isInstitutional
     ? 'Higher-timeframe and primary-timeframe evidence are aligned.'
     : 'Primary-timeframe evidence is valid; higher timeframe is not aligned.';
   const label = isInstitutional ? 'INSTITUTIONAL CONFIRMATION' : 'TACTICAL CONFIRMATION · LOWER CONFIDENCE';
   const htfState = String(selected.higher_timeframe_state || '').toUpperCase();
-  const displayHeadline = isInstitutional
+  const defaultHeadline = isInstitutional
     ? headline
     : isTacticalConfirmed
       ? headline
       : 'Primary-timeframe scenario is mapped; its required proof is still awaited.';
-  const displayLabel = isInstitutional
+  const defaultLabel = isInstitutional
     ? label
     : isTacticalConfirmed
       ? label
       : 'PRIMARY-TIMEFRAME WATCH · NOT TRADEABLE';
+  const displayHeadline = scenarioInvalidated
+    ? 'The selected completed-candle event has been invalidated.'
+    : scenarioStale
+      ? 'The selected event is outside its fresh-entry window.'
+      : scenarioActionable
+        ? 'A fresh primary-timeframe event is inside its review window.'
+        : defaultHeadline;
+  const displayLabel = scenarioInvalidated
+    ? 'MARKET STORY INVALIDATED · WAIT FOR NEW EVENT'
+    : scenarioStale
+      ? `${marketStoryLabel(scenarioStoryState)} · DO NOT CHASE`
+      : defaultLabel;
+  const scenarioReason = selected.market_story_reason || selected.reason || 'Measured evidence is aligned for this scenario.';
   const displayHtfLabel = selected.higher_timeframe_aligned
     ? 'ALIGNED'
     : htfState === 'UNAVAILABLE'
@@ -2525,7 +2944,7 @@ function renderMonitorConfirmationScenario(data) {
       <div>
         <span class="monitor-confirmation-kicker">${displayLabel}</span>
         <strong>${displayHeadline}</strong>
-        <p>${cioSafeText(selected.reason || 'Measured evidence is aligned for this scenario.')}</p>
+        <p>${cioSafeText(scenarioReason)}</p>
       </div>
       <div class="monitor-confirmation-levels" aria-label="Scenario setup levels">
         <span>SIDE<b>${cioSafeText(setup.side || data.side || '—')}</b></span>
@@ -2543,77 +2962,253 @@ function renderMonitorEvidenceState(data, status, isPublished, isTerminalFailure
   const tactical = scenarios.tactical || {};
   const tacticalReady = Boolean(tactical.passed) && !institutionalConfirmed;
   const tacticalCandidate = Boolean(tactical.candidate || tactical.passed) && !institutionalConfirmed;
+  const structureStory = (
+    data.structure_story
+    || data.live_confirmation?.structure_story
+    || data.gates?.live_confirmation?.structure_story
+    || {}
+  );
+  const marketStory = data.market_story
+    || (structureStory?.schema_version === 'market_story.v1' ? structureStory : {})
+    || {};
+  const story = resolveMarketStory({
+    marketStory,
+    structureStory,
+    setupStory: data.market_story_actionability || {},
+    preferredDirection: data.side === 'LONG' ? 'BULLISH' : data.side === 'SHORT' ? 'BEARISH' : '',
+  });
+  renderMarketStorySurface({
+    panel: monitorMarketStory,
+    state: monitorStoryState,
+    direction: monitorStoryDirection,
+    event: monitorStoryEvent,
+    age: monitorStoryAge,
+    level: monitorStoryLevel,
+    invalidation: monitorStoryInvalidation,
+    happened: monitorStoryHappened,
+    now: monitorStoryNow,
+    next: monitorStoryNext,
+    failure: monitorStoryFailure,
+    action: monitorStoryAction,
+  }, story);
+
   // Prefer the primary-timeframe evidence gap when its playbook exists. The
   // institutional HTF-rejection sentence is still preserved in the scenario.
   const reason = (tacticalCandidate && tactical.reason) || data.reason || data.approval?.blockers?.[0] || 'Waiting for qualified setup.';
   const reasonLower = reason.toLowerCase();
-  const waitingForBreak = /has not closed through|structure level|completed.*break|breakout/.test(reasonLower);
+  const hasStructuredStory = Boolean(
+    structureStory?.schema_version
+    || marketStory?.schema_version
+    || story.actionabilityKnown,
+  );
+  const storyState = String(story.state || 'NO_ACTIVE_EVENT').toUpperCase();
+  const invalidatedStory = hasStructuredStory && storyState === 'INVALIDATED';
+  const staleStory = hasStructuredStory && (
+    story.chaseProhibited
+    || ['EXTENDED_DO_NOT_CHASE', 'MISSED', 'EXPIRED'].includes(storyState)
+  ) && !invalidatedStory;
+  const actionableStory = hasStructuredStory && story.actionable && !story.chaseProhibited;
+  const waitingForBreak = hasStructuredStory
+    ? ['DEVELOPING', 'NO_ACTIVE_EVENT', 'NO_DIRECTION', 'UNAVAILABLE'].includes(storyState)
+    : /has not closed through|structure level|completed.*break|breakout/.test(reasonLower);
   const blocked = isTerminalFailure;
-  const state = blocked ? 'blocked' : isPublished ? 'published' : tacticalCandidate ? 'tactical' : waitingForBreak ? 'waiting' : 'scanning';
-  const stateCopy = blocked ? 'TRADE CLOSED / INVALIDATED' : isPublished ? 'SIGNAL PUBLISHED' : tacticalReady ? 'TACTICAL WATCH' : tacticalCandidate ? 'PRIMARY-TIMEFRAME WATCH' : waitingForBreak ? 'WAITING FOR CONFIRMATION' : 'EVIDENCE WATCH';
+  const state = blocked
+    ? 'blocked'
+    : isPublished
+      ? 'published'
+      : invalidatedStory
+        ? 'invalidated'
+        : staleStory
+          ? 'stale'
+          : actionableStory
+            ? 'actionable'
+            : tacticalCandidate
+              ? 'tactical'
+              : waitingForBreak
+                ? 'waiting'
+                : 'scanning';
+  const stateCopy = blocked
+    ? 'TRADE CLOSED / INVALIDATED'
+    : isPublished
+      ? 'SIGNAL PUBLISHED'
+      : invalidatedStory
+        ? 'MARKET STORY INVALIDATED'
+        : staleStory
+          ? 'ENTRY WINDOW PASSED · DO NOT CHASE'
+          : actionableStory
+            ? storyState === 'RETESTING' ? 'RETEST IN REVIEW WINDOW' : 'FRESH EVENT · ACTIONABLE WATCH'
+            : tacticalReady
+              ? 'TACTICAL WATCH'
+              : tacticalCandidate
+                ? 'PRIMARY-TIMEFRAME WATCH'
+                : waitingForBreak
+                  ? 'WAITING FOR A FRESH COMPLETED EVENT'
+                  : 'EVIDENCE WATCH';
   const title = blocked ? 'Published lifecycle has reached a terminal state'
     : isPublished ? 'Published signal is under lifecycle control'
+      : invalidatedStory ? 'The prior market event no longer supports this setup'
+        : staleStory ? 'The original entry window has already passed'
+          : actionableStory ? (storyState === 'RETESTING'
+            ? 'Price is retesting a fresh completed-candle event'
+            : 'A fresh completed-candle event is ready for review')
       : tacticalReady ? 'Primary-timeframe setup is ready for tactical review'
         : tacticalCandidate ? 'Primary-timeframe scenario is awaiting measured proof'
-          : waitingForBreak ? 'Completed structure break awaited'
+          : waitingForBreak ? 'Fresh completed structure event awaited'
             : 'Monitoring for a qualified causal alignment';
   const detail = blocked ? reason
     : isPublished ? 'Entry, stop, targets, and outcome controls are now active for this published signal.'
+      : invalidatedStory || staleStory || actionableStory ? story.happeningNow
       : tacticalReady ? 'The setup is visible above, but only higher-timeframe alignment can upgrade it to institutional confirmation.'
         : tacticalCandidate ? reason
-          : waitingForBreak ? 'The system will not publish early. It needs a completed candle through the relevant 20-candle structure level.'
+          : waitingForBreak ? story.happeningNow
             : reason;
 
   if (monitorEvidenceHero) monitorEvidenceHero.className = `monitor-evidence-hero ${state}`;
   if (monitorEvidenceState) monitorEvidenceState.textContent = `EVIDENCE STATE · ${stateCopy}`;
   if (monitorEvidenceTitle) monitorEvidenceTitle.textContent = title;
   if (monitorEvidenceDetail) monitorEvidenceDetail.textContent = detail;
-  if (monitorEvidenceMark) monitorEvidenceMark.textContent = blocked ? '!' : isPublished ? '✓' : tacticalCandidate || waitingForBreak ? '↗' : '…';
+  if (monitorEvidenceMark) monitorEvidenceMark.textContent = blocked || invalidatedStory ? '!' : isPublished ? '✓' : staleStory ? '×' : actionableStory ? '◎' : tacticalCandidate || waitingForBreak ? '↗' : '…';
   if (monitorMissingEvidence) monitorMissingEvidence.classList.toggle('hidden', isPublished || blocked);
-  if (monitorMissingTitle) monitorMissingTitle.textContent = tacticalReady ? 'Higher-timeframe alignment' : tacticalCandidate ? 'Required primary-timeframe confirmation' : waitingForBreak ? 'Completed 20-candle structure break' : 'Next required evidence';
-  if (monitorMissingDetail) monitorMissingDetail.textContent = tacticalReady
+  if (monitorMissingTitle) monitorMissingTitle.textContent = invalidatedStory
+    ? 'A new causal branch is required'
+    : staleStory
+      ? 'Fresh event required · do not chase'
+      : actionableStory
+        ? institutionalConfirmed ? 'Live publication controls' : 'Institutional confirmation controls'
+        : tacticalReady
+          ? 'Higher-timeframe alignment'
+          : tacticalCandidate
+            ? 'Required primary-timeframe confirmation'
+            : waitingForBreak
+              ? 'Next completed structure event'
+              : 'Next required evidence';
+  if (monitorMissingDetail) monitorMissingDetail.textContent = invalidatedStory
+    ? `${story.happeningNow} ${story.next}`
+    : staleStory
+      ? `${story.happeningNow} ${story.next}`
+      : actionableStory
+        ? `${story.next} This remains a manual research watch until every publication control passes.`
+        : tacticalReady
     ? 'This remains a tactical watch. It does not publish a trade signal until the higher timeframe confirms the same direction.'
     : tacticalCandidate
       ? `${reason} This is a research watch only; it cannot publish a trade signal.`
       : waitingForBreak
-        ? 'Wait for the current candle to close through the relevant structure level; an intrabar move is not confirmation.'
+        ? `${story.next} Intrabar movement is not treated as confirmation.`
         : reason;
 
   if (monitorTradeLifecycle) monitorTradeLifecycle.classList.toggle('hidden', !isPublished);
   if (monitorWatchPlan) monitorWatchPlan.classList.toggle('hidden', isPublished);
-  if (monitorWatchStepOneTitle) monitorWatchStepOneTitle.textContent = 'Causal context mapped';
-  if (monitorWatchStepOneDetail) monitorWatchStepOneDetail.textContent = 'Regime, liquidity, positioning, and order flow are assessed from the same snapshot.';
-  if (monitorWatchStepTwoTitle) monitorWatchStepTwoTitle.textContent = tacticalCandidate ? 'Primary-timeframe proof awaited' : waitingForBreak ? 'Completed structure break awaited' : 'Evidence control awaited';
-  if (monitorWatchStepTwoDetail) monitorWatchStepTwoDetail.textContent = tacticalCandidate
-    ? reason
-    : waitingForBreak
-      ? 'A completed close through the relevant 20-candle structure level is required before any signal can be published.'
-      : reason;
+  if (monitorWatchStepOneTitle) monitorWatchStepOneTitle.textContent = hasStructuredStory
+    ? `${marketStoryLabel(story.eventType, 'Market story')} · ${marketStoryLabel(story.state)}`
+    : 'Causal context mapped';
+  if (monitorWatchStepOneDetail) monitorWatchStepOneDetail.textContent = hasStructuredStory
+    ? story.happened
+    : 'Regime, liquidity, positioning, and order flow are assessed from the same snapshot.';
+  if (monitorWatchStepTwoTitle) monitorWatchStepTwoTitle.textContent = invalidatedStory
+    ? 'Wait for a replacement event'
+    : staleStory
+      ? 'Do not chase the old move'
+      : actionableStory
+        ? 'Verify live causal controls'
+        : tacticalCandidate
+          ? 'Primary-timeframe proof awaited'
+          : waitingForBreak
+            ? 'Fresh completed event awaited'
+            : 'Evidence control awaited';
+  if (monitorWatchStepTwoDetail) monitorWatchStepTwoDetail.textContent = hasStructuredStory
+    ? (invalidatedStory || staleStory ? story.next : `${story.happeningNow} ${story.next}`)
+    : tacticalCandidate
+      ? reason
+      : waitingForBreak
+        ? 'A completed close through the relevant structure level is required before any signal can be published.'
+        : reason;
 
   if (monitorGateStrip) {
     const publicationCoverage = data.publication_coverage || data.live_confirmation?.publication_coverage || data.gates?.live_confirmation?.publication_coverage || {};
-    const venueEvidence = data.multi_venue_evidence || {};
-    const venueState = venueEvidence.status
-      ? String(venueEvidence.status).toUpperCase()
+    const actualFlowEvidence = data.actual_flow_evidence || {};
+    const actualFlowState = actualFlowEvidence.available === false
+      ? 'UNAVAILABLE'
+      : actualFlowEvidence.status
+      ? String(actualFlowEvidence.status).toUpperCase().replace(/_/g, ' ')
       : 'CHECKING';
+    const institutionalScenario = scenarios.institutional || {};
+    const liveChecks = (
+      institutionalScenario.live_checks
+      || data.live_confirmation?.live_checks
+      || data.gates?.live_confirmation?.live_checks
+      || {}
+    );
+    const hasCheck = name => Object.prototype.hasOwnProperty.call(liveChecks, name);
+    const checkState = (name, passed = 'CONFIRMED', failed = 'AWAITED') => (
+      isPublished
+        ? 'CONFIRMED'
+        : hasCheck(name)
+          ? liveChecks[name] === true ? passed : failed
+          : 'CHECKING'
+    );
+    const inputsComplete = publicationCoverage.inputs_complete ?? publicationCoverage.ready;
+    const publicationInputsState = inputsComplete === true
+      ? 'COMPLETE'
+      : inputsComplete === false
+        ? 'PARTIAL'
+        : 'CHECKING';
+    const confirmationReady = (
+      publicationCoverage.confirmation_ready
+      ?? publicationCoverage.signal_publication_ready
+      ?? institutionalScenario.passed
+    );
+    const signalConfirmationState = isPublished || confirmationReady === true
+      ? 'CONFIRMED'
+      : blocked
+        ? 'BLOCKED'
+        : confirmationReady === false
+          ? 'AWAITED'
+          : 'CHECKING';
+    const orderFlowState = checkState(
+      'taker_flow_aligned',
+      actualFlowEvidence.available === false ? 'REST CONFIRMED' : 'CONFIRMED',
+    );
+    const macroControl = data.macro_control || {};
+    const macroState = isPublished
+      ? 'CONFIRMED'
+      : macroControl.status
+        ? String(macroControl.status).toUpperCase()
+        : monitorControlState(reason, ['macro', 'calendar'], 'CLEAR');
 
+    const structureControl = isPublished
+      ? 'CONFIRMED'
+      : hasStructuredStory
+        ? invalidatedStory
+          ? 'INVALIDATED'
+          : staleStory
+            ? 'DO NOT CHASE'
+            : actionableStory
+              ? marketStoryLabel(storyState)
+              : waitingForBreak
+                ? 'AWAITED'
+                : marketStoryLabel(storyState, 'MONITORING')
+        : waitingForBreak
+          ? 'AWAITED'
+          : monitorControlState(reason, ['structure', 'break'], 'MONITORING');
     const controls = [
-      ['Structure', waitingForBreak ? 'AWAITED' : monitorControlState(reason, ['structure', 'break'], isPublished ? 'CONFIRMED' : 'MONITORING')],
-      ['Liquidity', monitorControlState(reason, ['liquid', 'spread', 'depth'], isPublished ? 'CONFIRMED' : 'OBSERVED')],
-      ['Order flow', monitorControlState(reason, ['flow', 'taker', 'order book'], isPublished ? 'CONFIRMED' : 'OBSERVED')],
-      ['Venue flow', venueState],
-      ['Positioning', monitorControlState(reason, ['open interest', 'funding', 'position'], isPublished ? 'CONFIRMED' : 'OBSERVED')],
-      ['Publication data', publicationCoverage.ready === true ? 'READY' : publicationCoverage.ready === false ? 'PARTIAL' : 'CHECKING'],
-      ['Macro', monitorControlState(reason, ['macro', 'calendar'], isPublished ? 'CONFIRMED' : 'CLEAR')],
+      ['Structure', structureControl],
+      ['Liquidity', checkState('spread_within_limit', 'OBSERVED')],
+      ['Order flow', orderFlowState],
+      ['Actual flow', actualFlowState],
+      ['Positioning', checkState('price_oi_aligned')],
+      ['Publication inputs', publicationInputsState],
+      ['Signal confirmation', signalConfirmationState],
+      ['Macro', macroState],
     ];
-    const verifiedStates = new Set(['CONFIRMED', 'CLEAR', 'READY', 'SUPPORTIVE']);
-    const awaitedStates = new Set(['AWAITED', 'PARTIAL', 'UNAVAILABLE', 'MIXED', 'NEUTRAL', 'CHECKING']);
+    const verifiedStates = new Set(['CONFIRMED', 'REST CONFIRMED', 'BUYING CONFIRMED', 'SELLING CONFIRMED', 'CLEAR', 'COMPLETE', 'OBSERVED', 'SUPPORTIVE', 'ACTIONABLE NOW', 'RETESTING']);
+    const awaitedStates = new Set(['AWAITED', 'DEVELOPING', 'NO ACTIVE EVENT', 'PARTIAL', 'UNAVAILABLE', 'BALANCED', 'MIXED', 'NEUTRAL', 'CHECKING']);
+    const blockedStates = new Set(['BLOCKED', 'OPPOSED', 'BUYERS ABSORBED', 'SELLERS ABSORBED', 'BUYER EXHAUSTION', 'SELLER EXHAUSTION', 'DO NOT CHASE', 'MISSED', 'EXPIRED', 'INVALIDATED']);
     monitorGateStrip.innerHTML = controls.map(([label, value]) => {
-      const className = verifiedStates.has(value) ? 'verified' : awaitedStates.has(value) ? 'awaited' : value === 'OPPOSED' ? 'blocked' : '';
+      const className = verifiedStates.has(value) ? 'verified' : awaitedStates.has(value) ? 'awaited' : blockedStates.has(value) ? 'blocked' : '';
       return `<span class="monitor-gate-chip ${className}"><b>${label}</b><strong>${value}</strong></span>`;
     }).join('');
   }
-  return { state, stateCopy };
+  return { state, stateCopy, story };
 }
 
 function renderSignalMonitor(monitor) {
@@ -2635,11 +3230,23 @@ function renderSignalMonitor(monitor) {
 
   if (monitorCard) monitorCard.className = `card signal-monitor-card ${status.toLowerCase()} monitor-${evidence.state}`;
   if (monitorStatusVal) {
-    if (!isPublished && evidence.state === 'tactical') {
+    let displayStatusClass = status.toLowerCase();
+    if (!isPublished && evidence.state === 'invalidated') {
+      monitorStatusVal.textContent = 'STORY INVALIDATED';
+      displayStatusClass = 'invalidated';
+    } else if (!isPublished && evidence.state === 'stale') {
+      monitorStatusVal.textContent = 'DO NOT CHASE';
+      displayStatusClass = 'stale';
+    } else if (!isPublished && evidence.state === 'actionable') {
+      monitorStatusVal.textContent = evidence.story?.state === 'RETESTING' ? 'RETEST WATCH' : 'ACTIONABLE WATCH';
+      displayStatusClass = 'actionable';
+    } else if (!isPublished && evidence.state === 'tactical') {
       monitorStatusVal.textContent = 'TACTICAL WATCH';
+      displayStatusClass = 'tactical';
     } else if (!isPublished && evidence.state === 'waiting') {
       monitorStatusVal.textContent = 'WAITING FOR PROOF';
-    } else if (status === 'SCANNING') {
+      displayStatusClass = 'waiting';
+    } else if (status === 'SCANNING' && evidence.state === 'scanning') {
       monitorStatusVal.innerHTML = `
         <span class="scanner-status-pulse-dot" style="display: inline-block; width: 5px; height: 5px; background-color: var(--neon-blue); border-radius: 50%; margin-right: 4px; box-shadow: 0 0 6px var(--neon-blue); animation: processing-ticker-glow 1s infinite alternate ease-in-out; flex-shrink: 0;"></span>
         SCANNING
@@ -2647,14 +3254,28 @@ function renderSignalMonitor(monitor) {
     } else {
       monitorStatusVal.textContent = status.replace(/_/g, ' ');
     }
-    monitorStatusVal.className = `monitor-status ${status.toLowerCase()}`;
+    monitorStatusVal.className = `monitor-status ${displayStatusClass}`;
   }
-  if (monitorActionVal) monitorActionVal.textContent = !isPublished && (evidence.state === 'waiting' || evidence.state === 'tactical') ? 'WATCH' : action.replace(/_/g, ' ');
+  if (monitorActionVal) {
+    monitorActionVal.textContent = !isPublished && evidence.state === 'stale'
+      ? 'DO NOT CHASE'
+      : !isPublished && evidence.state === 'invalidated'
+        ? 'WAIT FOR NEW EVENT'
+        : !isPublished && evidence.state === 'actionable'
+          ? 'MANUAL REVIEW'
+          : !isPublished && (evidence.state === 'waiting' || evidence.state === 'tactical')
+            ? 'WATCH'
+            : action.replace(/_/g, ' ');
+  }
   if (monitorReasonVal) {
     const tactical = data.confirmation_scenarios?.tactical || {};
     const useTacticalReason = Boolean(tactical.candidate || tactical.passed) && !Boolean(data.confirmation_scenarios?.institutional?.passed);
-    const reasonText = (useTacticalReason && tactical.reason) || data.reason || 'Scanning for opportunities.';
-    if (status === 'SCANNING') {
+    const useStoryReason = ['invalidated', 'stale', 'actionable', 'waiting'].includes(evidence.state);
+    const reasonText = (useStoryReason && evidence.story?.happeningNow)
+      || (useTacticalReason && tactical.reason)
+      || data.reason
+      || 'Scanning for opportunities.';
+    if (status === 'SCANNING' && evidence.state === 'scanning') {
       monitorReasonVal.innerHTML = `
         <div style="display: inline-flex; align-items: center; gap: 0.35rem;">
           <span class="ticker-dot active-scanning" style="display: inline-block; width: 6px; height: 6px; background-color: var(--neon-blue); border-radius: 50%; box-shadow: 0 0 8px var(--neon-blue); animation: processing-ticker-glow 1s infinite alternate ease-in-out; flex-shrink: 0;"></span>

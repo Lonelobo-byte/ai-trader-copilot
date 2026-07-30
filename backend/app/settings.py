@@ -85,19 +85,20 @@ class Settings(BaseSettings):
     market_snapshot_cache_seconds: float = 8.0
     market_snapshot_cache_max_entries: int = 96
     market_intelligence_max_concurrency: int = 8
-    # One bounded, process-wide collector per public venue. These feeds use no
-    # API key and are shared by every dashboard, scanner, and analysis request.
+    # One bounded process-wide execution tape. These public feeds use no API
+    # key and are shared by every dashboard, scanner, and analysis request.
     multi_venue_ws_enabled: bool = True
-    bybit_public_ws_url: str = "wss://stream.bybit.com/v5/public/linear"
-    coinbase_public_ws_url: str = "wss://advanced-trade-ws.coinbase.com"
+    binance_spot_public_ws_url: str = "wss://stream.binance.com:9443/stream"
+    binance_perp_public_ws_url: str = "wss://fstream.binance.com/stream"
+    bybit_spot_public_ws_url: str = "wss://stream.bybit.com/v5/public/spot"
+    bybit_perp_public_ws_url: str = "wss://stream.bybit.com/v5/public/linear"
     # Startup warm set only. Any valid USDT market selected in Radar/Research
     # is registered automatically and replaces the least-recently-used symbol.
     multi_venue_symbols: list[str] = ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
     # The bounded dynamic hub limits this to 12 even if configuration drifts.
     multi_venue_max_symbols: int = 12
     multi_venue_book_levels: int = 200
-    coinbase_multi_venue_book_levels: int = 2_000
-    multi_venue_min_book_levels: int = 20
+    multi_venue_min_book_levels: int = 5
     multi_venue_max_events: int = 2_000
     multi_venue_stale_seconds: float = 30.0
     multi_venue_trade_window_seconds: float = 60.0
@@ -105,11 +106,9 @@ class Settings(BaseSettings):
     multi_venue_flow_warmup_seconds: float = 10.0
     multi_venue_min_flow_trades: int = 20
     multi_venue_min_flow_notional_usd: float = 5_000.0
+    execution_tape_large_trade_notional_usd: float = 10_000.0
     multi_venue_max_event_lag_seconds: float = 10.0
-    multi_venue_stable_connection_seconds: float = 30.0
-    multi_venue_initial_sync_timeout_seconds: float = 30.0
     multi_venue_subscription_retry_seconds: float = 900.0
-    coinbase_book_resync_seconds: float = 900.0
 
     background_jobs_enabled: bool = True
     # Set this on exactly one worker container. A database lease below prevents

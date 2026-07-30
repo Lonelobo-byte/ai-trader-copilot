@@ -61,9 +61,9 @@ async def get_alpha_report():
 
     # Extract features and map binary success (1.0 for SUCCESS, 0.0 for FAILURE)
     outcomes = []
-    imbalances = []
+    execution_flow_scores = []
     funding_rates = []
-    trend_alignments = []
+    causal_alignments = []
 
     regime_stats: dict[str, dict[str, int]] = {}
 
@@ -71,27 +71,48 @@ async def get_alpha_report():
         success = 1.0 if r.status == "COMPLETED" else 0.0
         outcomes.append(success)
 
-        # Extract order book imbalance
-        imb = 0.0
         context = r.context if isinstance(r.context, dict) else {}
         review = r.ai_review if isinstance(r.ai_review, dict) else {}
-        order_book = ((review.get("full_quant_features") or review.get("quant_features") or {}).get("order_book") or {})
-        if order_book:
-            imb = float(order_book.get("imbalance", order_book.get("pressure", 0.0)) or 0.0)
-        imbalances.append(imb)
+        reviewed_features = (
+            review.get("full_quant_features")
+            or review.get("quant_features")
+            or {}
+        )
+        causal_context = (
+            context.get("causal_market_context")
+            or reviewed_features.get("market_context")
+            or {}
+        )
+        order_flow = (
+            (causal_context.get("components") or {}).get("order_flow")
+            or {}
+        )
+        execution_flow_scores.append(float(order_flow.get("score") or 0.0))
 
         # Extract funding
-        derivatives = ((review.get("full_quant_features") or review.get("quant_features") or {}).get("derivatives") or {})
+        derivatives = reviewed_features.get("derivatives") or {}
         fund = float(derivatives.get("funding_rate") or 0.0)
         funding_rates.append(fund)
 
-        # Extract trend alignment
-        trend_status = str(context.get("trend_status") or "mixed").lower()
-        is_aligned = 1.0 if trend_status in ("bullish", "bearish") else 0.0
-        trend_alignments.append(is_aligned)
+        direction = str(causal_context.get("direction") or "WAIT")
+        side = str(r.side or "")
+        causal_alignments.append(
+            1.0
+            if (side == "LONG" and direction == "LONG")
+            or (side == "SHORT" and direction == "SHORT")
+            else 0.0
+        )
 
         # Group by regime
-        reg = str(context.get("trend_status") or "unknown")
+        reg = str(
+            (
+                (causal_context.get("components") or {})
+                .get("regime_structure", {})
+                .get("evidence")
+            )
+            or direction
+            or "unknown"
+        )
         if reg not in regime_stats:
             regime_stats[reg] = {"success": 0, "total": 0}
         regime_stats[reg]["total"] += 1
@@ -106,9 +127,9 @@ async def get_alpha_report():
         return float(np.corrcoef(x_arr, y_arr)[0, 1])
 
     # Calculate information coefficients
-    ic_imbalance = get_correlation(imbalances, outcomes)
+    ic_execution_flow = get_correlation(execution_flow_scores, outcomes)
     ic_funding = get_correlation(funding_rates, outcomes)
-    ic_trend = get_correlation(trend_alignments, outcomes)
+    ic_causal_alignment = get_correlation(causal_alignments, outcomes)
 
     # Compile regime outcomes win-rates
     regime_report = {}
@@ -124,18 +145,18 @@ async def get_alpha_report():
         "sessions_analyzed": len(records),
         "regime_performance": regime_report,
         "discovered_edges": {
-            "order_book_imbalance": {
-                "information_coefficient": round(ic_imbalance, 4),
-                "predictive_edge": "positive_correlation" if ic_imbalance > 0.05 else "weak_or_none",
-                "notes": "Higher book imbalance correlates with predictive trade success.",
+            "actual_execution_flow": {
+                "information_coefficient": round(ic_execution_flow, 4),
+                "predictive_edge": "positive_correlation" if ic_execution_flow > 0.05 else "weak_or_none",
+                "notes": "Tests normalized aggressor flow and price acceptance, not displayed-book intent.",
             },
             "funding_divergence": {
                 "information_coefficient": round(ic_funding, 4),
                 "predictive_edge": "positive_correlation" if abs(ic_funding) > 0.05 else "weak_or_none",
             },
-            "trend_regime_alignment": {
-                "information_coefficient": round(ic_trend, 4),
-                "predictive_edge": "positive_correlation" if ic_trend > 0.05 else "weak_or_none",
+            "causal_context_alignment": {
+                "information_coefficient": round(ic_causal_alignment, 4),
+                "predictive_edge": "positive_correlation" if ic_causal_alignment > 0.05 else "weak_or_none",
             }
         },
         "edge_decay_coefficient": None,

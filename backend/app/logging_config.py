@@ -51,3 +51,10 @@ def configure_structured_logging(level: int = logging.INFO) -> None:
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(JSONFormatter())
     root_logger.addHandler(handler)
+
+    # Upstream request-per-call INFO lines drown the causal engine's own
+    # structured events during Radar refreshes. Failures still surface at
+    # WARNING/ERROR, while successful requests remain observable through the
+    # application's latency and source-coverage telemetry.
+    for logger_name in ("httpx", "httpcore"):
+        logging.getLogger(logger_name).setLevel(logging.WARNING)

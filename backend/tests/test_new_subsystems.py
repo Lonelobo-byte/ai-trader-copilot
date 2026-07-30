@@ -10,6 +10,7 @@ import pytest
 
 from app.data_sources.binance_public import Candle
 from app.data_sources.coindesk_ws import CoindeskWSSubscriber
+from app.ml.features import FEATURE_CONTRACT
 from app.ml.model import WEIGHTS_FILE, RidgeRegression, train_walk_forward_model, get_weights_filepath, predict_probability_from_model
 from app.quant.backtest import run_backtest
 from app.quant.feature_engine import compute_quant_features
@@ -112,6 +113,8 @@ def test_walk_forward_training():
     assert "feature_names" in weights
     assert "weights" in weights
     assert "train_ic" in weights
+    assert weights["feature_contract"] == FEATURE_CONTRACT
+    assert not any(name.startswith("derived_") for name in weights["feature_names"])
 
     # Cleanup after test
     weights_file.unlink()
@@ -122,6 +125,7 @@ def test_model_validation_controls():
     mock_weights = {
         "symbol": "BTCUSDT",
         "timeframe": "15m",
+        "feature_contract": FEATURE_CONTRACT,
         "feature_names": ["stat_hurst_exponent"],
         "weights": [1.0],
         "intercept": 0.0,
@@ -172,8 +176,8 @@ def test_model_validation_controls():
         )
         assert pred_weak is None
 
-        # 3. Confidence scaling and calibration verification
-        # Strong edge (test_ic = 0.20)
+        # 3. Standalone probability remains the causal baseline. A separately
+        # trained research artifact is never allowed to enter live scoring.
         mock_weights["test_ic"] = 0.20
         with open(weights_file, "w", encoding="utf-8") as f:
             json.dump(mock_weights, f, indent=2)
@@ -192,11 +196,14 @@ def test_model_validation_controls():
         regime = {"probabilities": {"mean_reverting": 0.0}, "confidence": 0.0}
 
         from app.quant.probability import forecast_distribution
-        forecast_ml = forecast_distribution(
+        forecast_with_artifact_present = forecast_distribution(
             stats, micro, regime, symbol="BTCUSDT", timeframe="15m"
         )
-        # Expected confidence: test_ic (0.20) * 4.0 = 0.80
-        assert abs(forecast_ml["confidence"] - 0.80) < 1e-4
+        assert forecast_with_artifact_present["confidence"] == 0.20
+        assert (
+            forecast_with_artifact_present["model"]
+            == "causal_market_context_baseline"
+        )
 
         # Baseline fallback cap verification (no weights file or suppressed weights)
         weights_file.unlink()

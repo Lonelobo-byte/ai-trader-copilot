@@ -12,13 +12,18 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
-from ..data_sources.multi_venue_ws import get_multi_venue_snapshot
+from ..data_sources.execution_tape_ws import get_execution_tape_snapshot
 
 from ..data_sources.binance_public import Candle
 from ..auth import require_active_subscription, utcnow
 from ..db.models import User
-from ..indicators.liquidity import detect_liquidity_sweep
-from ..indicators.structure import classify_market_phase, find_swing_points
+from ..indicators.market_story import (
+    build_market_story,
+    evaluate_story_playbook,
+    observable_liquidity_sweep,
+    observable_structure_events,
+)
+from ..indicators.structure import classify_market_phase
 from ..quant.market_context import (
     build_liquidity_map,
     build_volume_profile,
@@ -94,19 +99,8 @@ def _depth_snapshot(depth: dict[str, Any]) -> dict[str, Any]:
 
 
 def _observable_structure_events(candles: list[Candle]) -> dict[str, dict[str, Any]]:
-    """Return completed swing breaks without an indicator-derived trend gate."""
-    highs, lows = find_swing_points(candles, N=3)
-    if not highs or not lows:
-        unavailable = {"detected": False, "direction": "none", "reason": "insufficient_confirmed_swing_points"}
-        return {"bos": unavailable, "choch": unavailable.copy()}
-    close = candles[-1].close
-    if close > highs[-1]["price"]:
-        bos = {"detected": True, "direction": "bullish", "broken_level": highs[-1]["price"], "current_close": close, "type": "BOS"}
-    elif close < lows[-1]["price"]:
-        bos = {"detected": True, "direction": "bearish", "broken_level": lows[-1]["price"], "current_close": close, "type": "BOS"}
-    else:
-        bos = {"detected": False, "direction": "none", "reason": "no_completed_swing_break"}
-    return {"bos": bos, "choch": {"detected": False, "direction": "none", "reason": "requires_historical_structure_sequence"}}
+    """Compatibility projection from the canonical completed-candle story."""
+    return observable_structure_events(build_market_story(candles))
 
 
 @router.post("/verify-setup")
@@ -128,8 +122,8 @@ async def verify_setup(payload: VerifySetupRequest, request: Request, user: User
     client = BinancePublicClient(settings.binance_futures_base_url, market="futures")
     try:
         candles_ltf, candles_htf, depth = await asyncio.gather(
-            client.klines(symbol, payload.ltf, limit=100),
-            client.klines(symbol, payload.htf, limit=100),
+            client.klines(symbol, payload.ltf, limit=200),
+            client.klines(symbol, payload.htf, limit=200),
             client.order_book(symbol, limit=50),
         )
     except Exception as exc:
@@ -144,30 +138,45 @@ async def verify_setup(payload: VerifySetupRequest, request: Request, user: User
     average_range = sum(max(0.0, candle.high - candle.low) for candle in candles_ltf[-14:]) / 14.0
     liquidity = build_liquidity_map(candles_ltf, average_range)
     microstructure = _depth_snapshot(depth)
-    events = _observable_structure_events(candles_ltf)
+    story = build_market_story(candles_ltf)
+    higher_story = build_market_story(candles_htf)
+    events = observable_structure_events(story)
+    sweep = observable_liquidity_sweep(story)
     structure = {
         "phase": classify_market_phase(candles_ltf),
         "higher_timeframe_phase": classify_market_phase(candles_htf),
         "bos": events["bos"],
         "choch": events["choch"],
+        "liquidity_sweep": sweep,
+        "story_state": story.get("current_state"),
+        "story_actionability": story.get("actionability", {}),
+        "story_as_of_close_time": story.get("as_of_close_time"),
     }
-    multi_venue = get_multi_venue_snapshot(symbol, settings)
-    flow_confirmed = bool(multi_venue.get("flow_confirmed"))
-    flow_score = float(multi_venue.get("flow_score") or 0.0)
+    execution_tape = get_execution_tape_snapshot(symbol, settings)
+    actual_flow = execution_tape.get("actual_flow", {}) or {}
+    flow_confirmed = bool(actual_flow.get("available"))
     trade_flow = {
         "available": flow_confirmed,
-        "buy_ratio": (flow_score + 1.0) / 2.0 if flow_confirmed else None,
-        "bias": multi_venue.get("flow_consensus", "UNAVAILABLE") if flow_confirmed else "UNAVAILABLE",
-        "source": "bybit_coinbase_public_ws" if flow_confirmed else None,
+        "buy_ratio": actual_flow.get("aggressive_buy_ratio"),
+        "bias": actual_flow.get("bias", "UNAVAILABLE"),
+        "status": actual_flow.get("status", "UNAVAILABLE"),
+        "active_aggressor": actual_flow.get("active_aggressor", "UNAVAILABLE"),
+        "net_delta_usd": actual_flow.get("net_delta_usd"),
+        "cvd_trend": actual_flow.get("cvd_trend", "UNAVAILABLE"),
+        "price_response": actual_flow.get("price_response", "UNAVAILABLE"),
+        "absorption": actual_flow.get("absorption", "NOT_DETECTED"),
+        "exhaustion": actual_flow.get("exhaustion", "NONE"),
+        "source": "binance_bybit_spot_perpetual_public_tape" if flow_confirmed else None,
     }
 
     features = {
         "market_structure": structure,
+        "market_story": story,
         "liquidity_map": liquidity,
-        "sweep": detect_liquidity_sweep(candles_ltf),
+        "sweep": sweep,
         "microstructure": microstructure,
         "trade_flow": trade_flow,
-        "multi_venue": multi_venue,
+        "execution_tape": execution_tape,
         "positioning": {"available": False, "state": "UNKNOWN"},
         "volatility_context": build_volatility_context(candles_ltf),
         "volume_profile": build_volume_profile(candles_ltf),
@@ -175,14 +184,34 @@ async def verify_setup(payload: VerifySetupRequest, request: Request, user: User
     }
     context = score_market_context(features)
     direction = context["direction"]
+    normalized_direction = {"LONG": "BULLISH", "SHORT": "BEARISH"}.get(direction, "NEUTRAL")
+    structure_confirmation = evaluate_story_playbook(
+        primary_story=story,
+        higher_story=higher_story,
+        direction=normalized_direction,
+        primary_phase=structure["phase"],
+        higher_phase=structure["higher_timeframe_phase"],
+        vwap_context=features["vwap_context"],
+        volume_profile=features["volume_profile"],
+    )
     target_pool = liquidity.get("nearest_above" if direction == "LONG" else "nearest_below") if direction != "WAIT" else None
-    verdict = "REVIEW_CANDIDATE" if context["status"] == "SETUP_CANDIDATE" else "WATCH_ONLY"
+    verdict = (
+        "REVIEW_CANDIDATE"
+        if context["status"] == "SETUP_CANDIDATE" and structure_confirmation["passed"]
+        else "WATCH_ONLY"
+    )
     limitations = list(context.get("limitations", []))
     limitations.append("Price×OI, funding and aggressive taker flow require the Radar live-confirmation snapshot; they are unavailable in this single-symbol review request.")
     if flow_confirmed:
-        limitations[-1] = "Price x OI and funding require the Radar live-confirmation snapshot; qualified public cross-venue flow is included."
+        limitations[-1] = (
+            "Price x OI and funding require the Radar live-confirmation snapshot; "
+            "normalized Binance/Bybit aggressor flow is included."
+        )
     else:
-        limitations[-1] = "Price x OI, funding and qualified public cross-venue flow are unavailable and are not treated as neutral evidence."
+        limitations[-1] = (
+            "Price x OI, funding and the live Binance/Bybit execution tape are "
+            "unavailable and are not treated as neutral evidence."
+        )
 
     return {
         "symbol": symbol,
@@ -193,13 +222,16 @@ async def verify_setup(payload: VerifySetupRequest, request: Request, user: User
         "confidence_label": "Causal evidence score, not a probability of profit.",
         "evaluation_mode": "causal_manual_review",
         "market_context": context,
-        "multi_venue": multi_venue,
+        "execution_tape": execution_tape,
         "liquidity_map": liquidity,
         "positioning": features["positioning"],
         "volatility_context": features["volatility_context"],
         "volume_profile": features["volume_profile"],
         "vwap_context": features["vwap_context"],
         "market_structure": structure,
+        "market_story": story,
+        "higher_timeframe_story": higher_story,
+        "structure_confirmation": structure_confirmation,
         "liquidity": microstructure,
         "target_pool": target_pool,
         "levels": {
@@ -209,10 +241,15 @@ async def verify_setup(payload: VerifySetupRequest, request: Request, user: User
         },
         "reasoning": [
             f"Regime: {structure['phase'].replace('_', ' ').lower()}.",
+            story.get("what_happened", "No recent completed-candle event was confirmed."),
+            story.get("what_is_happening", "Current event lifecycle is unavailable."),
             f"Volatility: {features['volatility_context'].get('state', 'unknown').replace('_', ' ').lower()}.",
             f"VWAP relation: {features['vwap_context'].get('price_relation', 'unknown').replace('_', ' ').lower()}.",
         ],
-        "risk_flags": context.get("contradictions", []),
+        "risk_flags": list(dict.fromkeys([
+            *context.get("contradictions", []),
+            *([] if structure_confirmation["passed"] else [structure_confirmation["reason"]]),
+        ])),
         "limitations": limitations,
         "trade_instruction": "Open the dashboard dossier before taking any trade; Radar does not authorize execution.",
     }

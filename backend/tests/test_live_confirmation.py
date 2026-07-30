@@ -37,6 +37,66 @@ def _live_inputs(price: float) -> dict:
     }
 
 
+def _actionable_sweep_story(direction: str = "BULLISH") -> dict:
+    event = {
+        "detected": True,
+        "event_id": f"test-sweep-{direction.lower()}",
+        "type": "LIQUIDITY_SWEEP",
+        "direction": direction,
+        "event_index": 59,
+        "age_bars": 0,
+        "state": "ACTIONABLE_NOW",
+        "actionable": True,
+        "chase_prohibited": False,
+        "break_level": 100.0,
+        "swept_level": 100.0,
+        "quality": "STRONG",
+        "reason": "Test sweep remains actionable.",
+    }
+    return {
+        "available": True,
+        "structure_events": [],
+        "liquidity_events": [event],
+        "latest_event": event,
+        "latest_liquidity_event": event,
+        "current_state": "ACTIONABLE_NOW",
+        "actionability": {
+            "status": "ACTIONABLE_NOW",
+            "actionable": True,
+            "direction": direction,
+        },
+    }
+
+
+def _prior_break_candles(*, extended: bool = False) -> list[Candle]:
+    candles: list[Candle] = []
+    for index in range(58):
+        candles.append(Candle(
+            open_time=index * 60_000,
+            open=100.0, high=100.2, low=99.8, close=100.0,
+            volume=1_000.0, close_time=(index + 1) * 60_000,
+            quote_volume=100_000.0, trade_count=100,
+            taker_buy_base_volume=550.0, taker_buy_quote_volume=55_000.0,
+        ))
+    candles.append(Candle(
+        open_time=58 * 60_000,
+        open=100.0, high=104.5 if extended else 101.0, low=99.9, close=100.8,
+        volume=2_000.0, close_time=59 * 60_000,
+        quote_volume=201_600.0, trade_count=200,
+        taker_buy_base_volume=1_300.0, taker_buy_quote_volume=131_040.0,
+    ))
+    final_close = 104.0 if extended else 100.5
+    candles.append(Candle(
+        open_time=59 * 60_000,
+        open=100.8, high=104.4 if extended else 101.0,
+        low=100.7 if extended else 100.1, close=final_close,
+        volume=1_000.0, close_time=60 * 60_000,
+        quote_volume=1_000.0 * final_close, trade_count=100,
+        taker_buy_base_volume=600.0, taker_buy_quote_volume=600.0 * final_close,
+    ))
+    return candles
+
+
 def test_main_signal_uses_radar_equivalent_confirmation_gate() -> None:
     primary = _candles(start=100.0, step=0.20, last_volume=2_000.0)
     higher = _candles(start=100.0, step=0.40, last_volume=2_000.0)
@@ -50,7 +110,32 @@ def test_main_signal_uses_radar_equivalent_confirmation_gate() -> None:
     assert all(result["structure_checks"].values())
     assert all(result["live_checks"].values())
     assert result["publication_coverage"]["ready"] is True
+    assert result["publication_coverage"]["inputs_complete"] is True
+    assert result["publication_coverage"]["confirmation_ready"] is True
+    assert result["publication_coverage"]["confirmation_status"] == "CONFIRMED"
     assert result["publication_coverage"]["missing"] == []
+
+
+def test_neutral_snapshot_keeps_observational_confirmation_evidence() -> None:
+    primary = _candles(start=100.0, step=0.20, last_volume=2_000.0)
+    result = verify_main_signal_snapshot(
+        symbol="TESTUSDT",
+        timeframe="5m",
+        side=None,
+        candles=primary,
+        higher_candles=[],
+        order_book={},
+        funding={},
+        derivatives={},
+    )
+
+    assert result["passed"] is False
+    assert result["direction"] == "NEUTRAL"
+    assert result["status"] == "STRUCTURE_REJECTED"
+    assert result["metrics"]["primary_phase"] != "UNAVAILABLE"
+    assert result["metrics"]["rvol"] > 0
+    assert result["metrics"]["selected_structure_event"]
+    assert result["structure_story"]["primary"]["available"] is True
 
 
 def test_main_signal_keeps_depth_as_supporting_evidence_not_a_snapshot_veto() -> None:
@@ -72,6 +157,39 @@ def test_main_signal_keeps_depth_as_supporting_evidence_not_a_snapshot_veto() ->
     assert all(result["live_evidence"]["required_checks"].values())
 
 
+def test_main_signal_uses_prior_break_while_current_candle_retests() -> None:
+    primary = _prior_break_candles()
+    higher = _candles(start=100.0, step=0.40, last_volume=2_000.0)
+    inputs = _live_inputs(primary[-1].close)
+    with patch("app.quant.live_confirmation.classify_market_phase", return_value="MARKUP"):
+        result = verify_main_signal_snapshot(
+            symbol="TESTUSDT", timeframe="5m", side="LONG", candles=primary, higher_candles=higher,
+            order_book=inputs["order_book"], funding=inputs["funding"], derivatives=inputs["derivatives"],
+        )
+
+    event = result["metrics"]["selected_structure_event"]
+    assert result["passed"] is True
+    assert event["event_index"] == 58
+    assert event["age_bars"] == 1
+    assert event["state"] == "RETESTING"
+    assert result["structure_story"]["setup_state"] == "RETESTING"
+
+
+def test_main_signal_rejects_correct_direction_when_entry_is_extended() -> None:
+    primary = _prior_break_candles(extended=True)
+    higher = _candles(start=100.0, step=0.40, last_volume=2_000.0)
+    inputs = _live_inputs(primary[-1].close)
+    with patch("app.quant.live_confirmation.classify_market_phase", return_value="MARKUP"):
+        result = verify_main_signal_snapshot(
+            symbol="TESTUSDT", timeframe="5m", side="LONG", candles=primary, higher_candles=higher,
+            order_book=inputs["order_book"], funding=inputs["funding"], derivatives=inputs["derivatives"],
+        )
+
+    assert result["passed"] is False
+    assert result["structure_story"]["setup_state"] == "EXTENDED_DO_NOT_CHASE"
+    assert "original entry has moved away" in result["reason"]
+
+
 def test_planned_notional_is_blocked_when_displayed_depth_capacity_is_too_small() -> None:
     primary = _candles(start=100.0, step=0.20, last_volume=2_000.0)
     higher = _candles(start=100.0, step=0.40, last_volume=2_000.0)
@@ -83,6 +201,9 @@ def test_planned_notional_is_blocked_when_displayed_depth_capacity_is_too_small(
     )
     assert result["passed"] is False
     assert result["live_checks"]["execution_capacity_sufficient"] is False
+    assert result["publication_coverage"]["inputs_complete"] is True
+    assert result["publication_coverage"]["confirmation_ready"] is False
+    assert result["publication_coverage"]["confirmation_status"] == "AWAITED"
     assert result["live_evidence"]["execution_capacity"]["evaluated"] is True
     assert any("10% of the displayed" in item for item in result["risk_flags"])
 
@@ -99,6 +220,9 @@ def test_errored_funding_payload_is_missing_data_not_neutral_funding() -> None:
     )
     assert result["passed"] is False
     assert result["publication_coverage"]["requirements"]["funding"] is False
+    assert result["publication_coverage"]["inputs_complete"] is False
+    assert result["publication_coverage"]["confirmation_ready"] is False
+    assert result["publication_coverage"]["confirmation_status"] == "INPUTS_PARTIAL"
     assert "funding" in result["publication_coverage"]["missing"]
     assert result["live_checks"]["data_complete"] is False
 
@@ -110,7 +234,7 @@ def test_main_signal_accepts_completed_range_sweep_with_context_acceptance() -> 
     inputs = _live_inputs(primary[-1].close)
     with (
         patch("app.quant.live_confirmation.classify_market_phase", return_value="RANGING"),
-        patch("app.quant.live_confirmation.detect_liquidity_sweep", return_value={"detected": True, "direction": "bullish_reversal_watch"}),
+        patch("app.quant.live_confirmation.build_market_story", return_value=_actionable_sweep_story()),
         patch("app.quant.live_confirmation.build_vwap_context", return_value={"available": True, "price_relation": "ABOVE_ALL"}),
         patch("app.quant.live_confirmation.build_volume_profile", return_value={"available": True, "location": "ABOVE_POC_ACCEPTANCE"}),
     ):
@@ -131,7 +255,7 @@ def test_main_signal_accepts_accumulation_inside_higher_timeframe_range_with_swe
     inputs = _live_inputs(primary[-1].close)
     with (
         patch("app.quant.live_confirmation.classify_market_phase", side_effect=["ACCUMULATION", "RANGING"]),
-        patch("app.quant.live_confirmation.detect_liquidity_sweep", return_value={"detected": True, "direction": "bullish_reversal_watch"}),
+        patch("app.quant.live_confirmation.build_market_story", return_value=_actionable_sweep_story()),
         patch("app.quant.live_confirmation.build_vwap_context", return_value={"available": True, "price_relation": "ABOVE_ALL"}),
         patch("app.quant.live_confirmation.build_volume_profile", return_value={"available": True, "location": "ABOVE_POC_ACCEPTANCE"}),
     ):

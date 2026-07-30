@@ -26,3 +26,5 @@ async def test_market_snapshot_cache_deduplicates_and_isolates_callers(monkeypat
 
     assert calls == 1
     assert second["candles"][0]["close"] == 100.0
+    data_aggregator._SNAPSHOT_CACHE.clear()
+    data_aggregator._SNAPSHOT_INFLIGHT.clear()

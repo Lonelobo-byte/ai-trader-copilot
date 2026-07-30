@@ -9,7 +9,7 @@ from typing import Any
 import numpy as np
 
 from app.data_sources.binance_public import Candle
-from app.ml.features import build_ml_features
+from app.ml.features import FEATURE_CONTRACT, build_ml_features
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +65,7 @@ def train_walk_forward_model(
     train_fraction: float = 0.7,
     ridge_alpha: float = 10.0,
 ) -> dict[str, Any]:
-    """Train a Ridge Regression model on historical features to predict forward log returns."""
+    """Train a research model on the Bare Eye causal feature contract."""
     n = len(candles)
     if n < 60:
         raise ValueError(f"Insufficient candles for training. Need at least 60, got {n}")
@@ -141,6 +141,7 @@ def train_walk_forward_model(
     weights_dict = {
         "symbol": symbol,
         "timeframe": timeframe,
+        "feature_contract": FEATURE_CONTRACT,
         "feature_names": feature_names,
         "weights": model.weights.tolist(),
         "intercept": float(model.intercept),
@@ -150,6 +151,7 @@ def train_walk_forward_model(
         "test_ic": test_ic,
         "training_limitations": [
             "Historical order-book snapshots were unavailable; microstructure features were excluded.",
+            "Historical public WebSocket execution tape was unavailable; completed-kline taker notional is the explicit fallback.",
             "Validate with purged walk-forward folds and realistic fees/slippage before capital use.",
         ],
     }
@@ -175,6 +177,13 @@ def predict_probability_from_model(
     try:
         with open(weights_file, "r", encoding="utf-8") as f:
             weights_data = json.load(f)
+
+        if weights_data.get("feature_contract") != FEATURE_CONTRACT:
+            logger.warning(
+                "Suppressing model artifact with legacy or unknown feature contract: %s",
+                weights_data.get("feature_contract", "missing"),
+            )
+            return None
 
         # Validate symbol/timeframe metadata to prevent cross-market/timeframe application
         trained_symbol = weights_data.get("symbol", "").upper().strip()
@@ -226,8 +235,12 @@ def predict_probability_from_model(
         return {
             "probability_up": round(float(prob_up), 4),
             "probability_down": round(float(prob_down), 4),
-            "model_status": f"trained ML model (Out-of-sample Test IC: {test_ic:.4f})",
-            "model": "Ridge Regression",
+            "model_status": (
+                "Bare Eye causal research model "
+                f"(Out-of-sample Test IC: {test_ic:.4f})"
+            ),
+            "model": "Bare Eye Causal Ridge Regression",
+            "feature_contract": FEATURE_CONTRACT,
             "test_ic": test_ic,
         }
     except Exception as e:

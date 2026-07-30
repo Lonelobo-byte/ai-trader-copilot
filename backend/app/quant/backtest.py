@@ -10,6 +10,7 @@ import numpy as np
 
 from app.analysis_pipeline import run_full_analysis
 from app.data_sources.binance_public import Candle
+from app.indicators.structure import classify_market_phase
 
 logger = logging.getLogger(__name__)
 
@@ -52,13 +53,10 @@ def _regime_at(candles: list[Candle], index: int) -> str:
     if volumes[-1] < avg_volume * 0.50:
         return "low_liquidity"
 
-    fast = _ema_value(closes, 20)
-    slow = _ema_value(closes, 50)
-    slope_base = _ema_value(closes[:-5], 20) if len(closes) > 25 else fast
-    slope = fast / slope_base - 1.0 if slope_base else 0.0
-    if fast > slow and slope > 0:
+    phase = classify_market_phase(recent)
+    if phase in {"MARKUP", "ACCUMULATION"}:
         return "bull"
-    if fast < slow and slope < 0:
+    if phase in {"MARKDOWN", "DISTRIBUTION"}:
         return "bear"
     return "sideways"
 
@@ -457,11 +455,15 @@ async def run_backtest(
         return {
             "status": "completed",
             "methodology": {
-                "mode": "historical_research_only",
+                "mode": "bare_eye_completed_candle_replay",
+                "evidence_contract": "structure, liquidity, VWAP, volume profile, realized volatility, and completed-kline taker notional",
                 "entry_model": "decision is made on a completed candle; the setup is evaluated from the following candle.",
                 "intrabar_precedence": "When stop and target are both reached inside one OHLC candle, stop loss is assumed first.",
                 "cost_model": "Fixed fee and slippage assumptions are deducted on both entry and exit.",
-                "limitations": ["No exchange queue position, partial fill, funding payment, or order-book replay is simulated."],
+                "limitations": [
+                    "Historical Binance/Bybit WebSocket execution tape was not archived and is never fabricated.",
+                    "No exchange queue position, partial fill, funding payment, or order-book replay is simulated.",
+                ],
             },
             "symbol": symbol,
             "timeframe": timeframe,
@@ -513,11 +515,15 @@ async def run_backtest(
     return {
         "status": "completed",
         "methodology": {
-            "mode": "historical_research_only",
+            "mode": "bare_eye_completed_candle_replay",
+            "evidence_contract": "structure, liquidity, VWAP, volume profile, realized volatility, and completed-kline taker notional",
             "entry_model": "decision is made on a completed candle; the setup is evaluated from the following candle.",
             "intrabar_precedence": "When stop and target are both reached inside one OHLC candle, stop loss is assumed first.",
             "cost_model": "Fixed fee and slippage assumptions are deducted on both entry and exit.",
-            "limitations": ["No exchange queue position, partial fill, funding payment, or order-book replay is simulated."],
+            "limitations": [
+                "Historical Binance/Bybit WebSocket execution tape was not archived and is never fabricated.",
+                "No exchange queue position, partial fill, funding payment, or order-book replay is simulated.",
+            ],
         },
         "symbol": symbol,
         "timeframe": timeframe,

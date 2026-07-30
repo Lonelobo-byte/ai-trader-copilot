@@ -4,7 +4,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from ..ai_client import ai_is_configured, get_model_for_task
-from ..data_sources.multi_venue_ws import get_multi_venue_hub
+from ..data_sources.execution_tape_ws import get_execution_tape_hub
 from ..settings import get_settings
 
 router = APIRouter()
@@ -29,23 +29,28 @@ async def public_market_data_health():
     settings = get_settings()
     if not settings.multi_venue_ws_enabled:
         return {"enabled": False, "status": "DISABLED", "symbols": {}}
-    hub = get_multi_venue_hub(settings)
+    hub = get_execution_tape_hub(settings)
     symbols = {}
     for symbol in list(hub.symbols):
         snapshot = hub.snapshot(symbol, register=False, touch=False)
         symbols[symbol] = {
             "status": snapshot.get("status", "UNAVAILABLE"),
-            "fresh_venue_count": snapshot.get("fresh_venue_count", 0),
-            "flow_venue_count": snapshot.get("flow_venue_count", 0),
-            "flow_confirmed": bool(snapshot.get("flow_confirmed")),
-            "venue_health": {
-                venue: payload.get("health", "UNAVAILABLE")
-                for venue, payload in (snapshot.get("venues") or {}).items()
+            "qualified_source_count": (
+                (snapshot.get("actual_flow") or {}).get("qualified_source_count", 0)
+            ),
+            "actual_flow_status": (
+                (snapshot.get("actual_flow") or {}).get("status", "UNAVAILABLE")
+            ),
+            "source_health": {
+                source: payload.get("health", "UNAVAILABLE")
+                for source, payload in (snapshot.get("sources") or {}).items()
             },
         }
     states = [item["status"] for item in symbols.values()]
     status = "HEALTHY" if states and all(item == "HEALTHY" for item in states) else (
-        "DEGRADED" if any(item in {"HEALTHY", "DEGRADED"} for item in states) else "STARTING_OR_UNAVAILABLE"
+        "DEGRADED"
+        if any(item in {"HEALTHY", "PARTIAL"} for item in states)
+        else "STARTING_OR_UNAVAILABLE"
     )
     return {
         "enabled": True,

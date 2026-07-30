@@ -8,6 +8,7 @@ from app.data_sources.binance_public import interval_seconds
 
 OPEN_SIGNAL_STATUSES = {"PENDING_ENTRY", "ACTIVE", "TP1_SECURED", "TP2_SECURED"}
 TERMINAL_SIGNAL_STATUSES = {"COMPLETED", "STOPPED_OUT", "INVALIDATED", "CANCELLED", "EXPIRED"}
+MAX_LIVE_EVENT_CHASE_ATR = 2.5
 
 
 def _number(value: Any, default: float = 0.0) -> float:
@@ -42,6 +43,74 @@ def _aligned(value: Any, side: str, kind: str) -> bool:
         ("LONG", "book"): "buyers", ("SHORT", "book"): "sellers",
     }
     return str(value or "").lower() == expected[(side, kind)]
+
+
+def _story_event(story: Mapping[str, Any] | None) -> Mapping[str, Any]:
+    if not isinstance(story, Mapping):
+        return {}
+    for key in ("selected_event", "aligned_event", "latest_event"):
+        event = story.get(key)
+        if isinstance(event, Mapping) and event.get("event_id"):
+            return event
+    return {}
+
+
+def _event_direction_for_side(side: str) -> str:
+    return "BULLISH" if side == "LONG" else "BEARISH" if side == "SHORT" else ""
+
+
+def market_story_matches_signal(
+    signal: Mapping[str, Any],
+    market_story: Mapping[str, Any] | None,
+) -> bool:
+    """Return true only when a live story belongs to the signal's origin event.
+
+    A new analysis can select a newer or opposite event while an older signal
+    is still open.  Its lifecycle must never be refreshed, cancelled, or
+    invalidated by that unrelated setup.
+    """
+    side = str(signal.get("side", "")).upper()
+    expected_direction = _event_direction_for_side(side)
+    context = signal.get("context") or {}
+    if not isinstance(context, Mapping):
+        return False
+    stored_story = context.get("market_story") or {}
+    stored_event = _story_event(stored_story)
+    incoming_event = _story_event(market_story)
+    origin_id = str(context.get("structure_event_id") or stored_event.get("event_id") or "")
+    origin_direction = str(
+        context.get("structure_event_direction")
+        or stored_event.get("direction")
+        or ""
+    ).upper()
+    incoming_id = str(incoming_event.get("event_id") or "")
+    incoming_direction = str(incoming_event.get("direction") or "").upper()
+    return bool(
+        origin_id
+        and incoming_id == origin_id
+        and origin_direction
+        and incoming_direction == origin_direction
+        and incoming_direction == expected_direction
+    )
+
+
+def _live_event_distance_atr(
+    *,
+    side: str,
+    current_price: float,
+    story: Mapping[str, Any],
+    fallback_atr: float = 0.0,
+) -> float | None:
+    event = _story_event(story)
+    if str(event.get("direction") or "").upper() != _event_direction_for_side(side):
+        return None
+    level = _number(event.get("break_level"))
+    event_atr = _number(event.get("atr_at_event"))
+    atr = event_atr if event_atr > 0 else _number(fallback_atr)
+    if level <= 0 or atr <= 0 or current_price <= 0:
+        return None
+    distance = current_price - level if side == "LONG" else level - current_price
+    return distance / atr
 
 
 def evaluate_signal_approval(
@@ -93,6 +162,33 @@ def evaluate_signal_approval(
         blockers.append("Liquidity gate did not pass.")
     if not risk_idea or not trade_setup or _number(risk_idea.get("risk_reward")) < 1.5:
         blockers.append("A minimum 1.5R entry, invalidation, and target plan is required.")
+    if trade_setup:
+        story_view = trade_setup.get("market_story") or {}
+        if story_view.get("actionable") is False:
+            blockers.append(
+                f"Completed-candle market story is {story_view.get('state', 'not actionable')}: "
+                f"{story_view.get('reason') or 'the structural entry is unavailable.'}"
+            )
+        reward_space = trade_setup.get("remaining_reward") or {}
+        if reward_space.get("adequate") is False:
+            blockers.append(
+                reward_space.get("reason")
+                or "Insufficient reward remains before the next measured liquidity objective."
+            )
+        if trade_setup.get("execution_permitted") is False:
+            blockers.append("The deterministic trade plan is research-only and cannot be published.")
+        if side:
+            event_distance_atr = _live_event_distance_atr(
+                side=side,
+                current_price=current_price,
+                story=story_view,
+                fallback_atr=_number((trade_setup.get("stop") or {}).get("atr")),
+            )
+            if event_distance_atr is not None and event_distance_atr > MAX_LIVE_EVENT_CHASE_ATR:
+                blockers.append(
+                    f"Live quote is {event_distance_atr:.2f} ATR beyond the originating "
+                    "event level; do not chase."
+                )
 
     confirmations = 0
     if side and council_approval is None and not require_council_approval:
@@ -156,6 +252,11 @@ def build_signal_seed(
     stop_price = _number(stop.get("selected"))
     price_in_zone = entry_low <= current_price <= entry_high
     interval = interval_seconds(timeframe)
+    story_view = trade_setup.get("market_story") or {}
+    selected_event = story_view.get("selected_event") or {}
+    event_age_bars = max(0, int(_number(selected_event.get("age_bars"))))
+    remaining_entry_bars = max(1, 6 - event_age_bars)
+    remaining_lifecycle_bars = max(remaining_entry_bars, 32 - event_age_bars)
     # A setup is not a position. Even if it is published while price is in the
     # entry zone, require price to leave and retest the zone before activating
     # it. This prevents entering a stale snapshot and then immediately hitting
@@ -177,13 +278,17 @@ def build_signal_seed(
         "risk_amount_usd": _number(position.get("risk_amount_usd")),
         "notional_usd": _number(position.get("notional_usd")),
         "recommended_leverage": int(_number((trade_setup.get("leverage") or {}).get("recommended"), 1)),
-        "current_price": current_price, "entry_timeout_at": now + timedelta(seconds=interval * 6),
-        "expires_at": now + timedelta(seconds=interval * 32), "published_at": now,
+        "current_price": current_price, "entry_timeout_at": now + timedelta(seconds=interval * remaining_entry_bars),
+        "expires_at": now + timedelta(seconds=interval * remaining_lifecycle_bars), "published_at": now,
         "last_evaluated_at": now, "events": [
             _event("entry_confirmed" if price_in_zone else "signal_published", "Entry confirmed" if price_in_zone else "Signal published", initial_detail, now)
         ],
         "context": {
             **dict(context),
+            "market_story": dict(story_view),
+            "structure_event_id": selected_event.get("event_id"),
+            "structure_event_direction": selected_event.get("direction"),
+            "structure_event_age_bars_at_publication": event_age_bars,
             "requires_fresh_entry_retest": True,
             "left_entry_zone_after_publication": not price_in_zone,
         },
@@ -206,7 +311,6 @@ def advance_signal(
     side = str(state["side"])
     entry = _number(state.get("entry_price"), _number(state.get("entry_reference")))
     stop = _number(state.get("stop_current"), _number(state.get("stop_initial")))
-    risk = _number(state.get("risk_per_unit"))
 
     def close(status_name: str, kind: str, title: str, detail: str) -> dict[str, Any]:
         state.update({"status": status_name, "exit_price": current_price, "exit_reason": detail, "closed_at": now})
@@ -221,6 +325,27 @@ def advance_signal(
         return close(
             "COMPLETED", "tp3_finalized", "TP3 finalised — successful trade",
             "TP3 had already been secured. Trade finalised as a successful outcome.",
+        )
+
+    context = market_context or {}
+    incoming_story = context.get("market_story") or {}
+    story_view = incoming_story if market_story_matches_signal(state, incoming_story) else {}
+    matched_event = _story_event(story_view)
+    story_state = str(story_view.get("state") or matched_event.get("state") or "")
+    story_reason = story_view.get("reason") or matched_event.get("reason")
+    if story_state == "INVALIDATED":
+        return close(
+            "INVALIDATED",
+            "structure_invalidated",
+            "Exit now",
+            story_reason or "The completed-candle structure event was invalidated.",
+        )
+    if status == "PENDING_ENTRY" and story_state in {"EXPIRED", "MISSED", "EXTENDED_DO_NOT_CHASE"}:
+        return close(
+            "EXPIRED" if story_state == "EXPIRED" else "CANCELLED",
+            "structure_entry_unavailable",
+            "Cancel setup",
+            story_reason or "The original completed-candle entry opportunity is no longer available.",
         )
 
     if status == "PENDING_ENTRY":
@@ -275,15 +400,10 @@ def advance_signal(
             events.append(_event(f"tp{next_stage}_hit", title, detail, now))
             return state
 
-    context = market_context or {}
-    reversed_thesis = (
-        side == "LONG" and context.get("trend_status") == "bearish" and context.get("momentum_bias") == "bearish" and context.get("order_book_pressure") == "sellers"
-    ) or (
-        side == "SHORT" and context.get("trend_status") == "bullish" and context.get("momentum_bias") == "bullish" and context.get("order_book_pressure") == "buyers"
-    )
-    adverse = current_price <= entry - risk * 0.65 if side == "LONG" else current_price >= entry + risk * 0.65
-    if reversed_thesis and adverse:
-        return close("INVALIDATED", "thesis_invalidated", "Exit now", "Trend, momentum, and order flow reversed against the thesis before TP1.")
+    # Do not invalidate an approved plan because RSI-derived momentum or a
+    # transient displayed-book snapshot flipped. Structural invalidation is
+    # handled above from the originating completed-candle event. Stops and
+    # targets remain authoritative between completed causal refreshes.
     return state
 
 
@@ -364,6 +484,8 @@ def build_signal_view(signal: Mapping[str, Any] | None, approval: Mapping[str, A
         "entry_timeout_at": signal.get("entry_timeout_at"),
         "expires_at": signal.get("expires_at"), "last_evaluated_at": signal.get("last_evaluated_at"), "exit_price": signal.get("exit_price"),
         "approval": {"approved": True, "blockers": []}, "events": list(signal.get("events") or [])[-8:],
+        "market_story": (signal.get("context") or {}).get("market_story", {}),
+        "structure_event_id": (signal.get("context") or {}).get("structure_event_id"),
     }
 
 

@@ -82,6 +82,7 @@ async def post_train_model(req: TrainRequest, request: Request, _: User = Depend
             "message": f"Successfully trained walk-forward model for {symbol} on {req.timeframe}.",
             "test_ic": weights["test_ic"],
             "train_ic": weights["train_ic"],
+            "feature_contract": weights["feature_contract"],
             "model_path": str(weights_file),
         }
     except Exception as exc:

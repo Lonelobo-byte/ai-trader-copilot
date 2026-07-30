@@ -399,10 +399,20 @@ async def _fetch_historical_stats(
             if not signals:
                 return {"similar_setups_count": 0, "historical_win_rate": 50.0}
 
-            trend = features.get("trend", {}).get("primary", {}).get("status", "sideways_or_mixed")
-            # Regime is durable in the signal context. Prefer comparable
-            # contexts, then use the most recent bounded sample as fallback.
-            top = [s for s in signals if (s.context or {}).get("trend_status") == trend][:20] or signals[:20]
+            current_context = features.get("market_context", {}) or {}
+            current_direction = str(current_context.get("direction", "WAIT"))
+            # The causal direction is durable in the signal context. Prefer
+            # comparable Bare Eye contexts, then use the recent bounded
+            # sample as a fallback for pre-migration records.
+            top = [
+                signal for signal in signals
+                if str(
+                    ((signal.context or {}).get("causal_market_context") or {}).get(
+                        "direction",
+                        "WAIT",
+                    )
+                ) == current_direction
+            ][:20] or signals[:20]
             count = len(top)
             if count > 0:
                 wins = sum(1 for s in top if s.status == "COMPLETED")

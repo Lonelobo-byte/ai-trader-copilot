@@ -8,11 +8,14 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime
+from time import time
 from typing import Any
 
 from sqlalchemy import select
 
-from .data_sources.binance_public import BinancePublicClient
+from .data_sources.binance_public import BinancePublicClient, interval_seconds
+from .data_sources.execution_tape_ws import get_execution_tape_snapshot
+from .indicators.market_story import build_market_story, evaluate_story_direction
 from .settings import get_settings
 from .signal_service import monitor_open_signals
 
@@ -137,16 +140,64 @@ async def outcome_tracker_loop() -> None:
 async def signal_monitor_loop() -> None:
     """Background signal lifecycle monitor with real-time WebSocket price stream and REST polling fallback."""
     settings = get_settings()
-    client = BinancePublicClient(settings.binance_public_base_url)
     logger.info("Signal lifecycle monitor started.")
+    symbol_clients: dict[str, BinancePublicClient] = {}
+
+    def client_for(symbol: str) -> BinancePublicClient:
+        normalized = symbol.upper().strip()
+        client = symbol_clients.get(normalized)
+        if client is None:
+            if len(symbol_clients) >= 128:
+                symbol_clients.pop(next(iter(symbol_clients)))
+            client = BinancePublicClient(settings.binance_public_base_url)
+            symbol_clients[normalized] = client
+        return client
 
     # Start the sub-second WebSocket price monitor in the background
     from app.quant.active_signal_ws import run_active_signal_ws_monitor
     ws_task = asyncio.create_task(run_active_signal_ws_monitor())
 
     async def latest_price(symbol: str) -> float:
-        ticker = await client.ticker_24hr(symbol)
+        ticker = await client_for(symbol).ticker_24hr(symbol)
         return float(ticker["lastPrice"])
+
+    # Completed structure can change only once per timeframe candle. Cache the
+    # reconstructed ledger by the exchange-time bucket, while reading the
+    # process-shared execution tape on every lifecycle cycle without I/O.
+    story_cache: dict[tuple[str, str], tuple[int, dict[str, Any]]] = {}
+
+    async def causal_market_context(
+        symbol: str,
+        timeframe: str,
+        side: str,
+    ) -> dict[str, Any]:
+        normalized_symbol = symbol.upper().strip()
+        key = (normalized_symbol, timeframe)
+        # A short grace avoids caching the previous candle for an entire
+        # timeframe when the REST request lands exactly on the close boundary.
+        bucket = int((time() - 2.0) // interval_seconds(timeframe))
+        cached = story_cache.get(key)
+        if cached is None or cached[0] != bucket:
+            candles = await client_for(normalized_symbol).klines(
+                normalized_symbol,
+                timeframe,
+                limit=200,
+            )
+            story = build_market_story(candles)
+            if len(story_cache) >= 128 and key not in story_cache:
+                story_cache.pop(next(iter(story_cache)))
+            story_cache[key] = (bucket, story)
+        else:
+            story = cached[1]
+        direction = "BULLISH" if str(side).upper() == "LONG" else "BEARISH"
+        return {
+            "market_story": evaluate_story_direction(story, direction),
+            "market_story_ledger": story,
+            "execution_tape": get_execution_tape_snapshot(
+                normalized_symbol,
+                settings,
+            ),
+        }
 
     has_open_signals = False
     while True:
@@ -155,7 +206,10 @@ async def signal_monitor_loop() -> None:
             # time. This REST path is a low-frequency fallback, not another
             # competing live feed. An idle ledger checks less often.
             await asyncio.sleep(10 if has_open_signals else 30)
-            has_open_signals = await monitor_open_signals(latest_price)
+            has_open_signals = await monitor_open_signals(
+                latest_price,
+                causal_market_context,
+            )
         except asyncio.CancelledError:
             ws_task.cancel()
             raise

@@ -8,51 +8,55 @@ def _levels_notional(levels: list[list[float]], depth: int) -> float:
     return sum(float(price) * float(size) for price, size in levels[:depth])
 
 
-def _multi_venue_summary(multi_venue: dict[str, Any] | None) -> dict[str, Any]:
-    data = multi_venue if isinstance(multi_venue, dict) else {}
-    venues: dict[str, Any] = {}
-    for venue, payload in (data.get("venues") or {}).items():
+def _execution_tape_summary(execution_tape: dict[str, Any] | None) -> dict[str, Any]:
+    data = execution_tape if isinstance(execution_tape, dict) else {}
+    sources: dict[str, Any] = {}
+    for source, payload in (data.get("sources") or {}).items():
         order_book = payload.get("order_book") or {}
         trade_flow = payload.get("trade_flow") or {}
-        venues[venue] = {
+        sources[source] = {
             "available": bool(payload.get("available")),
+            "exchange": payload.get("exchange"),
+            "market": payload.get("market"),
             "health": payload.get("health", "UNAVAILABLE"),
-            "age_seconds": payload.get("age_seconds"),
+            "transport_age_seconds": payload.get("transport_age_seconds"),
             "spread_bps": order_book.get("spread_bps"),
             "depth_imbalance": order_book.get("depth_imbalance"),
             "persistent_imbalance": order_book.get("persistent_imbalance"),
             "book_event_count": order_book.get("book_event_count"),
-            "removal_ratio": order_book.get("removal_ratio"),
             "displayed_liquidity_stability": order_book.get("displayed_liquidity_stability") or {},
             "trade_flow_available": bool(trade_flow.get("available")),
             "trade_flow_age_seconds": trade_flow.get("age_seconds"),
             "trade_count": trade_flow.get("trade_count"),
             "qualified_notional": trade_flow.get("qualified_notional"),
-            "signed_trade_flow": trade_flow.get("signed_flow"),
+            "net_delta_usd": trade_flow.get("net_delta_usd"),
+            "signed_flow": trade_flow.get("signed_flow"),
             "aggressive_buy_ratio": trade_flow.get("aggressive_buy_ratio"),
+            "active_aggressor": trade_flow.get("active_aggressor"),
+            "price_response": trade_flow.get("price_response"),
+            "verdict": trade_flow.get("verdict"),
         }
+    actual_flow = data.get("actual_flow", {}) or {}
     return {
         "available": bool(data.get("available")),
         "status": data.get("status", "UNAVAILABLE"),
-        "fresh_venue_count": int(data.get("fresh_venue_count") or 0),
-        "flow_venue_count": int(data.get("flow_venue_count") or 0),
-        "flow_confirmed": bool(data.get("flow_confirmed")),
-        "flow_consensus": data.get("flow_consensus", "UNAVAILABLE"),
-        "flow_score": data.get("flow_score"),
-        "depth_score": data.get("depth_score"),
-        "price_dispersion_bps": data.get("price_dispersion_bps"),
+        "actual_flow": actual_flow,
+        "flow_confirmed": bool(actual_flow.get("available")),
+        "flow_consensus": actual_flow.get("bias", "UNAVAILABLE"),
+        "flow_score": actual_flow.get("signed_flow"),
+        "flow_source_count": int(actual_flow.get("qualified_source_count") or 0),
         "observed_liquidations": data.get("observed_liquidations") or {
             "available": False,
             "observed": False,
         },
         "displayed_liquidity_stability": data.get("displayed_liquidity_stability") or {
             "status": "UNAVAILABLE",
-            "qualified_venue_count": 0,
-            "elevated_venue_count": 0,
+            "qualified_source_count": 0,
+            "elevated_source_count": 0,
             "publication_veto": False,
         },
         "limitations": list(data.get("limitations") or []),
-        "venues": venues,
+        "sources": sources,
     }
 
 
@@ -60,17 +64,22 @@ def analyze_microstructure(
     order_book: dict[str, Any], candles: list[Any], depth: int = 20,
     multi_venue: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Create execution-quality features without inferring a deterministic side.
+    """Create execution-quality features with normalized live taker evidence.
 
-    Binance kline taker volumes remain the historically calibrated proxy. The
-    sequence-checked Bybit/Coinbase streams are exposed separately so their
-    failure or absence can never be mistaken for neutral evidence.
+    Completed Binance candles remain a historical fallback. The shared
+    Binance/Bybit spot and perpetual tape supplies the current aggressor,
+    delta, absorption, exhaustion, and price-response verdict.
     """
-    cross_venue = _multi_venue_summary(multi_venue)
+    execution_tape = _execution_tape_summary(multi_venue)
     bids = order_book.get("bids", [])[:depth]
     asks = order_book.get("asks", [])[:depth]
     if not bids or not asks:
-        return {"available": False, "reason": "Bid/ask depth unavailable.", "incremental_public_feeds": cross_venue}
+        return {
+            "available": False,
+            "reason": "Bid/ask depth unavailable.",
+            "execution_tape": execution_tape,
+            "incremental_public_feeds": execution_tape,
+        }
 
     best_bid, best_ask = float(bids[0][0]), float(asks[0][0])
     mid = (best_bid + best_ask) / 2 if best_bid + best_ask else 0.0
@@ -112,9 +121,11 @@ def analyze_microstructure(
         "absorption_proxy": round(absorption, 4),
         "absorption_state": absorption_state,
         "liquidity_quality": "thin" if spread_bps > 15 else "normal" if total_depth else "unavailable",
-        "incremental_public_feeds": cross_venue,
+        "execution_tape": execution_tape,
+        # Compatibility for committee snapshots produced before this schema.
+        "incremental_public_feeds": execution_tape,
         "limitations": [
-            "Primary Binance depth is a snapshot; healthy Bybit/Coinbase fields use incremental public books.",
-            "Absorption is an aggregated taker-flow proxy, not exchange-level order attribution.",
+            "Primary REST depth is a snapshot; live source books are contextual and cannot reveal hidden liquidity.",
+            "Taker aggression identifies which side crossed the spread, not participant identity or future intent.",
         ],
     }

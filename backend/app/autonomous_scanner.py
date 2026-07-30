@@ -15,7 +15,7 @@ from sqlalchemy import select, text
 from app.brains.council import run_ai_council
 from app.brains.signal_builder import build_ai_driven_trade_setup, evaluate_ai_driven_approval
 from app.data_sources.data_aggregator import (
-    attach_live_multi_venue_snapshot,
+    attach_live_execution_tape_snapshot,
     fetch_market_intelligence,
     fetch_pair_discovery_data,
 )
@@ -71,6 +71,9 @@ def _scanner_observation(
             "status": institutional.get("status"),
             "playbook": institutional.get("playbook"),
             "reason": institutional.get("reason"),
+            "market_story_state": institutional.get("market_story_state"),
+            "market_story_actionable": institutional.get("market_story_actionable"),
+            "selected_event": institutional.get("selected_event"),
         },
         "tactical": {
             "candidate": bool(tactical.get("candidate")),
@@ -78,6 +81,9 @@ def _scanner_observation(
             "status": tactical.get("status"),
             "playbook": tactical.get("playbook"),
             "reason": tactical.get("reason"),
+            "market_story_state": tactical.get("market_story_state"),
+            "market_story_actionable": tactical.get("market_story_actionable"),
+            "selected_event": tactical.get("selected_event"),
         },
     }
 
@@ -128,7 +134,18 @@ async def get_scanner_diagnostics(limit: int = 120) -> dict[str, Any]:
                 "timeframe": row.timeframe,
                 "status": row.status,
                 "primary_blocker": row.primary_blocker,
-                "publication_ready": bool((row.publication_coverage or {}).get("ready")),
+                "publication_ready": bool(
+                    (row.publication_coverage or {}).get(
+                        "confirmation_ready",
+                        (row.institutional or {}).get("passed", False),
+                    )
+                ),
+                "publication_inputs_complete": bool(
+                    (row.publication_coverage or {}).get(
+                        "inputs_complete",
+                        (row.publication_coverage or {}).get("ready"),
+                    )
+                ),
                 "institutional": row.institutional or {},
                 "tactical": row.tactical or {},
                 "created_at": row.created_at.isoformat() if row.created_at else None,
@@ -208,7 +225,7 @@ async def run_single_symbol_scan(symbol: str, timeframe: str, settings: Any) -> 
         # Council work can outlive the feed freshness window. Refresh the
         # process-shared evidence immediately before the publication gate so
         # stale flow cannot confirm or veto a signal.
-        intelligence = attach_live_multi_venue_snapshot(intelligence, symbol, settings)
+        intelligence = attach_live_execution_tape_snapshot(intelligence, symbol, settings)
 
         # Build trade setup
         # The compact summary is for display; lifecycle context should use
@@ -223,7 +240,7 @@ async def run_single_symbol_scan(symbol: str, timeframe: str, settings: Any) -> 
             candles=intelligence.get("candles", []), higher_candles=higher,
             order_book=intelligence.get("order_book", {}), funding=intelligence.get("funding", {}),
             derivatives=intelligence.get("derivatives", {}),
-            multi_venue=intelligence.get("multi_venue", {}) or {},
+            multi_venue=intelligence.get("execution_tape", {}) or {},
             planned_notional_usd=(trade_setup.get("position") or {}).get("notional_usd"),
         )
 
@@ -256,9 +273,9 @@ async def run_single_symbol_scan(symbol: str, timeframe: str, settings: Any) -> 
                     return {"symbol": symbol, "status": "SKIPPED", "reason": "An active signal was published by another worker."}
                 current_price = cio_result["current_price"]
                 market_context = {
-                    "trend_status": features.get("trend", {}).get("primary", {}).get("status"),
-                    "momentum_bias": features.get("momentum", {}).get("summary", {}).get("bias"),
-                    "order_book_pressure": features.get("order_book", {}).get("pressure"),
+                    "market_story": trade_setup.get("market_story", {}),
+                    "execution_tape": intelligence.get("execution_tape", {}) or {},
+                    "causal_market_context": features.get("market_context", {}) or {},
                 }
 
                 seed = build_signal_seed(

@@ -11,6 +11,8 @@ from datetime import datetime, timezone
 import math
 from typing import Any, Iterable
 
+from app.indicators.market_story import evaluate_story_direction
+
 
 ACTIONABLE = {"BUY_WATCH", "SELL_WATCH"}
 ACTIVE_STATUSES = {"PENDING_ENTRY", "ACTIVE", "TP1_SECURED", "TP2_SECURED", "TP3_SECURED"}
@@ -47,6 +49,11 @@ def _evidence_manifest(
     derivatives_raw = intelligence.get("derivatives", {}) or {}
     if not publication:
         funding = intelligence.get("funding", {}) or {}
+        raw_execution_tape = (
+            intelligence.get("execution_tape")
+            or intelligence.get("multi_venue")
+            or {}
+        )
         publication_requirements = {
             "order_book": bool((intelligence.get("order_book", {}) or {}).get("bids"))
             and bool((intelligence.get("order_book", {}) or {}).get("asks")),
@@ -56,7 +63,10 @@ def _evidence_manifest(
                 and not funding.get("error")
             ),
             "oi_history": bool((derivatives_raw.get("oi_history", {}) or {}).get("available")),
-            "taker_flow": bool((derivatives_raw.get("taker_buy_sell_volume", {}) or {}).get("available")),
+            "taker_flow": (
+                bool((derivatives_raw.get("taker_buy_sell_volume", {}) or {}).get("available"))
+                or bool((raw_execution_tape.get("actual_flow") or {}).get("available"))
+            ),
         }
         publication = {
             "ready": all(publication_requirements.values()),
@@ -69,7 +79,13 @@ def _evidence_manifest(
     probability = quantitative.get("probability_engine", {}) or {}
     statistics = quantitative.get("statistical_features", {}) or {}
     micro = quantitative.get("microstructure", {}) or features.get("microstructure", {}) or {}
-    cross_venue = micro.get("incremental_public_feeds", {}) or features.get("multi_venue", {}) or {}
+    execution_tape = (
+        micro.get("execution_tape")
+        or micro.get("incremental_public_feeds")
+        or features.get("execution_tape")
+        or features.get("multi_venue")
+        or {}
+    )
     positioning = features.get("positioning", {}) or {}
     derivatives = features.get("derivatives", {}) or {}
 
@@ -109,6 +125,10 @@ def _evidence_manifest(
             "available": bool(features.get("market_structure")),
             "source": "completed candles",
         },
+        "market_story": {
+            "available": bool((features.get("market_story", {}) or {}).get("available")),
+            "source": "causal completed-candle event ledger",
+        },
         "liquidity_map": {
             "available": bool((features.get("liquidity_map", {}) or {}).get("available")),
             "source": "completed candles",
@@ -141,13 +161,13 @@ def _evidence_manifest(
             "available": bool(features.get("cross_asset")) and "macro" in sources,
             "source": "macro and cross-asset snapshot",
         },
-        "incremental_cross_venue_flow": {
-            "available": bool(cross_venue.get("flow_confirmed")),
-            "source": "Bybit and Coinbase public WebSockets",
+        "live_execution_tape": {
+            "available": bool((execution_tape.get("actual_flow") or {}).get("available")),
+            "source": "Binance and Bybit public spot/perpetual taker streams",
         },
         "observed_liquidations": {
-            "available": bool((cross_venue.get("observed_liquidations", {}) or {}).get("available")),
-            "source": "Bybit public liquidation stream",
+            "available": bool((execution_tape.get("observed_liquidations", {}) or {}).get("available")),
+            "source": "Binance and Bybit public perpetual liquidation streams",
         },
         "options_positioning": {
             "available": bool((intelligence.get("options", {}) or {}).get("available")),
@@ -273,133 +293,177 @@ def _quant_engine(quantitative: dict[str, Any]) -> dict[str, Any]:
 
 
 def _microstructure_engine(features: dict[str, Any], quantitative: dict[str, Any]) -> dict[str, Any]:
+    """Score measured taker aggression and its price response.
+
+    Source agreement raises confidence, but no specific exchange or
+    spot/perpetual pairing is mandatory. Displayed depth is contextual only.
+    """
     micro = quantitative.get("microstructure", {}) or features.get("microstructure", {}) or {}
-    flow = features.get("trade_flow", {}) or {}
-    cross_venue = micro.get("incremental_public_feeds", {}) or {}
-    venue_payloads = cross_venue.get("venues", {}) or {}
+    historical_flow = features.get("trade_flow", {}) or {}
+    tape = (
+        micro.get("execution_tape")
+        or micro.get("incremental_public_feeds")
+        or features.get("execution_tape")
+        or features.get("multi_venue")
+        or {}
+    )
+    actual = tape.get("actual_flow", {}) or {}
+    sources = tape.get("sources", {}) or {}
+    tape_available = bool(actual.get("available"))
     base_available = bool(micro.get("available"))
-    venue_available = bool(cross_venue.get("available"))
-    venue_flow_confirmed = bool(cross_venue.get("flow_confirmed"))
-    base_score = 0.65 * _number(micro.get("signed_trade_flow")) + 0.35 * _number(micro.get("depth_imbalance"))
-    venue_score = _number(cross_venue.get("flow_score"))
-    if base_available and venue_flow_confirmed:
-        score = 0.65 * base_score + 0.35 * venue_score
-    elif base_available:
-        score = base_score
-    elif venue_flow_confirmed:
-        score = venue_score
-    else:
-        score = 0.0
-    available = base_available or venue_available
+    tape_score = _number(actual.get("signed_flow"))
+    verdict = str(actual.get("status", "UNAVAILABLE")).upper()
+    tape_directionally_confirmed = verdict in {
+        "BUYING_CONFIRMED",
+        "SELLING_CONFIRMED",
+    }
+    historical_score = (
+        0.65 * _number(micro.get("signed_trade_flow"))
+        + 0.35 * _number(micro.get("depth_imbalance"))
+    )
+    score = (
+        tape_score
+        if tape_available and tape_directionally_confirmed
+        else 0.0
+        if tape_available
+        else historical_score
+        if base_available
+        else 0.0
+    )
+    available = tape_available or base_available
     bias = "BULLISH" if score >= 0.08 else "BEARISH" if score <= -0.08 else "NEUTRAL"
-    confidence = min(
-        78.0,
-        35.0 + abs(score) * 100.0 + (8.0 if base_available and venue_flow_confirmed else 0.0),
-    ) if available else 0.0
-    contradictions = []
-    if _number(micro.get("signed_trade_flow")) * _number(micro.get("depth_imbalance")) < 0:
-        contradictions.append("Displayed depth and aggressive trade flow point in opposite directions.")
-    absorption_state = str(micro.get("absorption_state", "NOT_DETECTED"))
-    if absorption_state == "PASSIVE_SELLER_ABSORPTION":
-        contradictions.append("Aggressive buying is being absorbed by passive sellers in the measured candle window.")
-    elif absorption_state == "PASSIVE_BUYER_ABSORPTION":
-        contradictions.append("Aggressive selling is being absorbed by passive buyers in the measured candle window.")
-    base_bias = "BULLISH" if base_score >= 0.08 else "BEARISH" if base_score <= -0.08 else "NEUTRAL"
-    venue_consensus = str(cross_venue.get("flow_consensus", "UNAVAILABLE")).upper()
-    if (
-        base_available
-        and venue_flow_confirmed
-        and base_bias in {"BULLISH", "BEARISH"}
-        and venue_consensus in {"BULLISH", "BEARISH"}
-        and base_bias != venue_consensus
-    ):
+    source_count = int(actual.get("qualified_source_count") or 0)
+    confidence = (
+        min(88.0, 42.0 + abs(score) * 100.0 + min(source_count, 4) * 5.0)
+        if available else 0.0
+    )
+    contradictions: list[str] = []
+    absorption = str(actual.get("absorption", "NOT_DETECTED")).upper()
+    exhaustion = str(actual.get("exhaustion", "NONE")).upper()
+    if absorption == "BUYERS_ABSORBED":
         contradictions.append(
-            f"Binance snapshot/taker evidence is {base_bias.lower()} while qualified "
-            f"Bybit/Coinbase aggressive flow is {venue_consensus.lower()}."
+            "Buyers are crossing the spread, but price is not accepting higher; passive sellers appear to be absorbing them."
         )
-    evidence = []
-    if base_available:
+    elif absorption == "SELLERS_ABSORBED":
+        contradictions.append(
+            "Sellers are crossing the spread, but price is not accepting lower; passive buyers appear to be absorbing them."
+        )
+    if exhaustion != "NONE":
+        contradictions.append(
+            f"Execution-tape participation is fading: {exhaustion.lower().replace('_', ' ')}."
+        )
+    alignment = str(actual.get("cross_market_alignment", "UNAVAILABLE")).upper()
+    if alignment == "DIVERGENT":
+        contradictions.append(
+            "Spot and perpetual taker pressure diverge; the observation remains visible with reduced confidence."
+        )
+
+    evidence: list[dict[str, Any]] = []
+    if tape:
         evidence.extend([
-            {"metric": "spread_bps", "value": micro.get("spread_bps"), "source": "Binance order-book snapshot"},
-            {"metric": "depth_imbalance", "value": micro.get("depth_imbalance"), "source": "Binance order-book snapshot"},
-            {"metric": "signed_trade_flow", "value": micro.get("signed_trade_flow"), "source": "completed Binance klines"},
-            {"metric": "absorption_proxy", "value": micro.get("absorption_proxy"), "source": "completed Binance klines"},
-            {"metric": "absorption_state", "value": absorption_state, "source": "completed Binance klines"},
-            {"metric": "recent_trade_buy_ratio", "value": flow.get("buy_ratio"), "source": "Binance recent trades"},
-        ])
-    if cross_venue:
-        evidence.extend([
             {
-                "metric": "cross_venue_status",
-                "value": cross_venue.get("status", "UNAVAILABLE"),
-                "source": "Bybit and Coinbase public WebSockets",
+                "metric": "actual_flow_status",
+                "value": verdict,
+                "source": "normalized Binance/Bybit spot and perpetual taker tape",
             },
             {
-                "metric": "cross_venue_flow_consensus",
-                "value": venue_consensus,
-                "source": "qualified Bybit perpetual and Coinbase spot trades",
+                "metric": "active_aggressor",
+                "value": actual.get("active_aggressor", "UNAVAILABLE"),
+                "source": "public market-trade streams",
             },
             {
-                "metric": "cross_venue_flow_score",
-                "value": cross_venue.get("flow_score"),
-                "source": "qualified Bybit and Coinbase aggressive-flow composite",
+                "metric": "aggressive_buy_ratio",
+                "value": actual.get("aggressive_buy_ratio"),
+                "source": "public market-trade notional",
             },
             {
-                "metric": "cross_venue_depth_score",
-                "value": cross_venue.get("depth_score"),
-                "source": "incremental Bybit and Coinbase Level-2 books",
+                "metric": "net_delta_usd",
+                "value": actual.get("net_delta_usd"),
+                "source": "rolling public taker notional",
             },
             {
-                "metric": "cross_venue_price_dispersion_bps",
-                "value": cross_venue.get("price_dispersion_bps"),
-                "source": "Bybit perpetual versus Coinbase spot",
+                "metric": "cvd_trend",
+                "value": actual.get("cvd_trend"),
+                "source": "rolling public taker delta",
+            },
+            {
+                "metric": "price_response",
+                "value": actual.get("price_response"),
+                "source": "aggressor flow versus traded-price response",
+            },
+            {
+                "metric": "absorption",
+                "value": absorption,
+                "source": "aggressor flow without matching price progress",
+            },
+            {
+                "metric": "exhaustion",
+                "value": exhaustion,
+                "source": "recent versus prior tape participation",
+            },
+            {
+                "metric": "spot_perpetual_alignment",
+                "value": alignment,
+                "source": "spot and perpetual tape comparison",
+            },
+            {
+                "metric": "execution_tape_confidence",
+                "value": actual.get("confidence", "UNAVAILABLE"),
+                "source": "qualified source count and market alignment",
             },
             {
                 "metric": "displayed_liquidity_stability",
-                "value": cross_venue.get("displayed_liquidity_stability", {}),
-                "source": "incremental Bybit and Coinbase Level-2 updates",
+                "value": tape.get("displayed_liquidity_stability", {}),
+                "source": "Binance/Bybit public displayed books (context only)",
             },
         ])
-        for venue in ("bybit", "coinbase"):
-            payload = venue_payloads.get(venue, {}) or {}
+        for source, payload in sources.items():
+            flow = payload.get("trade_flow", {}) or {}
             evidence.extend([
                 {
-                    "metric": f"{venue}_feed_health",
+                    "metric": f"{source}_health",
                     "value": payload.get("health", "UNAVAILABLE"),
-                    "source": f"{venue.title()} public WebSocket",
+                    "source": f"{payload.get('exchange', source)} {payload.get('market', '')} public stream".strip(),
                 },
                 {
-                    "metric": f"{venue}_aggressive_buy_ratio",
-                    "value": payload.get("aggressive_buy_ratio"),
-                    "source": f"{venue.title()} public trades",
-                },
-                {
-                    "metric": f"{venue}_persistent_depth_imbalance",
-                    "value": payload.get("persistent_imbalance"),
-                    "source": f"{venue.title()} incremental Level-2 book",
-                },
-                {
-                    "metric": f"{venue}_quote_removal_ratio",
-                    "value": payload.get("removal_ratio"),
-                    "source": f"{venue.title()} incremental Level-2 updates",
+                    "metric": f"{source}_verdict",
+                    "value": flow.get("verdict", "UNAVAILABLE"),
+                    "source": f"{payload.get('exchange', source)} {payload.get('market', '')} taker trades".strip(),
                 },
             ])
-    status = (
-        "COMPLETE"
-        if base_available and venue_flow_confirmed
-        else "PARTIAL"
-        if available
-        else "UNAVAILABLE"
-    )
-    unknowns = []
-    if not base_available:
-        unknowns.append(micro.get("reason", "Primary Binance order-book evidence unavailable."))
-    if not venue_flow_confirmed:
+    if not tape_available and base_available:
+        evidence.extend([
+            {
+                "metric": "historical_signed_trade_flow",
+                "value": micro.get("signed_trade_flow"),
+                "source": "completed Binance klines (fallback)",
+            },
+            {
+                "metric": "displayed_depth_imbalance",
+                "value": micro.get("depth_imbalance"),
+                "source": "Binance order-book snapshot (context)",
+            },
+            {
+                "metric": "recent_trade_buy_ratio",
+                "value": historical_flow.get("buy_ratio"),
+                "source": "Binance recent trades (fallback)",
+            },
+        ])
+
+    unknowns: list[str] = []
+    if not tape_available:
         unknowns.append(
-            "Qualified two-venue aggressive-flow consensus is unavailable; partial feeds are not neutral confirmation."
+            "The live execution tape is warming or unavailable; completed-market fallback evidence is shown explicitly."
         )
-    limitations = list(micro.get("limitations", ["No queue-position, cancellation, latency, or market-impact model."]))
-    limitations.extend(cross_venue.get("limitations", []))
+    if not base_available:
+        unknowns.append(micro.get("reason", "Displayed order-book context unavailable."))
+    status = "COMPLETE" if tape_available else "PARTIAL" if base_available else "UNAVAILABLE"
+    limitations = list(micro.get("limitations", []))
+    limitations.extend(tape.get("limitations", []))
+    if not limitations:
+        limitations.append(
+            "Public taker flow reveals the aggressor side, not trader identity, hidden liquidity, or future intent."
+        )
     return _engine(
         "market_microstructure_engine",
         status=status,
@@ -408,7 +472,7 @@ def _microstructure_engine(features: dict[str, Any], quantitative: dict[str, Any
         evidence=evidence,
         contradictory_evidence=contradictions,
         unknowns=unknowns,
-        limitations=limitations,
+        limitations=list(dict.fromkeys(limitations)),
     )
 
 
@@ -426,25 +490,31 @@ def _market_structure_engine(features: dict[str, Any]) -> dict[str, Any]:
     bos = structure.get("bos", {}) or {}
     choch = structure.get("choch", {}) or {}
     sweep = structure.get("liquidity_sweep", features.get("sweep", {})) or {}
+    story = features.get("market_story", {}) or structure.get("story", {}) or {}
+    latest_event = story.get("latest_event", {}) or {}
+    active_states = {"ACTIONABLE_NOW", "RETESTING"}
+    developing_states = {"DEVELOPING"}
     score = 0.0
-    if bos.get("detected"):
-        score += 1.0 if bos.get("direction") == "bullish" else -1.0 if bos.get("direction") == "bearish" else 0.0
-    if choch.get("detected"):
-        score += 0.75 if choch.get("direction") == "bullish" else -0.75 if choch.get("direction") == "bearish" else 0.0
+    event_state = str(latest_event.get("state", "NO_ACTIVE_EVENT"))
+    event_direction = str(latest_event.get("direction", ""))
+    event_weight = 1.0 if event_state in active_states else 0.35 if event_state in developing_states else 0.0
+    if latest_event.get("detected") and event_weight:
+        score += event_weight if event_direction == "BULLISH" else -event_weight if event_direction == "BEARISH" else 0.0
     if phase in {"MARKUP", "ACCUMULATION"}:
         score += 0.5
     elif phase in {"MARKDOWN", "DISTRIBUTION"}:
         score -= 0.5
     sweep_direction = str(sweep.get("direction", ""))
-    if sweep_direction.startswith("bullish"):
-        score += 0.5
-    elif sweep_direction.startswith("bearish"):
-        score -= 0.5
+    if sweep.get("state") in active_states:
+        if sweep_direction.startswith("bullish"):
+            score += 0.5
+        elif sweep_direction.startswith("bearish"):
+            score -= 0.5
 
     bias = "BULLISH" if score >= 0.75 else "BEARISH" if score <= -0.75 else "NEUTRAL"
     contradictions = []
-    if bos.get("detected") and choch.get("detected") and bos.get("direction") != choch.get("direction"):
-        contradictions.append("Break-of-structure and change-of-character point in opposite directions.")
+    if event_state in {"INVALIDATED", "EXPIRED", "MISSED", "EXTENDED_DO_NOT_CHASE"}:
+        contradictions.append(f"The latest completed-candle market story is {event_state.lower().replace('_', ' ')}.")
     return _engine(
         "market_structure_engine",
         status="COMPLETE",
@@ -455,6 +525,7 @@ def _market_structure_engine(features: dict[str, Any]) -> dict[str, Any]:
             {"metric": "break_of_structure", "value": bos, "source": "completed Binance candles"},
             {"metric": "change_of_character", "value": choch, "source": "completed Binance candles"},
             {"metric": "liquidity_sweep", "value": sweep, "source": "completed Binance candles"},
+            {"metric": "market_story", "value": story, "source": "causal completed-candle event ledger"},
             {"metric": "active_order_blocks", "value": len(structure.get("order_blocks") or []), "source": "completed Binance candles"},
             {"metric": "active_fair_value_gaps", "value": len(structure.get("fair_value_gaps") or []), "source": "completed Binance candles"},
         ],
@@ -490,22 +561,22 @@ def _market_context_engine(features: dict[str, Any]) -> dict[str, Any]:
 
 def _derivatives_engine(features: dict[str, Any], intelligence: dict[str, Any]) -> dict[str, Any]:
     derivatives = features.get("derivatives", {}) or {}
+    positioning = features.get("positioning", {}) or {}
     sources = _available_sources(intelligence)
     perp_available = "funding" in sources and "open_interest" in sources
-    taker = derivatives.get("taker_volume", {}) or {}
     top = derivatives.get("top_traders", {}) or {}
     funding = _number(derivatives.get("funding_rate"))
     options = intelligence.get("options", {}) or {}
     options_available = bool(options.get("available"))
     score = 0.0
-    if taker.get("cvd_trend") == "CVD_BULLISH_ACCUMULATION":
-        score += 1.0
-    elif taker.get("cvd_trend") == "CVD_BEARISH_DISTRIBUTION":
-        score -= 1.0
+    if positioning.get("bias") == "BULLISH":
+        score += 0.75
+    elif positioning.get("bias") == "BEARISH":
+        score -= 0.75
     if top.get("bias") == "SMART_MONEY_LONG":
-        score += 0.5
+        score += 0.25
     elif top.get("bias") == "SMART_MONEY_SHORT":
-        score -= 0.5
+        score -= 0.25
     if funding > 0.0003:
         score -= 0.35
     elif funding < -0.0001:
@@ -517,7 +588,8 @@ def _derivatives_engine(features: dict[str, Any], intelligence: dict[str, Any]) 
             {"metric": "funding_rate", "value": funding, "source": "Binance Futures"},
             {"metric": "open_interest", "value": derivatives.get("open_interest"), "source": "Binance Futures"},
             {"metric": "oi_change_pct", "value": (derivatives.get("oi_delta") or {}).get("oi_change_pct"), "source": "Binance Futures history"},
-            {"metric": "taker_cvd", "value": taker.get("cvd_trend"), "source": "Binance Futures"},
+            {"metric": "price_oi_state", "value": positioning.get("state"), "source": "completed price × Binance Futures OI"},
+            {"metric": "funding_crowding", "value": positioning.get("crowding"), "source": "Binance Futures funding"},
             {"metric": "top_trader_bias", "value": top.get("bias"), "source": "Binance Futures"},
         ])
     if options_available:
@@ -535,7 +607,10 @@ def _derivatives_engine(features: dict[str, Any], intelligence: dict[str, Any]) 
         confidence_pct=min(65.0, 35.0 + abs(score) * 15.0) if perp_available else 0.0,
         evidence=evidence,
         unknowns=[] if options_available else ["Options implied-volatility surface unavailable.", "Gamma and dealer positioning unavailable."],
-        limitations=["Perpetual-futures positioning is not a substitute for options-market positioning."],
+        limitations=[
+            "Perpetual-futures positioning is not a substitute for options-market positioning.",
+            "Aggressor flow is owned by the market-microstructure engine and is not double-counted here.",
+        ],
     )
 
 
@@ -691,6 +766,14 @@ def _risk_committee(
     context = features.get("market_context", {}) or {}
     if context.get("status") != "SETUP_CANDIDATE":
         hard_blockers.append("Causal market-context score is not an aligned setup; wait for regime, liquidity, positioning, and flow alignment.")
+    story = features.get("market_story", {}) or {}
+    thesis_direction = "BULLISH" if thesis.get("direction") == "LONG" else "BEARISH" if thesis.get("direction") == "SHORT" else "NEUTRAL"
+    story_view = evaluate_story_direction(story, thesis_direction) if story.get("available") else {}
+    if thesis_direction in {"BULLISH", "BEARISH"} and story.get("available") and not story_view.get("actionable", False):
+        hard_blockers.append(
+            f"Completed-candle market story is {story_view.get('state', 'not actionable')}: "
+            f"{story_view.get('reason') or 'the original structural opportunity is not available now.'}"
+        )
     # Estimate EV on the same horizon as the proposed trade plan. The quant
     # forecast is next-observation directional evidence; it cannot be compared
     # directly with a multi-bar ATR stop and target ladder. Engine agreement

@@ -80,4 +80,5 @@ def test_alpha_endpoints() -> None:
     assert data_rep["status"] in {"active", "insufficient_data"}
     if data_rep["status"] == "active":
         assert "discovered_edges" in data_rep
-        assert "order_book_imbalance" in data_rep["discovered_edges"]
+        assert "actual_execution_flow" in data_rep["discovered_edges"]
+        assert "causal_context_alignment" in data_rep["discovered_edges"]

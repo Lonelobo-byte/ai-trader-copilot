@@ -57,7 +57,12 @@ def test_scanner_observation_keeps_publication_and_tactical_evidence() -> None:
         confidence=67.0,
         approval={"blockers": ["Live confirmation failed: price/OI not aligned."]},
         live_confirmation={
-            "publication_coverage": {"ready": True, "missing": []},
+            "publication_coverage": {
+                "ready": True,
+                "inputs_complete": True,
+                "confirmation_ready": False,
+                "missing": [],
+            },
             "scenarios": {
                 "institutional": {"passed": False, "status": "LIVE_CONFIRMATION_REJECTED", "playbook": "TREND_CONTINUATION"},
                 "tactical": {"candidate": True, "passed": False, "status": "TACTICAL_EVIDENCE_WATCH", "playbook": "PRIMARY_TREND_CONTINUATION"},
@@ -66,6 +71,8 @@ def test_scanner_observation_keeps_publication_and_tactical_evidence() -> None:
     )
     assert observation["primary_blocker"].startswith("Live confirmation failed")
     assert observation["publication_coverage"]["ready"] is True
+    assert observation["publication_coverage"]["inputs_complete"] is True
+    assert observation["publication_coverage"]["confirmation_ready"] is False
     assert observation["tactical"]["candidate"] is True
 
 

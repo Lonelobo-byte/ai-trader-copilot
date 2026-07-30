@@ -48,6 +48,47 @@ def test_positioning_distinguishes_new_longs_from_short_covering() -> None:
     assert covering["state"] == "SHORT_COVERING"
 
 
+def test_positioning_prefers_live_tape_for_delta_divergence() -> None:
+    result = classify_positioning(
+        _candles(),
+        {
+            "funding_rate": 0.0001,
+            "oi_history": {"available": True, "oi_change_pct": 2.0},
+            "taker_volume": {"cvd_trend": "CVD_BULLISH_ACCUMULATION"},
+        },
+        execution_tape={
+            "actual_flow": {
+                "available": True,
+                "status": "SELLING_CONFIRMED",
+                "active_aggressor": "SELLERS",
+            }
+        },
+    )
+    assert result["delta_source"] == "live_execution_tape"
+    assert result["delta_bias"] == "BEARISH"
+    assert result["delta_divergence"] == "BEARISH_DELTA_DIVERGENCE"
+
+
+def test_positioning_does_not_turn_absorbed_aggression_into_directional_delta() -> None:
+    result = classify_positioning(
+        _candles(),
+        {
+            "funding_rate": 0.0001,
+            "oi_history": {"available": True, "oi_change_pct": 2.0},
+        },
+        execution_tape={
+            "actual_flow": {
+                "available": True,
+                "status": "BUYERS_ABSORBED",
+                "active_aggressor": "BUYERS",
+            }
+        },
+    )
+    assert result["delta_status"] == "BUYERS_ABSORBED"
+    assert result["delta_bias"] == "NEUTRAL"
+    assert result["delta_divergence"] == "NONE"
+
+
 def test_context_score_ignores_derived_indicator_values() -> None:
     features = {
         "market_structure": {"phase": "MARKUP", "bos": {"detected": True, "direction": "bullish"}},
@@ -68,6 +109,58 @@ def test_context_score_ignores_derived_indicator_values() -> None:
     assert first["direction"] == "LONG"
     assert first["status"] == "SETUP_CANDIDATE"
     assert first["score"] == second["score"]
+
+
+def test_market_context_prefers_confirmed_execution_tape_over_legacy_flow() -> None:
+    features = {
+        "market_structure": {"phase": "RANGING", "bos": {}},
+        "liquidity_map": {"available": True},
+        "sweep": {},
+        "positioning": {"available": True, "bias": "NEUTRAL", "state": "RANGE"},
+        "microstructure": {"available": True, "depth_imbalance": -0.8},
+        "trade_flow": {"available": True, "buy_ratio": 0.1},
+        "execution_tape": {
+            "actual_flow": {
+                "available": True,
+                "status": "BUYING_CONFIRMED",
+                "signed_flow": 0.6,
+                "active_aggressor": "BUYERS",
+                "price_response": "ACCEPTING_HIGHER",
+            }
+        },
+    }
+    result = score_market_context(features)
+    flow = result["components"]["order_flow"]
+    assert flow["score"] == 0.6
+    assert flow["bias"] == "BULLISH"
+    assert flow["evidence"]["method"] == "live_execution_tape"
+
+
+def test_absorbed_tape_aggression_is_visible_but_not_a_directional_vote() -> None:
+    features = {
+        "market_structure": {"phase": "RANGING", "bos": {}},
+        "liquidity_map": {"available": True},
+        "sweep": {},
+        "positioning": {"available": True, "bias": "NEUTRAL", "state": "RANGE"},
+        "microstructure": {"available": True, "depth_imbalance": 0.8},
+        "trade_flow": {"available": True, "buy_ratio": 0.9},
+        "execution_tape": {
+            "actual_flow": {
+                "available": True,
+                "status": "BUYERS_ABSORBED",
+                "signed_flow": 0.7,
+                "active_aggressor": "BUYERS",
+                "absorption": "BUYERS_ABSORBED",
+                "price_response": "NO_UPWARD_PROGRESS",
+            }
+        },
+    }
+    result = score_market_context(features)
+    flow = result["components"]["order_flow"]
+    assert flow["available"] is True
+    assert flow["score"] == 0.0
+    assert flow["bias"] == "NEUTRAL"
+    assert flow["evidence"]["verdict"] == "BUYERS_ABSORBED"
 
 
 def test_liquidity_profile_volatility_and_vwap_contexts_are_explicit() -> None:

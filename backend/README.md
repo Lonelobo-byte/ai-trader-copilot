@@ -40,13 +40,24 @@ This is intentionally conservative. A candidate must subsequently pass purged wa
 
 `POST /analyze` returns a `quantitative` object with independent `microstructure`, `statistical_features`, `market_state`, `probability_engine`, `risk_engine`, and `explainability` modules. The response is marked `RESEARCH_ONLY`.
 
-Run locally from `backend`:
+Run locally from the repository root. The stable single-process launcher is
+the default and mirrors Docker without Windows multiprocessing:
 
 ```powershell
-.\.venv\Scripts\python.exe -m uvicorn app.main:app --reload
+.\scripts\run-api.ps1
 ```
 
-Open `http://127.0.0.1:8000/dashboard` for the live research dashboard.
+Use reload only while actively editing backend code, and stop it with
+`Ctrl+C` so Windows can close the reload child cleanly:
+
+```powershell
+.\scripts\run-api.ps1 -Reload
+```
+
+Open `http://127.0.0.1:8000/dashboard` for the live research dashboard. Do not
+run the local API alongside Docker unless you intentionally choose another
+port; the Docker application is reached through Caddy at
+`https://localhost`.
 
 Install development dependencies and run validation:
 

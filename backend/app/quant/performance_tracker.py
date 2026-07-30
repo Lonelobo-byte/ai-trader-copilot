@@ -63,7 +63,18 @@ async def get_historical_performance_summary() -> dict[str, Any]:
                 status = sig.status
                 tf = sig.timeframe or "unknown"
                 context = sig.context or {}
-                regime = context.get("trend_status") or "unknown"
+                causal_context = context.get("causal_market_context") or {}
+                structure_component = (
+                    (causal_context.get("components") or {}).get(
+                        "regime_structure",
+                        {},
+                    )
+                )
+                regime = (
+                    structure_component.get("evidence")
+                    or causal_context.get("direction")
+                    or "unknown"
+                )
 
                 tf_entry = tf_stats.setdefault(tf, {"wins": 0, "losses": 0, "total": 0})
                 regime_entry = regime_stats.setdefault(regime, {"wins": 0, "losses": 0, "total": 0})
