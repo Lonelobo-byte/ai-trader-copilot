@@ -1,11 +1,13 @@
 """Provider boundary for crypto checkout; entitlement logic remains internal."""
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import json
 from base64 import b64encode
 from datetime import timedelta
+from decimal import Decimal, InvalidOperation, ROUND_UP
 from io import BytesIO
 from time import monotonic
 from typing import Any
@@ -24,12 +26,20 @@ PLANS: dict[str, dict[str, Any]] = {
     "annual": {"amount": 55.99, "days": 365, "list_amount": 71.88},
 }
 _CURRENCY_CACHE: tuple[str, float, list[dict[str, str]]] | None = None
+_MINIMUM_CACHE: dict[str, tuple[float, float | None]] = {}
+_MINIMUM_CACHE_IDENTITY = ""
+_MINIMUM_CACHE_LOCK = asyncio.Lock()
+_PROVIDER_CACHE_SECONDS = 300
 _LIVE_NOWPAYMENTS_API_URL = "https://api.nowpayments.io/v1"
 _SANDBOX_NOWPAYMENTS_API_URL = "https://api-sandbox.nowpayments.io/v1"
 
 
 class PaymentProviderError(RuntimeError):
     """A safe, actionable error returned by the payment provider."""
+
+
+class PaymentProviderBusyError(PaymentProviderError):
+    """The provider is healthy but temporarily throttling requests."""
 
 
 def nowpayments_api_base_url() -> str:
@@ -81,6 +91,13 @@ def _nowpayments_logo_url(value: Any) -> str | None:
     return urljoin("https://nowpayments.io", value.strip())
 
 
+def _provider_cache_identity() -> str:
+    """Separate cached merchant data by environment, currency, and API key."""
+    settings = get_settings()
+    key_fingerprint = hashlib.sha256(settings.nowpayments_api_key.encode()).hexdigest()[:16]
+    return f"{nowpayments_api_base_url()}:{settings.billing_currency.lower()}:{key_fingerprint}"
+
+
 async def fetch_nowpayments_currencies() -> list[dict[str, str]]:
     """Return only currencies enabled in this merchant's Coin Settings.
 
@@ -90,21 +107,27 @@ async def fetch_nowpayments_currencies() -> list[dict[str, str]]:
     """
     global _CURRENCY_CACHE
     api_url = nowpayments_api_base_url()
-    if _CURRENCY_CACHE and _CURRENCY_CACHE[0] == api_url and monotonic() - _CURRENCY_CACHE[1] < 300:
+    cache_identity = _provider_cache_identity()
+    if _CURRENCY_CACHE and _CURRENCY_CACHE[0] == cache_identity and monotonic() - _CURRENCY_CACHE[1] < _PROVIDER_CACHE_SECONDS:
         return _CURRENCY_CACHE[2]
     settings = get_settings()
     if settings.payment_provider != "nowpayments" or not settings.nowpayments_api_key:
         raise RuntimeError("Crypto checkout is not configured.")
-    async with httpx.AsyncClient(timeout=15) as client:
-        response = await client.get(
-            f"{api_url}/merchant/coins",
-            headers={"x-api-key": settings.nowpayments_api_key},
-        )
-        metadata_response = await client.get(
-            f"{api_url}/full-currencies",
-            headers={"x-api-key": settings.nowpayments_api_key},
-        )
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            response = await client.get(
+                f"{api_url}/merchant/coins",
+                headers={"x-api-key": settings.nowpayments_api_key},
+            )
+            metadata_response = await client.get(
+                f"{api_url}/full-currencies",
+                headers={"x-api-key": settings.nowpayments_api_key},
+            )
+    except httpx.HTTPError as exc:
+        raise PaymentProviderError("NOWPayments merchant currency lookup is temporarily unavailable.") from exc
     if response.is_error:
+        if response.status_code == 429:
+            raise PaymentProviderBusyError("NOWPayments is temporarily rate limiting currency lookups.")
         raise PaymentProviderError(f"NOWPayments merchant currency lookup failed ({response.status_code}).")
     body = response.json()
     raw_codes = body.get("selectedCurrencies", []) if isinstance(body, dict) else None
@@ -139,8 +162,84 @@ async def fetch_nowpayments_currencies() -> list[dict[str, str]]:
         })
     if not currencies:
         raise PaymentProviderError("NOWPayments currently has no available payment currencies.")
-    _CURRENCY_CACHE = (api_url, monotonic(), currencies)
+    _CURRENCY_CACHE = (cache_identity, monotonic(), currencies)
     return currencies
+
+
+def _minimum_lookup_error(response: httpx.Response) -> PaymentProviderError:
+    return PaymentProviderError(
+        f"NOWPayments minimum amount lookup failed ({response.status_code}): {response.text[:300]}"
+    )
+
+
+async def fetch_nowpayments_minimum_amount(currency_code: str, *, force_refresh: bool = False) -> float:
+    """Return the fiat minimum for one selected asset without provider fan-out."""
+    global _MINIMUM_CACHE_IDENTITY
+    settings = get_settings()
+    if settings.payment_provider != "nowpayments" or not settings.nowpayments_api_key:
+        raise RuntimeError("Crypto checkout is not configured.")
+    code = str(currency_code).strip().lower()
+    if not code:
+        raise ValueError("Choose a payment currency.")
+    identity = _provider_cache_identity()
+
+    async with _MINIMUM_CACHE_LOCK:
+        if _MINIMUM_CACHE_IDENTITY != identity:
+            _MINIMUM_CACHE.clear()
+            _MINIMUM_CACHE_IDENTITY = identity
+        if force_refresh:
+            _MINIMUM_CACHE.pop(code, None)
+
+        now = monotonic()
+        cached = _MINIMUM_CACHE.get(code)
+        if cached is not None and now - cached[0] < _PROVIDER_CACHE_SECONDS and cached[1] is not None:
+            return float(cached[1])
+
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                response = await client.get(
+                    f"{nowpayments_api_base_url()}/min-amount",
+                    params={
+                        "currency_from": settings.billing_currency.lower(),
+                        "currency_to": code,
+                        "fiat_equivalent": settings.billing_currency.lower(),
+                        "is_fixed_rate": "true",
+                        "is_fee_paid_by_user": "false",
+                    },
+                    headers={"x-api-key": settings.nowpayments_api_key},
+                )
+        except httpx.HTTPError as exc:
+            raise PaymentProviderError(
+                f"NOWPayments minimum amount lookup failed for {code.upper()}: {exc.__class__.__name__}."
+            ) from exc
+        if response.is_error:
+            if response.status_code == 429:
+                raise PaymentProviderBusyError("NOWPayments is temporarily rate limiting payment checks.")
+            if 400 <= response.status_code < 500 and response.status_code not in {401, 403}:
+                raise ValueError(
+                    f"NOWPayments cannot currently route {code.upper()}. Choose another enabled payment asset."
+                )
+            raise _minimum_lookup_error(response)
+        try:
+            body = response.json()
+            minimum = Decimal(str(body.get("min_amount"))) if isinstance(body, dict) else Decimal("NaN")
+        except (ValueError, TypeError, InvalidOperation):
+            minimum = Decimal("NaN")
+        if not minimum.is_finite() or minimum <= 0:
+            raise PaymentProviderError(f"NOWPayments returned an invalid minimum amount for {code.upper()}.")
+        value = float(minimum)
+        _MINIMUM_CACHE[code] = (monotonic(), value)
+        return value
+
+
+def _minimum_amount_message(pay_currency: str, minimum: float) -> str:
+    settings = get_settings()
+    rounded_up = Decimal(str(minimum)).quantize(Decimal("0.01"), rounding=ROUND_UP)
+    return (
+        f"{pay_currency.upper()} currently requires a checkout of at least "
+        f"{settings.billing_currency.upper()} {rounded_up:.2f} at NOWPayments. "
+        "Choose another compatible payment asset or a higher-value plan."
+    )
 
 
 async def create_nowpayments_payment(order_id: str, plan_code: str, pay_currency: str) -> dict[str, Any]:
@@ -148,30 +247,62 @@ async def create_nowpayments_payment(order_id: str, plan_code: str, pay_currency
     settings = get_settings()
     if settings.payment_provider != "nowpayments" or not settings.nowpayments_api_key:
         raise RuntimeError("Crypto checkout is not configured.")
+    normalized_currency = pay_currency.lower()
     permitted = {item["code"] for item in await fetch_nowpayments_currencies()}
-    if pay_currency.lower() not in permitted:
+    if normalized_currency not in permitted:
         raise ValueError("Choose one of the available payment currencies.")
     plan = plan_details(plan_code)
+    minimum = await fetch_nowpayments_minimum_amount(normalized_currency)
+    if Decimal(str(plan["amount"])) < Decimal(str(minimum)):
+        raise ValueError(_minimum_amount_message(normalized_currency, minimum))
     base_url = settings.public_base_url.rstrip("/")
     payload = {
         "price_amount": plan["amount"],
         "price_currency": settings.billing_currency,
-        "pay_currency": pay_currency.lower(),
+        "pay_currency": normalized_currency,
         "order_id": order_id,
         "order_description": f"AI Trader Copilot {plan_code} subscription",
         "ipn_callback_url": f"{base_url}/billing/webhooks/nowpayments",
         "is_fixed_rate": True,
     }
-    async with httpx.AsyncClient(timeout=20) as client:
-        response = await client.post(
-            f"{nowpayments_api_base_url()}/payment",
-            json=payload,
-            headers={"x-api-key": settings.nowpayments_api_key},
-        )
-        if response.is_error:
-            raise PaymentProviderError(f"NOWPayments payment request failed ({response.status_code}): {response.text[:500]}")
-        payment = response.json()
-    validate_nowpayments_payment_route(payment, pay_currency)
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            response = await client.post(
+                f"{nowpayments_api_base_url()}/payment",
+                json=payload,
+                headers={"x-api-key": settings.nowpayments_api_key},
+            )
+            if response.is_error:
+                provider_error = response.text.lower()
+                if response.status_code == 400 and any(
+                    marker in provider_error for marker in ("amount_minimal", "amountto is too small", "less than minimal")
+                ):
+                    refreshed_minimum = await fetch_nowpayments_minimum_amount(
+                        normalized_currency, force_refresh=True
+                    )
+                    if Decimal(str(plan["amount"])) < Decimal(str(refreshed_minimum)):
+                        raise ValueError(_minimum_amount_message(normalized_currency, refreshed_minimum))
+                if response.status_code == 429:
+                    raise PaymentProviderBusyError("NOWPayments is temporarily rate limiting checkout creation.")
+                if response.status_code in {400, 404, 409, 422}:
+                    try:
+                        error_body = response.json()
+                        provider_message = str(error_body.get("message", "")).strip() if isinstance(error_body, dict) else ""
+                    except ValueError:
+                        provider_message = ""
+                    detail = f" Provider response: {provider_message[:180]}" if provider_message else ""
+                    raise ValueError(
+                        f"NOWPayments rejected the {normalized_currency.upper()} payment route. "
+                        f"Choose another enabled asset.{detail}"
+                    )
+                raise PaymentProviderError(f"NOWPayments payment request failed ({response.status_code}): {response.text[:500]}")
+            try:
+                payment = response.json()
+            except ValueError as exc:
+                raise PaymentProviderError("NOWPayments returned an invalid payment response.") from exc
+    except httpx.HTTPError as exc:
+        raise PaymentProviderError("NOWPayments payment creation is temporarily unavailable.") from exc
+    validate_nowpayments_payment_route(payment, normalized_currency)
     return payment
 
 

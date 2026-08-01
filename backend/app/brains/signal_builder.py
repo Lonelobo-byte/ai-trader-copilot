@@ -415,6 +415,11 @@ def build_ai_driven_trade_setup(
             "reason": live_chase_blocker or story_view.get("reason"),
             "selected_event": story_view.get("aligned_event"),
             "chase_prohibited": bool(live_chase_blocker or story_view.get("chase_prohibited")),
+            "entry_timing": (story_view.get("aligned_event") or {}).get("entry_timing"),
+            "campaign_maturity": (story_view.get("aligned_event") or {}).get("campaign_maturity"),
+            "campaign_origin_price": (story_view.get("aligned_event") or {}).get("campaign_origin_price"),
+            "campaign_distance_atr": (story_view.get("aligned_event") or {}).get("campaign_distance_atr_current"),
+            "campaign_max_entry_atr": (story_view.get("aligned_event") or {}).get("campaign_max_entry_atr"),
             "live_quote_distance_atr": (
                 round(live_event_distance_atr, 3)
                 if live_event_distance_atr is not None

@@ -26,6 +26,12 @@ DEFAULT_STRUCTURE_LOOKBACK = 20
 DEFAULT_SWEEP_LOOKBACK = 24
 DEFAULT_MAX_ACTIVE_AGE = 12
 DEFAULT_FRESH_ENTRY_BARS = 6
+# A fresh BOS can occur late in an already mature directional campaign.  The
+# campaign is measured from the causal opposing swing using volatility known
+# before the first event.  Above the first boundary a completed retest is
+# mandatory; above the second boundary the move is considered consumed.
+DEFAULT_CAMPAIGN_PULLBACK_ATR = 3.0
+DEFAULT_MAX_CAMPAIGN_ENTRY_ATR = 5.0
 
 
 def _number(value: Any, default: float = 0.0) -> float:
@@ -103,6 +109,11 @@ def _event_geometry(
         if direction == "BULLISH"
         else (_number(candle.high) - _number(candle.close)) / candle_range
     )
+    atr_before_event = max(
+        _average_true_range(candles, max(0, index - 1)),
+        abs(level) * 1e-8,
+        1e-12,
+    )
     atr = max(_average_true_range(candles, index), abs(level) * 1e-8, 1e-12)
     displacement = (
         (_number(candle.close) - level) / atr
@@ -116,6 +127,7 @@ def _event_geometry(
         "event_high": _number(candle.high),
         "event_low": _number(candle.low),
         "event_close": _number(candle.close),
+        "atr_before_event": atr_before_event,
         "atr_at_event": atr,
         "body_ratio": round(body_ratio, 4),
         "close_location": round(close_location, 4),
@@ -146,6 +158,7 @@ def _structure_events(
 
     all_highs, all_lows = find_swing_points(candles, N=swing_window)
     start = max(structure_lookback, len(candles) - event_lookback)
+    previous_event: dict[str, Any] | None = None
     for index in range(start, len(candles)):
         # A pivot is usable only after its right-side confirmation candles had
         # completed. Newer pivots found in the full scan are deliberately
@@ -205,8 +218,60 @@ def _structure_events(
             direction=direction,
             level=level,
         )
-        events.append(
-            {
+        # Locate the opposing swing that began this directional campaign using
+        # information already confirmed before the event. If no confirmed
+        # pivot exists, use the bounded pre-event range extreme.
+        origin_swings = known_lows if direction == "BULLISH" else known_highs
+        if origin_swings:
+            local_origin = origin_swings[-1]
+            local_origin_index = int(local_origin["index"])
+            local_origin_price = _number(local_origin["price"])
+            local_origin_source = "CONFIRMED_OPPOSING_SWING"
+        else:
+            origin_window_start = max(0, index - structure_lookback)
+            origin_window = candles[origin_window_start:index]
+            if direction == "BULLISH":
+                local_offset, local_candle = min(
+                    enumerate(origin_window),
+                    key=lambda item: _number(item[1].low),
+                )
+                local_origin_price = _number(local_candle.low)
+            else:
+                local_offset, local_candle = max(
+                    enumerate(origin_window),
+                    key=lambda item: _number(item[1].high),
+                )
+                local_origin_price = _number(local_candle.high)
+            local_origin_index = origin_window_start + local_offset
+            local_origin_source = "BOUNDED_PRE_EVENT_EXTREME"
+
+        continue_campaign = bool(
+            previous_event
+            and previous_event.get("direction") == direction
+            and index - int(previous_event.get("event_index", index)) <= DEFAULT_MAX_ACTIVE_AGE
+        )
+        if continue_campaign:
+            campaign_origin_index = int(previous_event["campaign_origin_index"])
+            campaign_origin_price = _number(previous_event["campaign_origin_price"])
+            campaign_origin_source = str(previous_event["campaign_origin_source"])
+            campaign_atr = max(_number(previous_event["campaign_atr"]), 1e-12)
+            campaign_sequence = int(previous_event.get("campaign_event_sequence", 1)) + 1
+            campaign_id = str(previous_event["campaign_id"])
+        else:
+            campaign_origin_index = local_origin_index
+            campaign_origin_price = local_origin_price
+            campaign_origin_source = local_origin_source
+            campaign_atr = max(_number(geometry.get("atr_before_event")), 1e-12)
+            campaign_sequence = 1
+            origin_close_time = int(candles[campaign_origin_index].close_time)
+            campaign_id = f"{direction}:{origin_close_time}:{campaign_origin_price:.12g}"
+
+        campaign_distance = (
+            (_number(candles[index].close) - campaign_origin_price) / campaign_atr
+            if direction == "BULLISH"
+            else (campaign_origin_price - _number(candles[index].close)) / campaign_atr
+        )
+        event = {
                 "event_id": f"{event_type}:{direction}:{int(candles[index].close_time)}:{level:.12g}",
                 "detected": True,
                 "type": event_type,
@@ -224,9 +289,22 @@ def _structure_events(
                 "event_open_time": int(candles[index].open_time),
                 "event_close_time": int(candles[index].close_time),
                 "prior_structure_bias": prior_bias,
+                "local_impulse_origin_index": local_origin_index,
+                "local_impulse_origin_price": local_origin_price,
+                "local_impulse_origin_source": local_origin_source,
+                "campaign_id": campaign_id,
+                "campaign_origin_index": campaign_origin_index,
+                "campaign_origin_price": campaign_origin_price,
+                "campaign_origin_source": campaign_origin_source,
+                "campaign_atr": campaign_atr,
+                "campaign_atr_basis": "PRE_FIRST_EVENT_ATR",
+                "campaign_event_sequence": campaign_sequence,
+                "campaign_age_bars_at_event": index - campaign_origin_index,
+                "campaign_distance_atr_at_event": round(campaign_distance, 3),
                 **geometry,
             }
-        )
+        events.append(event)
+        previous_event = event
     return events
 
 
@@ -287,6 +365,8 @@ def _complete_lifecycle(
     *,
     max_active_age: int,
     fresh_entry_bars: int,
+    campaign_pullback_atr: float,
+    max_campaign_entry_atr: float,
 ) -> dict[str, Any]:
     result = dict(event)
     index = int(event["event_index"])
@@ -302,6 +382,12 @@ def _complete_lifecycle(
     # is causal at detection time and remains the fixed unit of account for
     # this event's entire lifecycle.
     event_atr = max(_number(event["atr_at_event"]), abs(level) * 1e-8, 1e-12)
+    campaign_origin = _number(event.get("campaign_origin_price"), _number(event.get("event_open")))
+    campaign_atr = max(
+        _number(event.get("campaign_atr"), _number(event.get("atr_before_event"), event_atr)),
+        abs(level) * 1e-8,
+        1e-12,
+    )
     tolerance = max(event_atr * 0.20, abs(level) * 0.0003)
 
     if direction == "BULLISH":
@@ -310,6 +396,7 @@ def _complete_lifecycle(
         touches_retest = lambda candle: _number(candle.low) <= level + tolerance and favourable(_number(candle.close))
         distance_atr = lambda candle: (_number(candle.close) - level) / event_atr
         favourable_excursion = lambda candle: (_number(candle.high) - level) / event_atr
+        campaign_distance = lambda candle: (_number(candle.close) - campaign_origin) / campaign_atr
         invalidation_level = level - tolerance
     else:
         favourable = lambda price: price <= level + tolerance
@@ -317,6 +404,7 @@ def _complete_lifecycle(
         touches_retest = lambda candle: _number(candle.high) >= level - tolerance and favourable(_number(candle.close))
         distance_atr = lambda candle: (level - _number(candle.close)) / event_atr
         favourable_excursion = lambda candle: (level - _number(candle.low)) / event_atr
+        campaign_distance = lambda candle: (campaign_origin - _number(candle.close)) / campaign_atr
         invalidation_level = level + tolerance
 
     signed_distance = distance_atr(latest)
@@ -328,6 +416,7 @@ def _complete_lifecycle(
     terminal_at: int | None = None
     terminal_reason = ""
     running_max_favourable = 0.0
+    campaign_distance_at_event = campaign_distance(candles[index])
     for candle_index in range(index, len(candles)):
         candle = candles[candle_index]
         bar_age = candle_index - index
@@ -368,6 +457,20 @@ def _complete_lifecycle(
                 f"event ATR when the {fresh_entry_bars}-bar fresh-entry window passed."
             )
             break
+        # Evaluate total campaign consumption only after the event-local
+        # terminal rules. This preserves the more precise explanation when an
+        # event itself already extended or aged out, while still preventing a
+        # brand-new late BOS from resetting a mature campaign to "fresh".
+        leg_distance = campaign_distance(candle)
+        if leg_distance > max_campaign_entry_atr:
+            terminal_state = "LATE_STRUCTURE_DO_NOT_CHASE"
+            terminal_at = candle_index
+            terminal_reason = (
+                f"The {direction.lower()} campaign has already travelled {leg_distance:.2f} "
+                f"pre-event ATR from its causal origin at {campaign_origin:.8g}; "
+                "the move is mature and a new entry would chase the structure."
+            )
+            break
 
     lifecycle_end = terminal_at if terminal_at is not None else len(candles) - 1
     # Excursion belongs to this event only until its first terminal
@@ -397,6 +500,8 @@ def _complete_lifecycle(
         or bool(event.get("decisive_candle"))
         or any(favourable(_number(candle.close)) for candle in subsequent[:2])
     )
+    current_campaign_distance = campaign_distance(latest)
+    pullback_required = campaign_distance_at_event > campaign_pullback_atr
 
     state = "DEVELOPING"
     actionable = False
@@ -408,6 +513,12 @@ def _complete_lifecycle(
         state = "RETESTING"
         actionable = True
         reason = "Price is testing the event level and the latest completed candle still holds it."
+    elif accepted and pullback_required:
+        state = "PULLBACK_REQUIRED"
+        reason = (
+            f"The structure event formed {campaign_distance_at_event:.2f} pre-event ATR from "
+            "its causal origin. Do not enter the breakout; wait for a completed retest."
+        )
     elif accepted and age <= fresh_entry_bars and -0.20 <= signed_distance <= 1.75:
         state = "ACTIONABLE_NOW"
         actionable = True
@@ -422,6 +533,8 @@ def _complete_lifecycle(
             "actionable": actionable,
             "chase_prohibited": state in {
                 "EXTENDED_DO_NOT_CHASE",
+                "LATE_STRUCTURE_DO_NOT_CHASE",
+                "PULLBACK_REQUIRED",
                 "MISSED",
                 "INVALIDATED",
                 "EXPIRED",
@@ -433,6 +546,26 @@ def _complete_lifecycle(
             "last_retest_index": retest_indexes[-1] if retest_indexes else None,
             "current_close": _number(latest.close),
             "current_distance_atr": round(signed_distance, 3),
+            "campaign_distance_atr_at_event": round(campaign_distance_at_event, 3),
+            "campaign_distance_atr_current": round(current_campaign_distance, 3),
+            "campaign_pullback_required_atr": campaign_pullback_atr,
+            "campaign_max_entry_atr": max_campaign_entry_atr,
+            "campaign_maturity": (
+                "LATE"
+                if max(campaign_distance_at_event, current_campaign_distance) > max_campaign_entry_atr
+                else "PULLBACK_REQUIRED"
+                if campaign_distance_at_event > campaign_pullback_atr
+                else "EARLY"
+            ),
+            "entry_timing": (
+                "DO_NOT_CHASE"
+                if state in {"LATE_STRUCTURE_DO_NOT_CHASE", "EXTENDED_DO_NOT_CHASE", "MISSED", "EXPIRED", "INVALIDATED"}
+                else "RETEST_ENTRY"
+                if state == "RETESTING"
+                else "WAIT_FOR_PULLBACK"
+                if state == "PULLBACK_REQUIRED"
+                else "EARLY_REVIEW"
+            ),
             "max_favourable_excursion_atr": round(max_favourable, 3),
             "invalidation_level": invalidation_level,
             "invalidated_at_index": invalidated_at,
@@ -445,6 +578,8 @@ def _complete_lifecycle(
                 "RETESTING": "EVENT_LEVEL_RETEST_HOLDING",
                 "DEVELOPING": "EVENT_ACCEPTANCE_DEVELOPING",
                 "EXTENDED_DO_NOT_CHASE": "ENTRY_EXTENDED_DO_NOT_CHASE",
+                "LATE_STRUCTURE_DO_NOT_CHASE": "CAUSAL_CAMPAIGN_ALREADY_CONSUMED",
+                "PULLBACK_REQUIRED": "MATURE_CAMPAIGN_REQUIRES_RETEST",
                 "MISSED": "FRESH_ENTRY_WINDOW_MISSED",
                 "INVALIDATED": "EVENT_LEVEL_INVALIDATED",
                 "EXPIRED": "EVENT_AGE_EXPIRED",
@@ -738,6 +873,8 @@ def _current_sentence(event: dict[str, Any] | None) -> str:
         "RETESTING": "Price is retesting the event level and has not invalidated it on a completed close.",
         "DEVELOPING": "The event remains under observation while acceptance or a fresh trigger develops.",
         "EXTENDED_DO_NOT_CHASE": "Price has extended too far from the event level; chasing is prohibited.",
+        "LATE_STRUCTURE_DO_NOT_CHASE": "The directional campaign was already mature when this structure event appeared; a new entry is prohibited.",
+        "PULLBACK_REQUIRED": "The campaign is developed enough that only a completed pullback and retest can reopen entry review.",
         "MISSED": "The original opportunity has already travelled away from its fresh-entry window.",
         "INVALIDATED": "Later completed price action invalidated the event.",
         "EXPIRED": "The event is too old to authorize a new setup.",
@@ -754,6 +891,8 @@ def build_market_story(
     swing_window: int = 3,
     max_active_age: int = DEFAULT_MAX_ACTIVE_AGE,
     fresh_entry_bars: int = DEFAULT_FRESH_ENTRY_BARS,
+    campaign_pullback_atr: float = DEFAULT_CAMPAIGN_PULLBACK_ATR,
+    max_campaign_entry_atr: float = DEFAULT_MAX_CAMPAIGN_ENTRY_ATR,
 ) -> dict[str, Any]:
     """Reconstruct recent events and describe the market's current location."""
     closed = completed_candles(candles)
@@ -795,6 +934,11 @@ def build_market_story(
             closed,
             max_active_age=max_active_age,
             fresh_entry_bars=fresh_entry_bars,
+            campaign_pullback_atr=max(1.0, campaign_pullback_atr),
+            max_campaign_entry_atr=max(
+                campaign_pullback_atr + 0.5,
+                max_campaign_entry_atr,
+            ),
         )
         for event in raw_structure
     ]
@@ -804,6 +948,11 @@ def build_market_story(
             closed,
             max_active_age=min(max_active_age, 10),
             fresh_entry_bars=min(fresh_entry_bars, 5),
+            # Reversal sweeps begin at the swept level itself rather than a
+            # preceding structure campaign, so retain their event-distance
+            # lifecycle and do not apply the structure-campaign gate.
+            campaign_pullback_atr=10_000.0,
+            max_campaign_entry_atr=10_001.0,
         )
         for event in raw_liquidity
     ]
@@ -832,6 +981,11 @@ def build_market_story(
         "event_age_bars": latest_event.get("age_bars"),
         "event_type": latest_event.get("type"),
         "event_level": latest_event.get("break_level"),
+        "entry_timing": latest_event.get("entry_timing"),
+        "campaign_maturity": latest_event.get("campaign_maturity"),
+        "campaign_origin_price": latest_event.get("campaign_origin_price"),
+        "campaign_distance_atr": latest_event.get("campaign_distance_atr_current"),
+        "campaign_max_entry_atr": latest_event.get("campaign_max_entry_atr"),
     }
     direction = str(latest_event.get("direction", "")).upper()
     if direction == "BULLISH":
@@ -853,6 +1007,8 @@ def build_market_story(
         "scan_window_bars": event_lookback,
         "fresh_entry_bars": fresh_entry_bars,
         "max_active_age_bars": max_active_age,
+        "campaign_pullback_atr": campaign_pullback_atr,
+        "max_campaign_entry_atr": max_campaign_entry_atr,
         "current_price": _number(closed[-1].close),
         "latest_completed_close_time": int(closed[-1].close_time),
         "as_of_close_time": int(closed[-1].close_time),
@@ -879,6 +1035,7 @@ def build_market_story(
         "actionability": actionability,
         "limitations": [
             "This is completed-candle event reconstruction, not certainty about the next price move.",
+            "A later same-direction BOS does not reset a mature campaign back to an early entry.",
             "Live order flow, positioning, liquidity, spread, and reward-to-risk remain separate publication controls.",
         ],
     }

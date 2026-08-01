@@ -13,6 +13,7 @@ from sqlalchemy import select
 from ..auth import current_user, subscription_is_active, utcnow
 from ..billing import (
     PLANS,
+    PaymentProviderBusyError,
     PaymentProviderError,
     callback_configuration_error,
     complete_subscription,
@@ -65,14 +66,31 @@ async def plans():
 
 
 @router.get("/payment-currencies")
-async def payment_currencies(request: Request, user: User = Depends(current_user)):
-    """Authenticated, rate-limited proxy for NOWPayments' live token catalog."""
+async def payment_currencies(request: Request, plan_code: str, user: User = Depends(current_user)):
+    """Return merchant-enabled assets without fan-out calls to the provider."""
     enforce_rate_limit(request, "payment_currencies", limit=20, window_seconds=60)
     try:
-        return {"currencies": await fetch_nowpayments_currencies()}
+        plan_details(plan_code)
+        currencies = await fetch_nowpayments_currencies()
+        return {
+            "currencies": currencies,
+            "plan_code": plan_code,
+            "minimum_check": "selected_asset_at_checkout",
+        }
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except HTTPException:
+        raise
+    except PaymentProviderBusyError as exc:
+        logger.warning("NOWPayments throttled the currency catalog: %s", exc)
+        raise HTTPException(
+            status_code=503,
+            detail="The payment network is briefly busy. Wait a few seconds and reopen checkout.",
+            headers={"Retry-After": "10"},
+        ) from exc
     except (PaymentProviderError, RuntimeError) as exc:
-        logger.warning("Could not load NOWPayments currency catalog: %s", exc)
-        raise HTTPException(status_code=502, detail="NOWPayments could not load the available payment currencies. Please try again shortly.") from exc
+        logger.warning("Could not load compatible NOWPayments currency catalog: %s", exc)
+        raise HTTPException(status_code=502, detail="NOWPayments could not verify compatible payment assets. Please try again shortly.") from exc
 
 
 def _subscription_view(subscription: Subscription | None) -> dict | None:
@@ -186,16 +204,17 @@ def _expire_pending_checkout(payment: Payment, subscription: Subscription) -> No
 
 
 def _can_release_unverified_sandbox_legacy_checkout(payment: Payment) -> bool:
-    """A local sandbox may contain invoices created under an older API mode.
+    """A local sandbox may contain checkouts created under an older API mode.
 
-    Those test invoices cannot move real funds, and NOWPayments will reject a
-    cross-environment lookup.  Allow a developer to start a clean sandbox
-    checkout, but never use this bypass for live payments.
+    Some rows have only an invoice URL, some have an invoice ID, and neither
+    shape has a provider payment route. Those test checkouts cannot move real
+    funds, and NOWPayments may reject a cross-environment lookup. Allow a
+    developer to start a clean sandbox checkout, but never use this bypass for
+    live payments.
     """
     settings = get_settings()
     return (
-        bool(payment.provider_invoice_id)
-        and not payment.provider_payment_id
+        not payment.provider_payment_id
         and settings.nowpayments_sandbox
         and settings.app_env.lower() in {"local", "development", "test"}
     )
@@ -215,7 +234,10 @@ async def _reconcile_pending_payment(payment: Payment, subscription: Subscriptio
             return True
 
         if not payment.provider_invoice_id:
-            if not (payment.raw_payload or {}).get("invoice_url"):
+            if (
+                not (payment.raw_payload or {}).get("invoice_url")
+                or _can_release_unverified_sandbox_legacy_checkout(payment)
+            ):
                 _expire_pending_checkout(payment, subscription)
                 return True
             return False
@@ -232,6 +254,20 @@ async def _reconcile_pending_payment(payment: Payment, subscription: Subscriptio
         # record, keep the lock: replacing an ambiguous payment could charge
         # the customer twice.
         if provider_payments:
+            # Sandbox databases frequently outlive the provider test
+            # environment or contain hosted-invoice records created by an
+            # older integration. A non-matching sandbox record cannot move
+            # real funds and must not permanently lock local checkout. Live
+            # payments deliberately retain the lock because a mismatched
+            # provider record is ambiguous and replacing it could duplicate a
+            # real charge.
+            if _can_release_unverified_sandbox_legacy_checkout(payment):
+                logger.info(
+                    "Releasing ambiguous legacy sandbox checkout %s after provider lookup",
+                    payment.id,
+                )
+                _expire_pending_checkout(payment, subscription)
+                return True
             return False
         _expire_pending_checkout(payment, subscription)
         return True
@@ -324,9 +360,16 @@ async def checkout(body: CheckoutRequest, request: Request, user: User = Depends
                     provider_payment = await create_nowpayments_payment(order_id, body.plan_code, body.pay_currency)
                 except ValueError as exc:
                     raise HTTPException(status_code=422, detail=str(exc)) from exc
+                except PaymentProviderBusyError as exc:
+                    logger.warning("NOWPayments throttled checkout creation: %s", exc)
+                    raise HTTPException(
+                        status_code=503,
+                        detail="The payment network is briefly busy. Wait 10 seconds and retry this checkout.",
+                        headers={"Retry-After": "10"},
+                    ) from exc
                 except PaymentProviderError as exc:
                     logger.warning("NOWPayments checkout failed: %s", exc)
-                    raise HTTPException(status_code=502, detail="NOWPayments could not create payment instructions. Verify your API credentials and try again.") from exc
+                    raise HTTPException(status_code=502, detail="NOWPayments could not create payment instructions. Try another compatible asset or retry shortly.") from exc
                 subscription = Subscription(id=subscription_id, user_id=user.id, plan_code=body.plan_code, status="pending")
                 payment = Payment(
                     id=payment_id, user_id=user.id, subscription_id=subscription_id,

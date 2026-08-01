@@ -149,7 +149,13 @@ async def signal_monitor_loop() -> None:
         if client is None:
             if len(symbol_clients) >= 128:
                 symbol_clients.pop(next(iter(symbol_clients)))
-            client = BinancePublicClient(settings.binance_public_base_url)
+            # Signal plans are constructed from Binance perpetual structure.
+            # The fallback must use the same contract price so spot/perpetual
+            # basis cannot produce a false entry, stop, or target transition.
+            client = BinancePublicClient(
+                settings.binance_futures_base_url,
+                market="futures",
+            )
             symbol_clients[normalized] = client
         return client
 

@@ -287,7 +287,14 @@ def score_market_context(features: dict[str, Any]) -> dict[str, Any]:
     bos = structure.get("bos", {}) or {}
     story = features.get("market_story", {}) or structure.get("story", {}) or {}
     structure_score = (1.0 if phase in {"MARKUP", "ACCUMULATION"} else -1.0 if phase in {"MARKDOWN", "DISTRIBUTION"} else 0.0)
-    if bos.get("detected") and bos.get("state") not in {"INVALIDATED", "EXPIRED", "MISSED", "EXTENDED_DO_NOT_CHASE"}:
+    if bos.get("detected") and bos.get("state") not in {
+        "INVALIDATED",
+        "EXPIRED",
+        "MISSED",
+        "EXTENDED_DO_NOT_CHASE",
+        "LATE_STRUCTURE_DO_NOT_CHASE",
+        "PULLBACK_REQUIRED",
+    }:
         structure_score += 0.5 if bos.get("direction") == "bullish" else -0.5 if bos.get("direction") == "bearish" else 0.0
     components["regime_structure"] = {
         "available": bool(structure),

@@ -15,6 +15,7 @@ from typing import Any
 import websockets
 
 from app.brains.signal_lifecycle import OPEN_SIGNAL_STATUSES
+from app.data_sources.execution_tape_ws import get_execution_tape_snapshot
 from app.db.database import AsyncSessionLocal
 from app.db.models import TradeSignal
 from app.settings import get_settings
@@ -22,8 +23,8 @@ from app.signal_service import advance_signal, _record_data, _apply
 
 logger = logging.getLogger(__name__)
 
-# Combined ticker WebSocket endpoints
-_SPOT_MINI_TICKER_WS = "wss://stream.binance.com:9443/ws/!miniTicker@arr"
+# Combined ticker WebSocket endpoint for the perpetual price series used by
+# Research, Radar and all persisted signal levels.
 _FUTURES_MINI_TICKER_WS = "wss://fstream.binance.com/ws/!miniTicker@arr"
 
 
@@ -47,7 +48,14 @@ class ActiveSignalWSMonitor:
             result = await db.execute(
                 select(TradeSignal.symbol).where(TradeSignal.status.in_(OPEN_SIGNAL_STATUSES))
             )
-            self._active_symbols = {str(symbol).upper() for symbol in result.scalars().all()}
+            active_symbols = {str(symbol).upper() for symbol in result.scalars().all()}
+        # Register new signal symbols with the shared Binance/Bybit tape as
+        # soon as they enter the ledger, giving flow time to warm before price
+        # reaches an entry zone. This is an in-process snapshot, not network
+        # fan-out from the lifecycle monitor.
+        for symbol in active_symbols - self._active_symbols:
+            get_execution_tape_snapshot(symbol, get_settings())
+        self._active_symbols = active_symbols
         self._next_signal_refresh_at = now + (15.0 if self._active_symbols else 30.0)
 
     async def start(self) -> None:
@@ -55,10 +63,11 @@ class ActiveSignalWSMonitor:
         self._running = True
         logger.info("Starting Real-time Active Signal WebSocket Monitor...")
 
-        # Plans are built from the spot candle/order-book snapshot, so monitor
-        # them against the same venue. Mixing a spot plan with a futures price
-        # stream can create false stop hits from basis differences.
-        ws_url = _SPOT_MINI_TICKER_WS
+        # Research, Radar and the council build their structure/entry plans
+        # from Binance USD-M perpetual candles. Monitor the same contract here;
+        # spot remains corroborating execution-flow evidence, never the price
+        # that activates an entry or hits a stop/target.
+        ws_url = _FUTURES_MINI_TICKER_WS
 
         while self._running:
             try:
@@ -124,6 +133,10 @@ class ActiveSignalWSMonitor:
                     return
 
                 changes_made = False
+                tape_by_symbol = {
+                    symbol: get_execution_tape_snapshot(symbol, get_settings())
+                    for symbol in ticker_map
+                }
                 for signal in signals:
                     sym = signal.symbol.upper()
                     if sym not in ticker_map:
@@ -140,7 +153,11 @@ class ActiveSignalWSMonitor:
                     old_status = signal.status
                     old_stage = signal.target_stage
 
-                    updated = advance_signal(_record_data(signal), current_price=current_price)
+                    updated = advance_signal(
+                        _record_data(signal),
+                        current_price=current_price,
+                        market_context={"execution_tape": tape_by_symbol.get(sym, {})},
+                    )
                     if _apply(signal, updated):
                         changes_made = True
                         if old_status != signal.status:

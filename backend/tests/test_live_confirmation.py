@@ -98,13 +98,16 @@ def _prior_break_candles(*, extended: bool = False) -> list[Candle]:
 
 
 def test_main_signal_uses_radar_equivalent_confirmation_gate() -> None:
-    primary = _candles(start=100.0, step=0.20, last_volume=2_000.0)
+    # Use an early held-retest event. A monotonic 60-candle advance is now
+    # deliberately classified as a consumed campaign, not a valid entry.
+    primary = _prior_break_candles(extended=False)
     higher = _candles(start=100.0, step=0.40, last_volume=2_000.0)
     inputs = _live_inputs(primary[-1].close)
-    result = verify_main_signal_snapshot(
-        symbol="TESTUSDT", timeframe="5m", side="LONG", candles=primary, higher_candles=higher,
-        order_book=inputs["order_book"], funding=inputs["funding"], derivatives=inputs["derivatives"],
-    )
+    with patch("app.quant.live_confirmation.classify_market_phase", return_value="MARKUP"):
+        result = verify_main_signal_snapshot(
+            symbol="TESTUSDT", timeframe="5m", side="LONG", candles=primary, higher_candles=higher,
+            order_book=inputs["order_book"], funding=inputs["funding"], derivatives=inputs["derivatives"],
+        )
     assert result["passed"] is True
     assert result["status"] == "LIVE_CONFIRMED_REVIEW"
     assert all(result["structure_checks"].values())
@@ -139,17 +142,18 @@ def test_neutral_snapshot_keeps_observational_confirmation_evidence() -> None:
 
 
 def test_main_signal_keeps_depth_as_supporting_evidence_not_a_snapshot_veto() -> None:
-    primary = _candles(start=100.0, step=0.20, last_volume=2_000.0)
+    primary = _prior_break_candles(extended=False)
     higher = _candles(start=100.0, step=0.40, last_volume=2_000.0)
     inputs = _live_inputs(primary[-1].close)
     inputs["order_book"] = {
         "bids": [[primary[-1].close - 0.01, 2.0]],
         "asks": [[primary[-1].close + 0.01, 50.0]],
     }
-    result = verify_main_signal_snapshot(
-        symbol="TESTUSDT", timeframe="5m", side="LONG", candles=primary, higher_candles=higher,
-        order_book=inputs["order_book"], funding=inputs["funding"], derivatives=inputs["derivatives"],
-    )
+    with patch("app.quant.live_confirmation.classify_market_phase", return_value="MARKUP"):
+        result = verify_main_signal_snapshot(
+            symbol="TESTUSDT", timeframe="5m", side="LONG", candles=primary, higher_candles=higher,
+            order_book=inputs["order_book"], funding=inputs["funding"], derivatives=inputs["derivatives"],
+        )
     assert result["passed"] is True
     assert result["status"] == "LIVE_CONFIRMED_REVIEW"
     assert result["live_checks"]["depth_aligned"] is False
@@ -271,7 +275,7 @@ def test_main_signal_accepts_accumulation_inside_higher_timeframe_range_with_swe
 
 def test_primary_setup_remains_visible_as_tactical_when_higher_timeframe_mismatches() -> None:
     """HTF disagreement blocks publication but must not erase valid LTF evidence."""
-    primary = _candles(start=100.0, step=0.20, last_volume=2_000.0)
+    primary = _prior_break_candles(extended=False)
     higher = _candles(start=100.0, step=0.40, last_volume=2_000.0)
     inputs = _live_inputs(primary[-1].close)
     with patch("app.quant.live_confirmation.classify_market_phase", side_effect=["MARKUP", "RANGING"]):

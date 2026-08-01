@@ -26,6 +26,188 @@
   --transition-speed: 0.18s;
 }
 
+/* ── Hawk Eye live causal chart ─────────────────────────────────────────── */
+.hawk-chart-card {
+  position: relative;
+  margin: 0 1.25rem 1.25rem;
+  overflow: hidden;
+  border: 1px solid rgba(69, 196, 255, 0.18);
+  border-radius: 18px;
+  background:
+    radial-gradient(circle at 8% 0%, rgba(0, 209, 255, 0.08), transparent 30%),
+    radial-gradient(circle at 92% 0%, rgba(108, 92, 231, 0.08), transparent 28%),
+    linear-gradient(145deg, rgba(10, 18, 31, 0.98), rgba(5, 10, 19, 0.99));
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.28), inset 0 1px rgba(255, 255, 255, 0.035);
+}
+
+.hawk-chart-card::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, #00d7ff 22%, #786cff 72%, transparent);
+  opacity: 0.8;
+  z-index: 3;
+}
+
+.hawk-chart-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem 1.15rem 0.9rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.055);
+}
+
+.hawk-chart-title-wrap,
+.hawk-chart-head-state,
+.hawk-chart-toolbar,
+.hawk-chart-legend,
+.hawk-chart-actions {
+  display: flex;
+  align-items: center;
+}
+
+.hawk-chart-title-wrap { gap: 0.8rem; }
+.hawk-chart-title-wrap h2 { margin: 0.12rem 0 0.16rem; font-size: 1.12rem; color: #f4f9ff; }
+.hawk-chart-title-wrap p { margin: 0; color: var(--text-muted); font-size: 0.72rem; }
+.hawk-chart-title-wrap .eyebrow { color: #52dfff; font-size: 0.6rem; letter-spacing: 0.16em; }
+
+.hawk-chart-mark {
+  width: 42px;
+  height: 42px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(69, 214, 255, 0.28);
+  border-radius: 13px;
+  color: #5fe5ff;
+  background: rgba(0, 184, 255, 0.07);
+  box-shadow: inset 0 0 20px rgba(0, 194, 255, 0.055), 0 0 24px rgba(0, 194, 255, 0.06);
+}
+.hawk-chart-mark svg { width: 25px; height: 25px; fill: none; stroke: currentColor; stroke-width: 1.3; }
+
+.hawk-chart-head-state { gap: 0.65rem; }
+.hawk-chart-head-state > div {
+  min-width: 86px;
+  padding: 0.45rem 0.65rem;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.025);
+}
+.hawk-chart-head-state span,
+.hawk-chart-decision span { display: block; color: #657a91; font-size: 0.55rem; font-weight: 800; letter-spacing: 0.09em; text-transform: uppercase; }
+.hawk-chart-head-state strong { color: #ddecfa; font: 700 0.72rem "JetBrains Mono", monospace; }
+
+.hawk-chart-live-badge {
+  display: inline-flex !important;
+  align-items: center;
+  gap: 0.42rem;
+  padding: 0.48rem 0.7rem;
+  border: 1px solid rgba(255, 99, 114, 0.22);
+  border-radius: 999px;
+  color: #ff8290 !important;
+  background: rgba(255, 62, 82, 0.06);
+}
+.hawk-chart-live-badge i { width: 7px; height: 7px; border-radius: 50%; background: currentColor; box-shadow: 0 0 10px currentColor; }
+.hawk-chart-live-badge.live { color: #46efb1 !important; border-color: rgba(70, 239, 177, 0.24); background: rgba(70, 239, 177, 0.065); }
+.hawk-chart-live-badge.live i { animation: hawkLivePulse 1.6s ease-out infinite; }
+
+@keyframes hawkLivePulse {
+  0% { box-shadow: 0 0 0 0 rgba(70, 239, 177, 0.55); }
+  70% { box-shadow: 0 0 0 7px rgba(70, 239, 177, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(70, 239, 177, 0); }
+}
+
+.hawk-chart-toolbar {
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.58rem 1.15rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.045);
+  background: rgba(2, 8, 16, 0.42);
+}
+.hawk-chart-legend { flex-wrap: wrap; gap: 0.8rem; }
+.hawk-chart-legend span { display: inline-flex; align-items: center; gap: 0.34rem; color: #7990a8; font-size: 0.59rem; font-weight: 700; }
+.hawk-chart-legend i { width: 12px; height: 3px; border-radius: 5px; background: #46dfff; box-shadow: 0 0 7px currentColor; }
+.hawk-chart-legend i.liquidity { background: #7c8dff; }
+.hawk-chart-legend i.watch { background: #f6bd52; }
+.hawk-chart-legend i.confirmed { background: #42e5aa; }
+.hawk-chart-legend i.flow { background: #58d5ff; }
+.hawk-chart-legend i.invalid { background: #ff6575; }
+.hawk-chart-actions { gap: 0.42rem; }
+.hawk-chart-pan-hint { margin-right: 0.25rem; color: #516b82; font-size: 0.55rem; font-weight: 700; white-space: nowrap; }
+.hawk-chart-tool {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  padding: 0.38rem 0.58rem;
+  color: #6f8499;
+  background: rgba(255, 255, 255, 0.025);
+  font: 700 0.58rem Inter, sans-serif;
+  cursor: pointer;
+  transition: 160ms ease;
+}
+.hawk-chart-tool:hover { color: #dff8ff; border-color: rgba(65, 210, 255, 0.25); }
+.hawk-chart-tool.is-active { color: #5de2ff; border-color: rgba(65, 210, 255, 0.28); background: rgba(0, 190, 255, 0.075); }
+
+.hawk-chart-stage { position: relative; min-height: 560px; }
+#hawk-eye-chart { width: 100%; height: 560px; }
+.hawk-chart-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 2rem;
+  background: radial-gradient(circle at center, rgba(0, 196, 255, 0.05), transparent 34%);
+  z-index: 2;
+  transition: opacity 180ms ease, visibility 180ms ease;
+}
+.hawk-chart-empty.is-hidden { opacity: 0; visibility: hidden; pointer-events: none; }
+.hawk-chart-empty strong { color: #dcefff; margin-top: 0.8rem; font-size: 0.84rem; }
+.hawk-chart-empty p { max-width: 480px; margin: 0.35rem 0 0; color: #647b91; font-size: 0.68rem; line-height: 1.6; }
+.hawk-chart-empty-orbit { position: relative; width: 52px; height: 52px; border: 1px solid rgba(68, 218, 255, 0.2); border-radius: 50%; }
+.hawk-chart-empty-orbit::before,
+.hawk-chart-empty-orbit::after { content: ""; position: absolute; border-radius: 50%; border: 1px solid rgba(68, 218, 255, 0.13); }
+.hawk-chart-empty-orbit::before { inset: 7px; }
+.hawk-chart-empty-orbit::after { inset: 16px; background: #50ddff; box-shadow: 0 0 18px #25cdf8; }
+.hawk-chart-empty-orbit i { position: absolute; inset: -1px; border-top: 2px solid #50ddff; border-radius: 50%; animation: hawkOrbitSpin 1.5s linear infinite; }
+@keyframes hawkOrbitSpin { to { transform: rotate(360deg); } }
+
+.hawk-chart-decision {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(120px, 0.7fr)) minmax(300px, 1.9fr);
+  gap: 1px;
+  border-top: 1px solid rgba(255, 255, 255, 0.055);
+  background: rgba(255, 255, 255, 0.05);
+}
+.hawk-chart-decision > div { padding: 0.7rem 0.9rem; background: #080f1b; min-width: 0; }
+.hawk-chart-decision strong { display: block; margin-top: 0.22rem; color: #d8e9f7; font: 700 0.66rem "JetBrains Mono", monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hawk-chart-decision .hawk-chart-final { border-left: 1px solid rgba(76, 213, 255, 0.11); background: linear-gradient(90deg, rgba(0, 191, 255, 0.055), #080f1b 70%); }
+.hawk-chart-final strong { color: #5ee6ff; font-size: 0.72rem; }
+.hawk-chart-final small { display: block; margin-top: 0.2rem; color: #677e94; font-size: 0.58rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+@media (max-width: 1000px) {
+  .hawk-chart-card { margin-inline: 0.75rem; }
+  .hawk-chart-header, .hawk-chart-toolbar { align-items: flex-start; flex-direction: column; }
+  .hawk-chart-head-state { width: 100%; flex-wrap: wrap; }
+  .hawk-chart-decision { grid-template-columns: repeat(3, 1fr); }
+  .hawk-chart-decision .hawk-chart-final { grid-column: 1 / -1; border-left: 0; border-top: 1px solid rgba(76, 213, 255, 0.11); }
+}
+
+@media (max-width: 640px) {
+  .hawk-chart-title-wrap { align-items: flex-start; }
+  .hawk-chart-title-wrap p { display: none; }
+  .hawk-chart-head-state > div { min-width: 74px; }
+  .hawk-chart-toolbar { gap: 0.65rem; }
+  .hawk-chart-actions { width: 100%; }
+  .hawk-chart-pan-hint { display: none; }
+  .hawk-chart-tool { flex: 1; }
+  .hawk-chart-stage, #hawk-eye-chart { min-height: 470px; height: 470px; }
+  .hawk-chart-decision { grid-template-columns: 1fr; }
+  .hawk-chart-decision .hawk-chart-final { grid-column: auto; }
+}
+
 * {
   box-sizing: border-box;
   margin: 0;

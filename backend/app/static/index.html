@@ -10,7 +10,7 @@
   <link
     href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap"
     rel="stylesheet">
-  <link rel="stylesheet" href="styles.css?v=20260729-tape1">
+  <link rel="stylesheet" href="styles.css?v=20260801-hawkeye-chart2">
 </head>
 
 <body class="single-page">
@@ -291,6 +291,56 @@
       <span id="macro-alert-text">High Impact Macro Volatility Blockout: Restricted sizing active.</span>
       <button type="button" class="alert-close-btn" id="close-macro-alert" title="Dismiss Alert">&times;</button>
     </div>
+
+    <section class="hawk-chart-card" id="hawk-eye-chart-card" aria-labelledby="hawk-eye-chart-title">
+      <header class="hawk-chart-header">
+        <div class="hawk-chart-title-wrap">
+          <span class="hawk-chart-mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="M3 12c4-5.4 8.3-7.2 13-5.5l5-2.5-2.4 5.1c1.1.8 1.9 1.8 2.4 2.9-3.8 4.6-8.1 6.6-13 5.8L3 20l2.2-4.7A10 10 0 0 1 3 12Z"/><circle cx="15.7" cy="10.2" r="1.1"/></svg>
+          </span>
+          <div>
+            <span class="eyebrow">Causal flight deck</span>
+            <h2 id="hawk-eye-chart-title">Hawk Eye Live Chart</h2>
+            <p>Completed structure, live price, liquidity and publication controls on one synchronized canvas.</p>
+          </div>
+        </div>
+        <div class="hawk-chart-head-state">
+          <div><span>Instrument</span><strong id="hawk-chart-symbol">BTCUSDT</strong></div>
+          <div><span>Interval</span><strong id="hawk-chart-timeframe">15m</strong></div>
+          <span class="hawk-chart-live-badge offline" id="hawk-chart-live-badge"><i></i>OFFLINE</span>
+        </div>
+      </header>
+      <div class="hawk-chart-toolbar" aria-label="Hawk Eye chart controls">
+        <div class="hawk-chart-legend">
+          <span><i class="structure"></i>Structure</span>
+          <span><i class="liquidity"></i>Liquidity</span>
+          <span><i class="watch"></i>Watch zone</span>
+          <span><i class="confirmed"></i>Confirmed plan</span>
+          <span><i class="flow"></i>Aggressor CVD</span>
+          <span><i class="invalid"></i>Invalidation</span>
+        </div>
+        <div class="hawk-chart-actions">
+          <span class="hawk-chart-pan-hint">Drag to pan · Wheel to zoom · Right-side workspace enabled</span>
+          <button type="button" id="hawk-chart-annotations" class="hawk-chart-tool is-active" aria-pressed="true">Annotations</button>
+          <button type="button" id="hawk-chart-follow" class="hawk-chart-tool is-active" aria-pressed="true">Auto-follow</button>
+          <button type="button" id="hawk-chart-reset" class="hawk-chart-tool">Reset view</button>
+        </div>
+      </div>
+      <div class="hawk-chart-stage">
+        <div id="hawk-eye-chart" role="img" aria-label="Live candlestick chart with Hawk Eye causal annotations"></div>
+        <div class="hawk-chart-empty" id="hawk-chart-empty">
+          <span class="hawk-chart-empty-orbit"><i></i></span>
+          <strong>Chart intelligence standing by</strong>
+          <p>Activate the stream to load the real Binance perpetual candles and synchronized Hawk Eye evidence.</p>
+        </div>
+      </div>
+      <footer class="hawk-chart-decision" id="hawk-chart-decision">
+        <div><span>Structure state</span><strong id="hawk-chart-story-state">AWAITING STREAM</strong></div>
+        <div><span>Campaign maturity</span><strong id="hawk-chart-maturity">UNKNOWN</strong></div>
+        <div><span>Actual flow</span><strong id="hawk-chart-flow">UNAVAILABLE</strong></div>
+        <div class="hawk-chart-final"><span>Hawk Eye now</span><strong id="hawk-chart-action">NO LIVE DECISION</strong><small id="hawk-chart-reason">Historical evidence explains the move; live evidence earns the entry.</small></div>
+      </footer>
+    </section>
 
     <main class="dashboard-grid">
       <!-- LEFT PANEL: Controls & Watchlists -->
@@ -1335,15 +1385,15 @@
       };
       const loadPaymentCurrencies = async (plan, currency, token) => {
         openPaymentModal(plan, currency, token);
-        document.getElementById('payment-loading-title').textContent = 'Loading supported payment assets';
-        document.getElementById('payment-loading-copy').textContent = 'Fetching the current NOWPayments token catalog…';
+        document.getElementById('payment-loading-title').textContent = 'Loading enabled payment assets';
+        document.getElementById('payment-loading-copy').textContent = 'Syncing the tokens enabled in your NOWPayments merchant catalog…';
         setPaymentWorkspace('loading');
         try {
-          const response = await fetch('/billing/payment-currencies', { headers: { 'Authorization': `Bearer ${token}` } });
+          const response = await fetch(`/billing/payment-currencies?plan_code=${encodeURIComponent(plan.code)}`, { headers: { 'Authorization': `Bearer ${token}` } });
           const data = await response.json();
           if (!response.ok) throw new Error(data.detail || 'Could not load payment currencies.');
           const currencies = Array.isArray(data.currencies) ? data.currencies : [];
-          if (!currencies.length) throw new Error('No payment currencies are available right now.');
+          if (!currencies.length) throw new Error('No enabled payment currencies are available right now.');
           availablePaymentCurrencies = new Set(currencies.map(item => item.code));
           paymentCurrencyCatalog = new Map(currencies.map(item => [item.code, item]));
           paymentCurrencyInput.disabled = false;
@@ -1545,7 +1595,9 @@
       };
     })();
   </script>
-  <script src="app.js?v=20260729-tape1"></script>
+  <script src="https://cdn.jsdelivr.net/npm/echarts@6.1.0/dist/echarts.min.js"></script>
+  <script src="hawk-chart.js?v=20260801-hawkeye-chart3"></script>
+  <script src="app.js?v=20260801-hawkeye-chart1"></script>
   <script>
     // Sci-Fi neural constellation background
     const canvas = document.getElementById('scifi-canvas');

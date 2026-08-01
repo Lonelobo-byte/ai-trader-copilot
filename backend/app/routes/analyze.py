@@ -232,6 +232,13 @@ async def websocket_analyze(websocket: WebSocket):
                 ai_override=ai_override,
                 ai_cache_key=ai_cache_identity(user.id, ai_override),
                 reconcile_signals=True,
+                chart_mode=(
+                    "snapshot"
+                    if event["type"] == "init"
+                    else "rollover"
+                    if bool(event.get("new_candle_closed"))
+                    else "delta"
+                ),
             )
             payload["type"] = event["type"]
             await websocket.send_json(payload)

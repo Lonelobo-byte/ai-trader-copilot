@@ -80,6 +80,35 @@ def _event_by_id(story: dict[str, Any], event_id: str) -> dict[str, Any]:
     )
 
 
+def _consumed_bearish_campaign() -> list[Candle]:
+    """A late bearish BOS sequence like a selloff already near its lows."""
+    rows = [
+        *((100.0, 100.3, 99.7, 100.0) for _ in range(10)),
+        (100.0, 101.5, 99.9, 101.2),
+        (101.2, 103.5, 101.0, 103.0),
+        (103.0, 105.2, 102.8, 104.7),
+        (104.7, 105.0, 103.5, 104.0),
+        (104.0, 104.2, 102.8, 103.0),
+        (103.0, 103.2, 101.8, 102.0),
+        (102.0, 102.2, 100.8, 101.0),
+        (101.0, 101.2, 99.2, 99.5),
+        (99.5, 99.8, 98.2, 98.5),
+        (98.5, 98.8, 97.0, 97.2),
+        (97.2, 97.5, 95.8, 96.0),
+    ]
+    return [
+        _candle(
+            index,
+            open_price=open_price,
+            high=high,
+            low=low,
+            close=close,
+            volume=200.0 if index >= 17 else 100.0,
+        )
+        for index, (open_price, high, low, close) in enumerate(rows)
+    ]
+
+
 def test_prior_bos_is_retained_after_the_event_candle() -> None:
     candles = [
         *_base_range(),
@@ -148,6 +177,40 @@ def test_extended_move_is_explicitly_do_not_chase() -> None:
     assert bullish["actionable"] is False
     assert bullish["chase_prohibited"] is True
     assert bullish["aligned_event"]["current_distance_atr"] > 2.5
+
+
+def test_late_same_direction_bos_cannot_reset_a_consumed_campaign() -> None:
+    candles = _consumed_bearish_campaign()
+    developing_story = build_market_story(
+        candles[:18],
+        event_lookback=20,
+        structure_lookback=5,
+        sweep_lookback=5,
+        swing_window=1,
+    )
+    developing = evaluate_story_direction(developing_story, "BEARISH")
+    assert developing["state"] == "PULLBACK_REQUIRED"
+    assert developing["actionable"] is False
+    assert developing["aligned_event"]["entry_timing"] == "WAIT_FOR_PULLBACK"
+
+    completed_story = build_market_story(
+        candles,
+        event_lookback=20,
+        structure_lookback=5,
+        sweep_lookback=5,
+        swing_window=1,
+    )
+    bearish = evaluate_story_direction(completed_story, "BEARISH")
+    event = bearish["aligned_event"]
+
+    assert bearish["state"] == "LATE_STRUCTURE_DO_NOT_CHASE"
+    assert bearish["actionable"] is False
+    assert bearish["chase_prohibited"] is True
+    assert event["campaign_origin_price"] == 105.2
+    assert event["campaign_event_sequence"] == 4
+    assert event["campaign_distance_atr_at_event"] > event["campaign_max_entry_atr"]
+    assert event["entry_timing"] == "DO_NOT_CHASE"
+    assert bearish["reason_code"] == "CAUSAL_CAMPAIGN_ALREADY_CONSUMED"
 
 
 def test_expanded_move_becomes_missed_after_fresh_entry_window() -> None:
@@ -420,6 +483,7 @@ def test_event_detection_is_prefix_invariant_without_lookahead() -> None:
         "event_high",
         "event_low",
         "event_close",
+        "atr_before_event",
         "atr_at_event",
         "body_ratio",
         "close_location",
@@ -428,6 +492,15 @@ def test_event_detection_is_prefix_invariant_without_lookahead() -> None:
         "decisive_candle",
         "relative_volume_confirmed",
         "quality",
+        "campaign_id",
+        "campaign_origin_index",
+        "campaign_origin_price",
+        "campaign_origin_source",
+        "campaign_atr",
+        "campaign_atr_basis",
+        "campaign_event_sequence",
+        "campaign_age_bars_at_event",
+        "campaign_distance_atr_at_event",
     }
 
     assert prefix_story["no_lookahead"] is True

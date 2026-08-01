@@ -94,6 +94,55 @@ def market_story_matches_signal(
     )
 
 
+def _entry_flow_confirmation(side: str, market_context: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Qualify a live entry from measured aggression plus matching price response."""
+    context = market_context if isinstance(market_context, Mapping) else {}
+    tape = context.get("execution_tape") or {}
+    actual_flow = tape.get("actual_flow") or {} if isinstance(tape, Mapping) else {}
+    available = bool(actual_flow.get("available"))
+    bias = str(actual_flow.get("bias", "UNAVAILABLE")).upper()
+    status = str(actual_flow.get("status", "UNAVAILABLE")).upper()
+    expected_bias = "BULLISH" if side == "LONG" else "BEARISH"
+    expected_status = "BUYING_CONFIRMED" if side == "LONG" else "SELLING_CONFIRMED"
+    passed = available and bias == expected_bias and status == expected_status
+    opposed = available and bias not in {expected_bias, "NEUTRAL", "UNAVAILABLE"}
+    if passed:
+        reason = (
+            f"Live {expected_bias.lower()} aggression is producing matching price acceptance."
+        )
+    elif not available:
+        reason = "Waiting for a qualified Binance/Bybit execution-tape observation."
+    elif opposed:
+        reason = (
+            f"Live execution flow is {bias.lower()} ({status.lower().replace('_', ' ')}), "
+            f"opposing the planned {side.lower()} entry."
+        )
+    else:
+        reason = (
+            f"Live flow is {status.lower().replace('_', ' ')}; "
+            f"{expected_status.lower().replace('_', ' ')} is required."
+        )
+    return {
+        "available": available,
+        "passed": passed,
+        "opposed": opposed,
+        "bias": bias,
+        "status": status,
+        "price_response": actual_flow.get("price_response", "UNAVAILABLE"),
+        "active_aggressor": actual_flow.get("active_aggressor", "UNAVAILABLE"),
+        "qualified_source_count": int(_number(actual_flow.get("qualified_source_count"))),
+        "captured_at": tape.get("captured_at") if isinstance(tape, Mapping) else None,
+        "reason": reason,
+    }
+
+
+def _completed_retest_confirmed(story: Mapping[str, Any] | None) -> bool:
+    if not isinstance(story, Mapping) or story.get("actionable") is not True:
+        return False
+    event = _story_event(story)
+    return str(story.get("state") or event.get("state") or "").upper() == "RETESTING"
+
+
 def _live_event_distance_atr(
     *,
     side: str,
@@ -257,20 +306,46 @@ def build_signal_seed(
     event_age_bars = max(0, int(_number(selected_event.get("age_bars"))))
     remaining_entry_bars = max(1, 6 - event_age_bars)
     remaining_lifecycle_bars = max(remaining_entry_bars, 32 - event_age_bars)
-    # A setup is not a position. Even if it is published while price is in the
-    # entry zone, require price to leave and retest the zone before activating
-    # it. This prevents entering a stale snapshot and then immediately hitting
-    # a nearby stop on the next live tick.
-    status = "PENDING_ENTRY"
-    initial_detail = (
-        f"Price {current_price:.4f} is inside the approved entry zone. Wait for a fresh leave-and-retest confirmation; do not enter yet."
-        if price_in_zone else f"Waiting for price to reach {entry_low:.4f} - {entry_high:.4f}."
+    publication_flow = _entry_flow_confirmation(str(approval["side"]), context)
+    confirmed_retest_at_publication = (
+        price_in_zone
+        and _completed_retest_confirmed(story_view)
+        and publication_flow["passed"]
     )
+    # A completed retest plus live accepting flow is already the confirmation;
+    # requiring another leave-and-retest would miss the intended entry. Other
+    # in-zone publications remain pending and must produce a fresh live retest,
+    # reclaim, and aligned execution tape before activation.
+    status = "ACTIVE" if confirmed_retest_at_publication else "PENDING_ENTRY"
+    if confirmed_retest_at_publication:
+        initial_detail = (
+            f"Completed retest held and live {publication_flow['status'].lower().replace('_', ' ')} "
+            f"confirmed entry at {current_price:.4f}."
+        )
+    elif price_in_zone:
+        initial_detail = (
+            f"Price {current_price:.4f} is inside the approved entry zone. "
+            "Waiting for a fresh retest, favourable reclaim, and aligned live flow."
+        )
+    else:
+        initial_detail = f"Waiting for price to reach {entry_low:.4f} - {entry_high:.4f}."
+    entry_confirmation = {
+        **publication_flow,
+        "state": (
+            "CONFIRMED_AT_PUBLICATION"
+            if confirmed_retest_at_publication
+            else "WAITING_FOR_FRESH_RETEST"
+            if price_in_zone
+            else "WAITING_FOR_ZONE"
+        ),
+        "completed_retest_confirmed": confirmed_retest_at_publication,
+        "reason": initial_detail,
+    }
     return {
         "symbol": symbol, "timeframe": timeframe, "side": approval["side"], "status": status,
         "decision": decision["decision"], "confidence": _number(decision.get("confidence")),
         "entry_low": entry_low, "entry_high": entry_high, "entry_reference": entry_reference,
-        "entry_price": current_price if price_in_zone else None,
+        "entry_price": current_price if confirmed_retest_at_publication else None,
         "stop_initial": stop_price, "stop_current": stop_price,
         "target_1": _number(targets.get("tp1_1r")), "target_2": _number(targets.get("tp2_2r")),
         "target_3": _number(targets.get("tp3_3r")), "target_runner": _number(targets.get("runner_5r")),
@@ -281,7 +356,12 @@ def build_signal_seed(
         "current_price": current_price, "entry_timeout_at": now + timedelta(seconds=interval * remaining_entry_bars),
         "expires_at": now + timedelta(seconds=interval * remaining_lifecycle_bars), "published_at": now,
         "last_evaluated_at": now, "events": [
-            _event("entry_confirmed" if price_in_zone else "signal_published", "Entry confirmed" if price_in_zone else "Signal published", initial_detail, now)
+            _event(
+                "entry_confirmed" if confirmed_retest_at_publication else "signal_published",
+                "Entry confirmed" if confirmed_retest_at_publication else "Signal published",
+                initial_detail,
+                now,
+            )
         ],
         "context": {
             **dict(context),
@@ -289,8 +369,10 @@ def build_signal_seed(
             "structure_event_id": selected_event.get("event_id"),
             "structure_event_direction": selected_event.get("direction"),
             "structure_event_age_bars_at_publication": event_age_bars,
-            "requires_fresh_entry_retest": True,
+            "requires_fresh_entry_retest": not confirmed_retest_at_publication,
             "left_entry_zone_after_publication": not price_in_zone,
+            "entry_zone_armed": False,
+            "entry_confirmation": entry_confirmation,
         },
         "ai_review": dict(ai_review),
     }
@@ -333,6 +415,11 @@ def advance_signal(
     matched_event = _story_event(story_view)
     story_state = str(story_view.get("state") or matched_event.get("state") or "")
     story_reason = story_view.get("reason") or matched_event.get("reason")
+    if story_view:
+        live_context_state = dict(state.get("context") or {})
+        live_context_state["market_story"] = dict(story_view)
+        live_context_state["last_completed_story_update_at"] = now.astimezone(timezone.utc).isoformat()
+        state["context"] = live_context_state
     if story_state == "INVALIDATED":
         return close(
             "INVALIDATED",
@@ -340,7 +427,12 @@ def advance_signal(
             "Exit now",
             story_reason or "The completed-candle structure event was invalidated.",
         )
-    if status == "PENDING_ENTRY" and story_state in {"EXPIRED", "MISSED", "EXTENDED_DO_NOT_CHASE"}:
+    if status == "PENDING_ENTRY" and story_state in {
+        "EXPIRED",
+        "MISSED",
+        "EXTENDED_DO_NOT_CHASE",
+        "LATE_STRUCTURE_DO_NOT_CHASE",
+    }:
         return close(
             "EXPIRED" if story_state == "EXPIRED" else "CANCELLED",
             "structure_entry_unavailable",
@@ -354,18 +446,159 @@ def advance_signal(
             return close("INVALIDATED", "entry_invalidated", "Signal invalidated", "Price reached the invalidation stop before entry.")
         if now >= _utc(state.get("entry_timeout_at"), now):
             return close("EXPIRED", "entry_timeout", "Entry window expired", "Price did not reach the approved entry zone in time.")
-        in_entry_zone = _number(state.get("entry_low")) <= current_price <= _number(state.get("entry_high"))
+        zone_low = _number(state.get("entry_low"))
+        zone_high = _number(state.get("entry_high"))
+        in_entry_zone = zone_low <= current_price <= zone_high
         context_state = dict(state.get("context") or {})
-        if not in_entry_zone:
+        armed = bool(context_state.get("entry_zone_armed"))
+        completed_retest_reference = _number(matched_event.get("current_close"))
+        completed_retest_can_arm = bool(
+            not armed
+            and context_state.get("left_entry_zone_after_publication")
+            and _completed_retest_confirmed(story_view)
+            and zone_low <= completed_retest_reference <= zone_high
+        )
+        if completed_retest_can_arm:
+            armed = True
+            context_state.update({
+                "entry_zone_armed": True,
+                "entry_zone_armed_at": now.astimezone(timezone.utc).isoformat(),
+                "entry_zone_arm_price": completed_retest_reference,
+                "entry_retest_extreme": completed_retest_reference,
+                "entry_confirmation": {
+                    "state": "COMPLETED_RETEST_ARMED",
+                    "passed": False,
+                    "reclaim_confirmed": False,
+                    "reason": (
+                        f"Completed candle held the originating event inside the entry zone at "
+                        f"{completed_retest_reference:.4f}; waiting for live reclaim and aggressor flow."
+                    ),
+                },
+            })
+            state["context"] = context_state
+            events.append(_event(
+                "completed_retest_armed",
+                "Completed retest armed",
+                context_state["entry_confirmation"]["reason"],
+                now,
+            ))
+        if not in_entry_zone and not armed:
             context_state["left_entry_zone_after_publication"] = True
+            context_state["entry_confirmation"] = {
+                "state": "WAITING_FOR_ZONE",
+                "passed": False,
+                "reason": f"Waiting for price to reach {zone_low:.4f} - {zone_high:.4f}.",
+            }
             state["context"] = context_state
             return state
         if context_state.get("requires_fresh_entry_retest") and not context_state.get("left_entry_zone_after_publication"):
+            context_state["entry_confirmation"] = {
+                "state": "WAITING_FOR_FRESH_RETEST",
+                "passed": False,
+                "reason": "The setup was published inside its entry zone; price must leave before a fresh retest can arm it.",
+            }
+            state["context"] = context_state
             return state
-        if in_entry_zone:
+
+        flow_confirmation = _entry_flow_confirmation(side, context)
+        risk_per_unit = max(
+            _number(state.get("risk_per_unit")),
+            abs(_number(state.get("entry_reference")) - stop),
+            max(abs(_number(state.get("entry_reference"))), 1e-9) * 0.0005,
+        )
+        reclaim_threshold = max(
+            risk_per_unit * 0.05,
+            max(abs(_number(state.get("entry_reference"))), 1e-9) * 0.0002,
+        )
+        confirmation_buffer = risk_per_unit * 0.25
+
+        if in_entry_zone and not armed:
+            context_state.update({
+                "entry_zone_armed": True,
+                "entry_zone_armed_at": now.astimezone(timezone.utc).isoformat(),
+                "entry_zone_arm_price": current_price,
+                "entry_retest_extreme": current_price,
+                "entry_confirmation": {
+                    **flow_confirmation,
+                    "state": "ARMED_AWAITING_RECLAIM_AND_FLOW",
+                    "passed": False,
+                    "reclaim_confirmed": False,
+                    "reason": (
+                        f"Entry zone touched at {current_price:.4f}. Waiting for a favourable "
+                        "price reclaim with aligned live aggressor flow."
+                    ),
+                },
+            })
+            state["context"] = context_state
+            events.append(_event(
+                "entry_zone_armed",
+                "Entry zone armed",
+                context_state["entry_confirmation"]["reason"],
+                now,
+            ))
+            return state
+
+        extreme = _number(context_state.get("entry_retest_extreme"), current_price)
+        if side == "LONG":
+            extreme = min(extreme, current_price)
+            reclaim_confirmed = current_price >= extreme + reclaim_threshold
+            location_acceptable = zone_low <= current_price <= zone_high + confirmation_buffer
+            moved_away = current_price > zone_high + confirmation_buffer
+        else:
+            extreme = max(extreme, current_price)
+            reclaim_confirmed = current_price <= extreme - reclaim_threshold
+            location_acceptable = zone_low - confirmation_buffer <= current_price <= zone_high
+            moved_away = current_price < zone_low - confirmation_buffer
+        context_state["entry_retest_extreme"] = extreme
+
+        if moved_away:
+            context_state.update({
+                "entry_zone_armed": False,
+                "entry_confirmation": {
+                    **flow_confirmation,
+                    "state": "RECLAIM_MOVED_AWAY",
+                    "passed": False,
+                    "reclaim_confirmed": reclaim_confirmed,
+                    "reason": "Price left the live confirmation buffer before entry proof completed; waiting for another retest.",
+                },
+            })
+            state["context"] = context_state
+            events.append(_event(
+                "entry_confirmation_missed",
+                "Entry confirmation moved away",
+                context_state["entry_confirmation"]["reason"],
+                now,
+            ))
+            return state
+
+        entry_ready = reclaim_confirmed and location_acceptable and flow_confirmation["passed"]
+        context_state["entry_confirmation"] = {
+            **flow_confirmation,
+            "state": "CONFIRMED" if entry_ready else "ARMED_AWAITING_RECLAIM_AND_FLOW",
+            "passed": entry_ready,
+            "reclaim_confirmed": reclaim_confirmed,
+            "reclaim_threshold": reclaim_threshold,
+            "retest_extreme": extreme,
+            "reason": (
+                f"Favourable reclaim and {flow_confirmation['status'].lower().replace('_', ' ')} confirmed entry."
+                if entry_ready
+                else flow_confirmation["reason"]
+                if reclaim_confirmed and location_acceptable
+                else "A favourable bounce began, but price has not reclaimed the approved entry zone."
+                if reclaim_confirmed
+                else "Entry zone is armed; waiting for a favourable live-price reclaim."
+            ),
+        }
+        state["context"] = context_state
+        if entry_ready:
             state.update({"status": "ACTIVE", "entry_price": current_price})
             entry = current_price
-            events.append(_event("entry_confirmed", "Entry confirmed", f"Fresh retest confirmed entry at {current_price:.4f}.", now))
+            events.append(_event(
+                "entry_confirmed",
+                "Entry confirmed",
+                f"Fresh retest, favourable reclaim, and live execution flow confirmed entry at {current_price:.4f}.",
+                now,
+            ))
         else:
             return state
 
@@ -459,10 +692,15 @@ def build_signal_view(signal: Mapping[str, Any] | None, approval: Mapping[str, A
     journey_progress = 0.0
     if status in {"ACTIVE", "TP1_SECURED", "TP2_SECURED", "TP3_SECURED", "COMPLETED"}:
         journey_progress = 100.0 if status == "COMPLETED" or stage >= 4 else min(100.0, (stage + progress / 100.0) * 25.0)
+    entry_confirmation = ((signal.get("context") or {}).get("entry_confirmation") or {})
     return {
         "id": signal.get("id"), "symbol": signal.get("symbol"), "timeframe": signal.get("timeframe"), "side": side,
         "status": status, "action": signal_action(status), "headline": signal_action(status).replace("_", " "),
-        "reason": signal.get("exit_reason") or "Monitoring the published signal against its fixed plan.",
+        "reason": (
+            signal.get("exit_reason")
+            or (((signal.get("context") or {}).get("entry_confirmation") or {}).get("reason") if status == "PENDING_ENTRY" else None)
+            or "Monitoring the published signal against its fixed plan."
+        ),
         "exit_now": status in {"STOPPED_OUT", "INVALIDATED"},
         "confidence": round(_number(signal.get("confidence")), 2), "current_price": current,
         "entry": {
@@ -470,7 +708,9 @@ def build_signal_view(signal: Mapping[str, Any] | None, approval: Mapping[str, A
             "high": _number(signal.get("entry_high")),
             "reference": _number(signal.get("entry_reference")),
             "price": signal.get("entry_price"),
+            "confirmation": entry_confirmation,
         },
+        "entry_confirmation": entry_confirmation,
         "stop": {"initial": _number(signal.get("stop_initial")), "current": _number(signal.get("stop_current"))},
         "targets": {"tp1": tp1, "tp2": tp2, "tp3": tp3, "runner": runner, "stage": stage},
         "risk": {"per_unit": _number(signal.get("risk_per_unit")), "amount_usd": _number(signal.get("risk_amount_usd")), "notional_usd": _number(signal.get("notional_usd")), "recommended_leverage": int(_number(signal.get("recommended_leverage"), 1))},

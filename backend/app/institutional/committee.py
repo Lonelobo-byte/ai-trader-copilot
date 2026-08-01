@@ -513,7 +513,14 @@ def _market_structure_engine(features: dict[str, Any]) -> dict[str, Any]:
 
     bias = "BULLISH" if score >= 0.75 else "BEARISH" if score <= -0.75 else "NEUTRAL"
     contradictions = []
-    if event_state in {"INVALIDATED", "EXPIRED", "MISSED", "EXTENDED_DO_NOT_CHASE"}:
+    if event_state in {
+        "INVALIDATED",
+        "EXPIRED",
+        "MISSED",
+        "EXTENDED_DO_NOT_CHASE",
+        "LATE_STRUCTURE_DO_NOT_CHASE",
+        "PULLBACK_REQUIRED",
+    }:
         contradictions.append(f"The latest completed-candle market story is {event_state.lower().replace('_', ' ')}.")
     return _engine(
         "market_structure_engine",

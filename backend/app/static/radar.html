@@ -2071,7 +2071,7 @@
             ? false
             : story.actionability?.chase_prohibited;
         const chaseProhibited = liveLocationExtended || explicitChaseRule === true
-          || ['EXTENDED_DO_NOT_CHASE', 'MISSED', 'INVALIDATED', 'EXPIRED'].includes(String(state).toUpperCase());
+          || ['EXTENDED_DO_NOT_CHASE', 'LATE_STRUCTURE_DO_NOT_CHASE', 'PULLBACK_REQUIRED', 'MISSED', 'INVALIDATED', 'EXPIRED'].includes(String(state).toUpperCase());
         const eventType = event.type || story.actionability?.event_type || 'NO ACTIVE EVENT';
         const age = event.age_bars ?? story.actionability?.event_age_bars;
         const level = event.break_level ?? event.broken_level ?? event.swept_level ?? story.actionability?.event_level;
@@ -2200,7 +2200,9 @@
           const story = radarStoryView(item);
           const reviewReady = item.review_status === 'REVIEW_CANDIDATE' && story.actionable && !story.chaseProhibited;
           const thesis = story.chaseProhibited
-            ? 'PAST ENTRY WINDOW — DO NOT CHASE'
+            ? String(story.state).toUpperCase() === 'PULLBACK_REQUIRED'
+              ? 'BREAKOUT BLOCKED — WAIT FOR PULLBACK'
+              : 'MOVE CONSUMED — DO NOT CHASE'
             : story.actionable
               ? `${item.direction} FRESH-EVENT CONTEXT`
               : item.direction === 'NEUTRAL' ? 'WAIT — no aligned causal thesis' : `${item.direction} context`;

@@ -34,6 +34,24 @@ def _ai():
     }
 
 
+def _live_flow(side: str = "LONG") -> dict:
+    bullish = side == "LONG"
+    return {
+        "execution_tape": {
+            "available": True,
+            "captured_at": datetime.now(timezone.utc).isoformat(),
+            "actual_flow": {
+                "available": True,
+                "bias": "BULLISH" if bullish else "BEARISH",
+                "status": "BUYING_CONFIRMED" if bullish else "SELLING_CONFIRMED",
+                "price_response": "ACCEPTING_HIGHER" if bullish else "ACCEPTING_LOWER",
+                "active_aggressor": "BUYERS" if bullish else "SELLERS",
+                "qualified_source_count": 2,
+            },
+        },
+    }
+
+
 def _story_setup(event_id: str = "BOS:BULLISH:1:100") -> dict:
     setup = _setup()
     setup["market_story"] = {
@@ -258,14 +276,28 @@ def test_signal_advances_targets_and_locks_profit() -> None:
     still_waiting = advance_signal(seed, current_price=100.0, now=now + timedelta(seconds=10))
     assert still_waiting["status"] == "PENDING_ENTRY"
 
-    # A fresh leave-and-retest confirms the entry.
+    # A fresh leave-and-retest only arms the entry. It needs a favourable
+    # reclaim plus current aggressor flow before becoming active.
     left_zone = advance_signal(still_waiting, current_price=101.0, now=now + timedelta(minutes=1))
-    active = advance_signal(left_zone, current_price=100.0, now=now + timedelta(minutes=2))
+    armed = advance_signal(
+        left_zone,
+        current_price=100.0,
+        market_context=_live_flow(),
+        now=now + timedelta(minutes=2),
+    )
+    assert armed["status"] == "PENDING_ENTRY"
+    assert armed["context"]["entry_confirmation"]["state"] == "ARMED_AWAITING_RECLAIM_AND_FLOW"
+    active = advance_signal(
+        armed,
+        current_price=100.2,
+        market_context=_live_flow(),
+        now=now + timedelta(minutes=2, seconds=5),
+    )
     assert active["status"] == "ACTIVE"
 
     tp1 = advance_signal(active, current_price=102.0, now=now + timedelta(minutes=3))
     assert tp1["status"] == "TP1_SECURED"
-    assert tp1["stop_current"] == 100.0
+    assert tp1["stop_current"] == 100.2
     tp1_view = build_signal_view(tp1)
     assert tp1_view["progress_label"] == "Progress to TP2"
     assert tp1_view["progress_pct"] == 0.0
@@ -320,7 +352,18 @@ def test_signal_exits_at_stop_but_ignores_legacy_indicator_reversal() -> None:
     assert view["exit_now"] is True
 
     left_zone = advance_signal(seed, current_price=101.0, now=now + timedelta(seconds=30))
-    active = advance_signal(left_zone, current_price=100.0, now=now + timedelta(minutes=1))
+    armed = advance_signal(
+        left_zone,
+        current_price=100.0,
+        market_context=_live_flow(),
+        now=now + timedelta(minutes=1),
+    )
+    active = advance_signal(
+        armed,
+        current_price=100.2,
+        market_context=_live_flow(),
+        now=now + timedelta(minutes=1, seconds=5),
+    )
 
     unchanged = advance_signal(
         active,
@@ -333,3 +376,143 @@ def test_signal_exits_at_stop_but_ignores_legacy_indicator_reversal() -> None:
         now=now + timedelta(minutes=1),
     )
     assert unchanged["status"] == "ACTIVE"
+
+
+def test_zone_touch_does_not_activate_without_reclaim_and_aligned_live_flow() -> None:
+    now = datetime.now(timezone.utc)
+    seed = build_signal_seed(
+        symbol="BTCUSDT", timeframe="15m", decision=_decision(),
+        trade_setup=_setup(), approval={"side": "LONG"}, current_price=101.0,
+        context={}, ai_review=_ai(), now=now,
+    )
+    armed = advance_signal(
+        seed,
+        current_price=100.0,
+        market_context=_live_flow("SHORT"),
+        now=now + timedelta(seconds=10),
+    )
+    assert armed["status"] == "PENDING_ENTRY"
+    assert armed["events"][-1]["kind"] == "entry_zone_armed"
+
+    opposed = advance_signal(
+        armed,
+        current_price=100.2,
+        market_context=_live_flow("SHORT"),
+        now=now + timedelta(seconds=20),
+    )
+    assert opposed["status"] == "PENDING_ENTRY"
+    assert opposed["context"]["entry_confirmation"]["opposed"] is True
+    assert opposed["context"]["entry_confirmation"]["reclaim_confirmed"] is True
+
+    confirmed = advance_signal(
+        opposed,
+        current_price=100.25,
+        market_context=_live_flow("LONG"),
+        now=now + timedelta(seconds=30),
+    )
+    assert confirmed["status"] == "ACTIVE"
+    assert confirmed["context"]["entry_confirmation"]["passed"] is True
+
+
+def test_completed_retest_with_live_flow_activates_without_requiring_another_retest() -> None:
+    now = datetime.now(timezone.utc)
+    setup = _story_setup("retest-event")
+    setup["market_story"].update({"state": "RETESTING", "actionable": True})
+    setup["market_story"]["selected_event"].update({
+        "state": "RETESTING",
+        "actionable": True,
+        "current_close": 100.0,
+    })
+    seed = build_signal_seed(
+        symbol="BTCUSDT", timeframe="15m", decision=_decision(),
+        trade_setup=setup, approval={"side": "LONG"}, current_price=100.0,
+        context=_live_flow("LONG"), ai_review=_ai(), now=now,
+    )
+    assert seed["status"] == "ACTIVE"
+    assert seed["entry_price"] == 100.0
+    assert seed["context"]["requires_fresh_entry_retest"] is False
+    assert seed["context"]["entry_confirmation"]["state"] == "CONFIRMED_AT_PUBLICATION"
+    assert seed["events"][-1]["kind"] == "entry_confirmed"
+
+
+def test_completed_retest_without_live_flow_remains_pending() -> None:
+    setup = _story_setup("retest-no-flow")
+    setup["market_story"].update({"state": "RETESTING", "actionable": True})
+    setup["market_story"]["selected_event"].update({"state": "RETESTING", "actionable": True})
+    seed = build_signal_seed(
+        symbol="BTCUSDT", timeframe="15m", decision=_decision(),
+        trade_setup=setup, approval={"side": "LONG"}, current_price=100.0,
+        context={}, ai_review=_ai(),
+    )
+    assert seed["status"] == "PENDING_ENTRY"
+    assert seed["context"]["entry_confirmation"]["available"] is False
+
+
+def test_live_completed_story_arms_original_event_and_confirms_reclaim() -> None:
+    now = datetime.now(timezone.utc)
+    seed = build_signal_seed(
+        symbol="BTCUSDT", timeframe="15m", decision=_decision(),
+        trade_setup=_story_setup("live-retest-event"), approval={"side": "LONG"},
+        current_price=101.0, context={}, ai_review=_ai(), now=now,
+    )
+    live_retest_story = {
+        "state": "RETESTING",
+        "actionable": True,
+        "reason": "The originating level held on the latest completed candle.",
+        "aligned_event": {
+            "event_id": "live-retest-event",
+            "direction": "BULLISH",
+            "state": "RETESTING",
+            "actionable": True,
+            "break_level": 100.0,
+            "atr_at_event": 1.0,
+            "current_close": 100.0,
+        },
+    }
+    confirmed = advance_signal(
+        seed,
+        current_price=100.2,
+        market_context={
+            **_live_flow("LONG"),
+            "market_story": live_retest_story,
+        },
+        now=now + timedelta(minutes=1),
+    )
+    assert confirmed["status"] == "ACTIVE"
+    assert any(event["kind"] == "completed_retest_armed" for event in confirmed["events"])
+    assert confirmed["context"]["market_story"]["state"] == "RETESTING"
+    assert confirmed["context"]["last_completed_story_update_at"]
+
+
+def test_live_consumed_campaign_cancels_pending_entry_instead_of_chasing() -> None:
+    now = datetime.now(timezone.utc)
+    seed = build_signal_seed(
+        symbol="BTCUSDT", timeframe="15m", decision=_decision(),
+        trade_setup=_story_setup("late-campaign-event"), approval={"side": "LONG"},
+        current_price=101.0, context={}, ai_review=_ai(), now=now,
+    )
+    consumed_story = {
+        "state": "LATE_STRUCTURE_DO_NOT_CHASE",
+        "actionable": False,
+        "chase_prohibited": True,
+        "reason": "The bullish campaign already consumed 6.2 pre-event ATR.",
+        "reason_code": "CAUSAL_CAMPAIGN_ALREADY_CONSUMED",
+        "aligned_event": {
+            "event_id": "late-campaign-event",
+            "direction": "BULLISH",
+            "state": "LATE_STRUCTURE_DO_NOT_CHASE",
+            "actionable": False,
+            "current_close": 103.0,
+        },
+    }
+
+    cancelled = advance_signal(
+        seed,
+        current_price=103.0,
+        market_context={"market_story": consumed_story},
+        now=now + timedelta(minutes=1),
+    )
+
+    assert cancelled["status"] == "CANCELLED"
+    assert "consumed" in cancelled["exit_reason"]
+    assert cancelled["events"][-1]["kind"] == "structure_entry_unavailable"

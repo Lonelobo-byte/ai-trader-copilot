@@ -17,6 +17,7 @@ from app.ai_client import AIRequestConfig
 from app.brains.signal_builder import build_ai_driven_trade_setup, evaluate_ai_driven_approval
 from app.quant.feature_engine import compute_quant_features
 from app.quant.live_confirmation import verify_main_signal_snapshot
+from app.quant.chart_annotations import build_hawk_eye_chart_contract
 from app.signal_service import reconcile_signal
 from app.data_sources.data_aggregator import (
     attach_live_execution_tape_snapshot,
@@ -160,6 +161,7 @@ async def run_full_analysis(
     historical_replay: bool = False,
     ai_override: AIRequestConfig | None = None,
     ai_cache_key: str = "platform",
+    chart_mode: str = "snapshot",
 ) -> tuple[dict[str, Any], int]:
     """Run the analysis pipeline and return (payload, updated_last_ai_open_time).
 
@@ -486,12 +488,30 @@ async def run_full_analysis(
         cio_result=cio_result, trade_setup=trade_setup, signal_monitor=signal_monitor,
         approval=approval, data_freshness=data_freshness, liquidity=liquidity,
     )
+    chart_contract = build_hawk_eye_chart_contract(
+        candles,
+        symbol=symbol,
+        timeframe=timeframe,
+        story=features.get("market_story", {}),
+        liquidity_map=features.get("liquidity_map", {}),
+        trade_setup=trade_setup,
+        signal_monitor=signal_monitor,
+        live_confirmation=cio_result.get("live_confirmation") or {},
+        execution_tape=(
+            intel.get("execution_tape")
+            or features.get("execution_tape")
+            or {}
+        ),
+        mode=chart_mode,
+    )
+    analysis_snapshot["chart"] = chart_contract
     cio_result["analysis_snapshot_id"] = analysis_snapshot["id"]
 
     # ── Step 5: Map back to the expected REST/WebSocket response payload ──
     # Adapter mapping
     payload = {
         "analysis_snapshot": analysis_snapshot,
+        "chart": chart_contract,
         "symbol": symbol,
         "timeframe": timeframe,
         "decision": signal_monitor["action"],
