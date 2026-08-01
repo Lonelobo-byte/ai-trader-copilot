@@ -53,11 +53,14 @@ services:
       - edge
       - private
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 30s
+      # Use http.client so HTTP_PROXY/HTTPS_PROXY can never redirect the
+      # loopback readiness probe. Read the body and assert the status so the
+      # health process has one deterministic success/failure result.
+      test: ["CMD", "python", "-c", "import http.client,sys; c=http.client.HTTPConnection('127.0.0.1',8000,timeout=5); c.request('GET','/health'); r=c.getresponse(); r.read(); c.close(); sys.exit(0 if r.status == 200 else 1)"]
+      interval: 20s
+      timeout: 10s
+      retries: 6
+      start_period: 60s
     security_opt:
       - no-new-privileges:true
     logging:
