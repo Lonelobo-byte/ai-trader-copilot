@@ -47,6 +47,7 @@ docker compose config
 docker compose up -d --build
 docker compose ps
 curl -fsS https://app.example.com/health
+curl -fsS https://app.example.com/ready
 ```
 
 The first start creates the PostgreSQL volume, runs Alembic migrations, and
@@ -69,6 +70,10 @@ settings in `.env`:
 MARKET_SNAPSHOT_CACHE_SECONDS=8
 MARKET_SNAPSHOT_CACHE_MAX_ENTRIES=96
 MARKET_INTELLIGENCE_MAX_CONCURRENCY=8
+ANALYSIS_STREAM_MAX_PAIRS=32
+ANALYSIS_STREAM_IDLE_SECONDS=30
+ANALYSIS_COMPUTE_MAX_CONCURRENCY=4
+ANALYSIS_COMPUTE_WAIT_SECONDS=20
 BACKGROUND_JOBS_ENABLED=true
 BACKGROUND_IDLE_CHECK_SECONDS=60
 ```
@@ -94,9 +99,10 @@ Set the IPN secret in `.env`, then use this callback URL in NOWPayments:
 https://app.example.com/billing/webhooks/nowpayments
 ```
 
-The application creates the callback URL in its invoice requests and only
-activates subscriptions after the signed webhook and a server-side provider
-status check. A browser return URL never activates an account by itself.
+The application creates the callback URL in its selected-asset payment requests.
+A signed webhook triggers an authoritative server-side provider lookup; the
+authenticated payment-status recovery path performs the same lookup. Only a
+provider-confirmed status activates access, never browser state or a return URL.
 
 For testing, deploy a separate staging domain with sandbox credentials; do not
 point NOWPayments sandbox callbacks at `localhost`.

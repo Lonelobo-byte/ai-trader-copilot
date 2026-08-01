@@ -125,7 +125,7 @@ class ActiveSignalWSMonitor:
                     select(TradeSignal).where(
                         TradeSignal.status.in_(OPEN_SIGNAL_STATUSES),
                         TradeSignal.symbol.in_(list(ticker_map)),
-                    )
+                    ).with_for_update(skip_locked=True)
                 )
                 signals = result.scalars().all()
 

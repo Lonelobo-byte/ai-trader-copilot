@@ -11,6 +11,7 @@ from sqlalchemy import delete, func, select, update
 from .auth import subscription_is_active, utcnow
 from .db.database import AsyncSessionLocal
 from .db.models import ResearchSlot, Subscription, User
+from .settings import get_settings
 
 PLAN_RESEARCH_LIMITS = {
     "monthly": 1,
@@ -43,6 +44,10 @@ class ResearchCapacityExceeded(RuntimeError):
             f"Your {plan_code.replace('_', ' ')} membership allows {limit} concurrent live research "
             f"{'tab' if limit == 1 else 'tabs'}. Close another active research tab and try again."
         )
+
+
+class ResearchEntitlementUnavailable(RuntimeError):
+    pass
 
 
 @dataclass(frozen=True)
@@ -85,8 +90,14 @@ async def acquire_research_slot(*, user: User, symbol: str, timeframe: str, chan
             async with session.begin():
                 await session.scalar(select(User).where(User.id == user.id).with_for_update())
                 await session.execute(delete(ResearchSlot).where(ResearchSlot.user_id == user.id, ResearchSlot.expires_at <= now))
-                rows = await session.scalars(select(Subscription).where(Subscription.user_id == user.id))
-                plan_code, limit = _research_plan(list(rows), is_admin=user.role == "admin")
+                rows = list(await session.scalars(select(Subscription).where(Subscription.user_id == user.id)))
+                if (
+                    get_settings().subscription_enforcement_enabled
+                    and user.role != "admin"
+                    and not any(subscription_is_active(item) for item in rows)
+                ):
+                    raise ResearchEntitlementUnavailable("An active subscription is required.")
+                plan_code, limit = _research_plan(rows, is_admin=user.role == "admin")
                 active_slots = int(await session.scalar(select(func.count()).select_from(ResearchSlot).where(ResearchSlot.user_id == user.id, ResearchSlot.expires_at > now)) or 0)
                 if active_slots >= limit:
                     raise ResearchCapacityExceeded(plan_code=plan_code, limit=limit, active_slots=active_slots)
@@ -98,10 +109,22 @@ async def acquire_research_slot(*, user: User, symbol: str, timeframe: str, chan
                 return ResearchSlotLease(id=lease.id, plan_code=plan_code, limit=limit, active_slots=active_slots + 1)
 
 
-async def heartbeat_research_slot(lease_id: str) -> bool:
+async def heartbeat_research_slot(lease_id: str, *, user_id: str | None = None) -> bool:
     now = utcnow()
     expiry = now + timedelta(seconds=RESEARCH_SLOT_TTL_SECONDS)
     async with AsyncSessionLocal() as session:
+        if user_id is not None:
+            user = await session.get(User, user_id)
+            if user is None or not user.is_active:
+                await session.execute(delete(ResearchSlot).where(ResearchSlot.id == lease_id))
+                await session.commit()
+                return False
+            if get_settings().subscription_enforcement_enabled and user.role != "admin":
+                subscriptions = list(await session.scalars(select(Subscription).where(Subscription.user_id == user_id)))
+                if not any(subscription_is_active(item) for item in subscriptions):
+                    await session.execute(delete(ResearchSlot).where(ResearchSlot.id == lease_id))
+                    await session.commit()
+                    return False
         result = await session.execute(
             update(ResearchSlot)
             .where(ResearchSlot.id == lease_id, ResearchSlot.expires_at > now)

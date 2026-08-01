@@ -158,6 +158,7 @@ async def reconcile_signal(
                 )
                 .order_by(TradeSignal.id.desc())
                 .limit(1)
+                .with_for_update()
             )
                 active = result.scalar_one_or_none()
                 if active:
@@ -266,28 +267,43 @@ async def monitor_open_signals(
 ) -> bool:
     """Background fallback when no dashboard websocket is connected."""
     await ensure_signal_database()
+    # Read the candidate IDs first without locks, then perform all slower
+    # exchange/context I/O outside a database transaction. The sub-second WS
+    # monitor must not be blocked behind REST calls made by this fallback.
     async with AsyncSessionLocal() as db:
-        result = await db.execute(select(TradeSignal).where(TradeSignal.status.in_(OPEN_SIGNAL_STATUSES)))
+        result = await db.execute(
+            select(TradeSignal)
+            .where(TradeSignal.status.in_(OPEN_SIGNAL_STATUSES))
+        )
         signals = result.scalars().all()
-        if not signals:
-            return False
-        for signal in signals:
+    if not signals:
+        return False
+
+    evaluations: list[tuple[int, float, Mapping[str, Any] | None]] = []
+    for signal in signals:
+        try:
+            price = float(await price_lookup(signal.symbol))
+        except Exception:
+            continue
+        market_context: Mapping[str, Any] | None = None
+        if market_context_lookup is not None:
             try:
-                price = float(await price_lookup(signal.symbol))
+                market_context = await market_context_lookup(
+                    signal.symbol,
+                    signal.timeframe,
+                    signal.side,
+                )
             except Exception:
+                # Price protection must continue even if the slower causal
+                # candle refresh is temporarily unavailable.
+                market_context = None
+        evaluations.append((signal.id, price, market_context))
+
+    async with AsyncSessionLocal() as db:
+        for signal_id, price, market_context in evaluations:
+            signal = await db.get(TradeSignal, signal_id, with_for_update=True)
+            if signal is None or signal.status not in OPEN_SIGNAL_STATUSES:
                 continue
-            market_context: Mapping[str, Any] | None = None
-            if market_context_lookup is not None:
-                try:
-                    market_context = await market_context_lookup(
-                        signal.symbol,
-                        signal.timeframe,
-                        signal.side,
-                    )
-                except Exception:
-                    # Price protection must continue even if the slower causal
-                    # candle refresh is temporarily unavailable.
-                    market_context = None
             updated = advance_signal(
                 _record_data(signal),
                 current_price=price,
@@ -295,4 +311,4 @@ async def monitor_open_signals(
             )
             _apply(signal, updated)
         await db.commit()
-        return True
+    return bool(evaluations)

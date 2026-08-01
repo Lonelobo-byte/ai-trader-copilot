@@ -35,10 +35,26 @@ def _prune_buckets(now: float) -> None:
             _requests.pop(key, None)
         if len(_requests) <= _MAX_BUCKETS:
             break
+    # An attacker can keep every churned bucket newer than 24 hours. Enforce
+    # the memory ceiling anyway by evicting the least-recently-used buckets.
+    if len(_requests) > _MAX_BUCKETS:
+        oldest = sorted(
+            _requests,
+            key=lambda key: _requests[key][-1] if _requests[key] else float("-inf"),
+        )
+        for key in oldest[: len(_requests) - _MAX_BUCKETS]:
+            _requests.pop(key, None)
 
 
-def enforce_rate_limit(request: Request, bucket: str, limit: int, window_seconds: int) -> None:
-    client = _client_key(request)
+def enforce_rate_limit(
+    request: Request,
+    bucket: str,
+    limit: int,
+    window_seconds: int,
+    *,
+    identity: str | None = None,
+) -> None:
+    client = identity or _client_key(request)
     key = f"{bucket}:{client}"
     now = monotonic()
     _prune_buckets(now)

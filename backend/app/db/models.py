@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, JSON, DateTime, Boolean, ForeignKey, UniqueConstraint, Index, func
+from sqlalchemy import Column, Integer, String, Float, Numeric, JSON, DateTime, Boolean, ForeignKey, UniqueConstraint, Index, func
 from sqlalchemy.orm import relationship
 from .database import Base
 
@@ -172,7 +172,10 @@ class Payment(Base):
     provider_payment_id = Column(String(128), nullable=True)
     order_id = Column(String(128), nullable=False)
     status = Column(String(32), nullable=False, default="waiting", index=True)
-    amount = Column(Float, nullable=False)
+    # Fiat plan amounts must remain exact across persistence and provider
+    # reconciliation. Binary floating point can make an otherwise valid price
+    # fail an exact order-ownership comparison.
+    amount = Column(Numeric(18, 8), nullable=False)
     currency = Column(String(16), nullable=False)
     pay_currency = Column(String(32), nullable=True)
     pay_amount = Column(String(64), nullable=True)

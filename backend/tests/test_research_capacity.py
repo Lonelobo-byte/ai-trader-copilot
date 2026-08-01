@@ -8,7 +8,8 @@ import pytest
 from app.auth import utcnow
 from app.db.database import AsyncSessionLocal
 from app.db.models import Subscription, User
-from app.research_capacity import ResearchCapacityExceeded, acquire_research_slot, release_research_slot, research_capacity_view
+from app.research_capacity import ResearchCapacityExceeded, ResearchEntitlementUnavailable, acquire_research_slot, heartbeat_research_slot, release_research_slot, research_capacity_view
+from app.settings import get_settings
 
 
 async def _active_user(plan_code: str) -> User:
@@ -68,3 +69,29 @@ async def test_capacity_view_exposes_only_current_users_plan_and_active_slots() 
         assert view["slots"][0]["channel"] == "websocket"
     finally:
         await release_research_slot(lease.id)
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_revokes_a_slot_when_subscription_ends() -> None:
+    settings = get_settings()
+    original_enforcement = settings.subscription_enforcement_enabled
+    settings.subscription_enforcement_enabled = True
+    user = await _active_user("monthly")
+    try:
+        lease = await acquire_research_slot(
+            user=user, symbol="BTCUSDT", timeframe="15m", channel="websocket"
+        )
+        async with AsyncSessionLocal() as session:
+            subscription = await session.get(Subscription, "sub-monthly")
+            subscription.status = "expired"
+            subscription.ends_at = utcnow() - timedelta(seconds=1)
+            await session.commit()
+        assert await heartbeat_research_slot(lease.id, user_id=user.id) is False
+        view = await research_capacity_view(user)
+        assert view["active_slots"] == 0
+        with pytest.raises(ResearchEntitlementUnavailable):
+            await acquire_research_slot(
+                user=user, symbol="ETHUSDT", timeframe="15m", channel="websocket"
+            )
+    finally:
+        settings.subscription_enforcement_enabled = original_enforcement

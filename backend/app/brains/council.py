@@ -29,6 +29,7 @@ from app.institutional.committee import (
     apply_cio_policy,
     build_deterministic_cio_decision,
     build_institutional_dossier,
+    final_validation_fingerprint,
     load_portfolio_state,
 )
 
@@ -150,6 +151,8 @@ def _cio_prompt_dossier(dossier: dict[str, Any]) -> str:
         "historical_stats": dossier.get("historical_stats", {}),
         "calendar_events": list(dossier.get("calendar_events") or [])[:5],
         "engines": engines,
+        "final_trade_setup": dossier.get("final_trade_setup"),
+        "final_live_confirmation": dossier.get("final_live_confirmation"),
     }
     return json.dumps(projection, default=str)
 
@@ -179,6 +182,61 @@ async def _run_institutional_cio(
     return result
 
 
+async def _resolve_cio_synthesis(
+    symbol: str,
+    timeframe: str,
+    dossier: dict[str, Any],
+    settings: Settings,
+    ai_override: AIRequestConfig | None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Run the one permitted synthesis call and report truthful provenance."""
+    ai_enabled = int(settings.ai_max_calls_per_analysis) > 0 and ai_is_configured(settings, ai_override)
+    ai_budget_error = ""
+    if ai_enabled and ai_override is None:
+        try:
+            await reserve_platform_ai_budget(settings)
+        except AIBudgetExceededError as exc:
+            logger.warning("Platform AI request blocked by budget: %s", exc)
+            ai_enabled = False
+            ai_budget_error = str(exc)
+
+    ai_attempted = ai_enabled
+    raw_cio_result = (
+        await _run_institutional_cio(symbol, timeframe, dossier, settings, ai_override)
+        if ai_enabled
+        else build_deterministic_cio_decision(
+            dossier,
+            narrative_error=ai_budget_error or "AI synthesis is disabled or no configured AI connection is available.",
+        )
+    )
+    ai_failure_reason = ""
+    if raw_cio_result.get("error"):
+        ai_failure_reason = str(raw_cio_result["error"])
+        raw_cio_result = build_deterministic_cio_decision(
+            dossier,
+            narrative_error=ai_failure_reason,
+        )
+    ai_synthesis_used = bool(ai_attempted and not ai_failure_reason)
+    if not ai_synthesis_used and not ai_failure_reason:
+        ai_failure_reason = ai_budget_error or "No configured AI connection was available."
+    cio_result = apply_cio_policy(raw_cio_result, dossier)
+    provenance = {
+        "attempted": ai_attempted,
+        "synthesis_used": ai_synthesis_used,
+        "deterministic_fallback_used": not ai_synthesis_used,
+        "failure_reason": ai_failure_reason or None,
+        "provider": settings.ai_provider if ai_synthesis_used else None,
+        "model": get_model_for_task(settings, "judge", ai_override) if ai_synthesis_used else None,
+        "validation_scope": (
+            "dossier_trade_plan_live_confirmation"
+            if dossier.get("final_trade_setup") is not None
+            and dossier.get("final_live_confirmation") is not None
+            else "dossier_only"
+        ),
+    }
+    return cio_result, provenance
+
+
 # ── Committee orchestrator ──────────────────────────────────────────────────
 
 
@@ -188,6 +246,7 @@ async def run_ai_council(
     settings: Settings | None = None,
     intelligence: dict[str, Any] | None = None,
     ai_override: AIRequestConfig | None = None,
+    defer_ai_validation: bool = False,
 ) -> dict[str, Any]:
     """Run the institutional committee analysis.
 
@@ -245,33 +304,26 @@ async def run_ai_council(
     dossier["historical_stats"] = historical_stats
     dossier["calendar_events"] = calendar_events
 
-    ai_enabled = int(settings.ai_max_calls_per_analysis) > 0 and ai_is_configured(settings, ai_override)
-    if ai_enabled and ai_override is None:
-        try:
-            await reserve_platform_ai_budget(settings)
-        except AIBudgetExceededError as exc:
-            logger.warning("Platform AI request blocked by budget: %s", exc)
-            ai_enabled = False
-            ai_budget_error = str(exc)
-        else:
-            ai_budget_error = ""
-    else:
-        ai_budget_error = ""
-
-    raw_cio_result = (
-        await _run_institutional_cio(symbol, timeframe, dossier, settings, ai_override)
-        if ai_enabled
-        else build_deterministic_cio_decision(
-            dossier,
-            narrative_error=ai_budget_error or "AI synthesis is disabled or no configured AI connection is available.",
-        )
-    )
-    if raw_cio_result.get("error"):
+    if defer_ai_validation:
         raw_cio_result = build_deterministic_cio_decision(
             dossier,
-            narrative_error=str(raw_cio_result["error"]),
+            narrative_error="Final AI validation is deferred until the trade plan and live confirmation are complete.",
         )
-    cio_result = apply_cio_policy(raw_cio_result, dossier)
+        cio_result = apply_cio_policy(raw_cio_result, dossier)
+        ai_provenance = {
+            "attempted": False,
+            "synthesis_used": False,
+            "deterministic_fallback_used": True,
+            "failure_reason": None,
+            "provider": None,
+            "model": None,
+            "pending_final_validation": True,
+            "validation_scope": "pending_trade_plan_live_confirmation",
+        }
+    else:
+        cio_result, ai_provenance = await _resolve_cio_synthesis(
+            symbol, timeframe, dossier, settings, ai_override
+        )
 
     reports = dict(dossier["engines"])
     reports["historical_stats"] = historical_stats
@@ -302,6 +354,7 @@ async def run_ai_council(
         "institutional_dossier": dossier,
         "evidence_manifest": dossier.get("evidence_manifest", {}),
         "committee_controls": cio_result.get("committee_controls", {}),
+        "ai_provenance": ai_provenance,
         "quantitative_assessment": quantitative,
         # Trade plan (if actionable)
         "suggested_entry": cio_result.get("suggested_entry"),
@@ -352,8 +405,15 @@ async def run_ai_council(
             "analysis_time_seconds": round(elapsed, 2),
             "data_sources": intelligence.get("meta", {}),
             "timestamp": start_time.isoformat() + "Z",
-            "model": get_model_for_task(settings, "judge", ai_override),
+            "model": ai_provenance.get("model"),
             "engine": "institutional_committee_v1",
+            "synthesis_mode": (
+                "pending_final_validation"
+                if ai_provenance.get("pending_final_validation")
+                else "ai"
+                if ai_provenance.get("synthesis_used")
+                else "deterministic_fallback"
+            ),
         },
     }
 
@@ -366,6 +426,151 @@ async def run_ai_council(
     )
 
     return result
+
+
+async def finalize_ai_council_validation(
+    council_result: dict[str, Any],
+    trade_setup: dict[str, Any],
+    live_confirmation: dict[str, Any],
+    settings: Settings,
+    ai_override: AIRequestConfig | None = None,
+) -> dict[str, Any]:
+    """Run final synthesis over the exact plan and live gate being published."""
+    original_decision = str(council_result.get("decision") or "WAIT").upper()
+    original_confidence = council_result.get("confidence_pct")
+    original_grade = council_result.get("trade_grade")
+    dossier = dict(council_result.get("institutional_dossier") or {})
+    live_evidence = live_confirmation.get("live_evidence") or {}
+    scenarios = live_confirmation.get("scenarios") or {}
+
+    def compact_scenario(value: Any) -> dict[str, Any]:
+        scenario = value if isinstance(value, dict) else {}
+        return {
+            key: scenario.get(key)
+            for key in (
+                "passed", "candidate", "status", "reason", "playbook",
+                "higher_timeframe_aligned", "higher_timeframe_state",
+                "market_story_state", "market_story_actionable",
+                "market_story_reason", "selected_event",
+            )
+        }
+
+    def compact_story(value: Any) -> dict[str, Any]:
+        story = value if isinstance(value, dict) else {}
+        return {
+            key: story.get(key)
+            for key in (
+                "available", "as_of_close_time", "current_state", "setup_state",
+                "what_happened", "what_is_happening", "what_may_happen_next",
+                "latest_event", "latest_liquidity_event", "actionability",
+                "directional_view", "higher_directional_view", "alignment",
+            )
+        }
+
+    metrics = live_confirmation.get("metrics") or {}
+
+    dossier["final_trade_setup"] = {
+        "status": trade_setup.get("status"),
+        "side": trade_setup.get("side"),
+        "setup_type": trade_setup.get("setup_type"),
+        "execution_permitted": trade_setup.get("execution_permitted"),
+        "entry": trade_setup.get("entry"),
+        "stop": trade_setup.get("stop"),
+        "targets": trade_setup.get("targets"),
+        "position": trade_setup.get("position"),
+        "allocation_tier": trade_setup.get("allocation_tier"),
+        "committee_restrictions": trade_setup.get("committee_restrictions"),
+        "leverage": trade_setup.get("leverage"),
+        "liquidity_objective": trade_setup.get("liquidity_objective"),
+        "remaining_reward": trade_setup.get("remaining_reward"),
+        "market_story": trade_setup.get("market_story"),
+        "rules": trade_setup.get("rules"),
+    }
+    dossier["final_live_confirmation"] = {
+        "passed": live_confirmation.get("passed"),
+        "status": live_confirmation.get("status"),
+        "reason": live_confirmation.get("reason"),
+        "direction": live_confirmation.get("direction"),
+        "structure_checks": live_confirmation.get("structure_checks"),
+        "live_checks": live_confirmation.get("live_checks"),
+        "risk_flags": live_confirmation.get("risk_flags"),
+        "metrics": {
+            key: metrics.get(key)
+            for key in (
+                "playbook", "primary_phase", "higher_phase",
+                "primary_direction", "higher_direction", "rvol", "body_ratio",
+                "event_rvol", "event_body_ratio", "event_close_location",
+                "sweep", "vwap", "volume_profile", "bos", "choch",
+                "selected_structure_event", "structure_confirmation",
+                "tactical_structure_confirmation", "structure_story",
+            )
+        },
+        "structure_story": {
+            "setup_state": (live_confirmation.get("structure_story") or {}).get("setup_state"),
+            "primary": compact_story((live_confirmation.get("structure_story") or {}).get("primary")),
+            "higher": compact_story((live_confirmation.get("structure_story") or {}).get("higher")),
+            "directional_view": (live_confirmation.get("structure_story") or {}).get("directional_view"),
+            "higher_directional_view": (live_confirmation.get("structure_story") or {}).get("higher_directional_view"),
+            "alignment": (live_confirmation.get("structure_story") or {}).get("alignment"),
+        },
+        "live_evidence": {
+            key: live_evidence.get(key)
+            for key in (
+                "checks", "required_checks", "live_points",
+                "market_story_live_location", "execution_capacity",
+                "displayed_liquidity_stability", "actual_flow_evidence",
+                "supporting_warnings",
+            )
+        },
+        "publication_coverage": live_confirmation.get("publication_coverage"),
+        "scenarios": {
+            "institutional": compact_scenario(scenarios.get("institutional")),
+            "tactical": compact_scenario(scenarios.get("tactical")),
+        },
+    }
+    cio_result, provenance = await _resolve_cio_synthesis(
+        str(council_result.get("symbol") or ""),
+        str(council_result.get("timeframe") or ""),
+        dossier,
+        settings,
+        ai_override,
+    )
+    resolved_decision = str(cio_result.get("decision") or "WAIT").upper()
+    if original_decision not in {"BUY_WATCH", "SELL_WATCH"} or resolved_decision != original_decision:
+        # Final AI is a veto/synthesis layer. It cannot create a setup that the
+        # deterministic committee did not propose or switch its measured side.
+        cio_result["decision"] = "WAIT"
+        cio_result["confidence_pct"] = min(
+            float(cio_result.get("confidence_pct") or 0.0),
+            55.0,
+        )
+    else:
+        allocation_tier = str((dossier.get("risk_committee") or {}).get("allocation_tier") or "")
+        release_threshold = 60.0 if allocation_tier == "CONDITIONAL_MANUAL_REVIEW" else 65.0
+        if float(cio_result.get("confidence_pct") or 0.0) < release_threshold:
+            cio_result["decision"] = "WAIT"
+        else:
+            # The model reviewed this exact code-owned plan. Preserve its
+            # sizing inputs; the model may approve or veto, never reshape it.
+            cio_result["confidence_pct"] = original_confidence
+            cio_result["trade_grade"] = original_grade
+    provenance["evidence_fingerprint"] = final_validation_fingerprint(
+        trade_setup,
+        live_confirmation,
+    )
+    for key in (
+        "decision", "confidence_pct", "trade_grade", "explanation", "report_md",
+        "risk_warnings", "investment_memo", "committee_controls", "suggested_entry",
+        "suggested_stop", "suggested_targets", "institutional_dossier",
+    ):
+        council_result[key] = cio_result.get(key)
+    council_result["ai_provenance"] = provenance
+    council_result["meta"] = {
+        **(council_result.get("meta") or {}),
+        "model": provenance.get("model"),
+        "synthesis_mode": "ai" if provenance.get("synthesis_used") else "deterministic_fallback",
+    }
+    return council_result
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -404,15 +609,22 @@ async def _fetch_historical_stats(
             # The causal direction is durable in the signal context. Prefer
             # comparable Bare Eye contexts, then use the recent bounded
             # sample as a fallback for pre-migration records.
+            resolved = [
+                signal
+                for signal in signals
+                if signal.status in {"COMPLETED", "STOPPED_OUT"}
+                or (signal.status == "INVALIDATED" and signal.entry_price is not None)
+            ]
             top = [
                 signal for signal in signals
+                if signal in resolved
                 if str(
                     ((signal.context or {}).get("causal_market_context") or {}).get(
                         "direction",
                         "WAIT",
                     )
                 ) == current_direction
-            ][:20] or signals[:20]
+            ][:20] or resolved[:20]
             count = len(top)
             if count > 0:
                 wins = sum(1 for s in top if s.status == "COMPLETED")

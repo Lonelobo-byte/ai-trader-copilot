@@ -13,6 +13,7 @@ from app.institutional.committee import (
     build_deterministic_cio_decision,
     build_institutional_dossier,
     build_investment_memo,
+    final_validation_fingerprint,
 )
 from app.settings import Settings
 
@@ -529,6 +530,25 @@ def test_validated_positive_edge_can_reach_cio_review_without_removing_unknowns(
     assert "## Reasons Confidence Was Reduced" in result["report_md"]
 
 
+def test_cio_cannot_reverse_the_deterministic_thesis_direction() -> None:
+    dossier = _dossier()
+    result = apply_cio_policy(
+        {
+            "decision": "SELL_WATCH",
+            "confidence_pct": 95,
+            "trade_grade": "A+",
+            "explanation": "Opposite-side narrative proposal.",
+            "risk_warnings": [],
+        },
+        dossier,
+    )
+
+    assert dossier["provisional_thesis"]["direction"] == "LONG"
+    assert result["decision"] == "WAIT"
+    assert result["confidence_pct"] <= 55
+    assert "conflicts" in result["explanation"]
+
+
 def test_balanced_policy_releases_reduced_size_conditional_manual_review() -> None:
     settings = _settings(
         institutional_require_validated_model=False,
@@ -626,6 +646,43 @@ def test_missing_live_confirmation_and_manifest_fail_closed() -> None:
     assert approval["approved"] is False
     assert any("evidence manifest" in blocker.lower() for blocker in approval["blockers"])
     assert any("live confirmation is required" in blocker.lower() for blocker in approval["blockers"])
+
+
+def test_final_publication_requires_truthful_ai_provenance_when_enabled() -> None:
+    result = {
+        "decision": "BUY_WATCH", "confidence_pct": 85, "trade_grade": "A",
+        "data_quality": {"passed": True}, "macro_blockout": {"active": False},
+        "institutional_dossier": {
+            "risk_committee": {"approved_for_allocation": True, "minimum_directional_engines": 1},
+            "adversarial_review": {"veto": False},
+            "evidence_manifest": {"core_ready": True, "missing_required": []},
+        },
+        "agent_agreement": {"bullish": 3, "bearish": 0},
+        "live_confirmation": {"passed": True, "reason": "Live evidence aligned."},
+        "ai_provenance": {"attempted": False, "synthesis_used": False},
+    }
+    setup = {"status": "READY_FOR_MANUAL_REVIEW", "position": {"risk_amount_usd": 5, "units": 1}}
+    blocked = evaluate_ai_driven_approval(result, setup, require_ai_validation=True)
+    assert blocked["approved"] is False
+    assert blocked["ai_validated"] is False
+    assert any("Final AI validation" in item for item in blocked["blockers"])
+
+    result["ai_provenance"] = {
+        "attempted": True,
+        "synthesis_used": True,
+        "provider": "openrouter",
+        "validation_scope": "dossier_trade_plan_live_confirmation",
+        "evidence_fingerprint": final_validation_fingerprint(setup, result["live_confirmation"]),
+    }
+    approved = evaluate_ai_driven_approval(result, setup, require_ai_validation=True)
+    assert approved["approved"] is True
+    assert approved["ai_validated"] is True
+
+    result["live_confirmation"] = {"passed": False, "reason": "Flow changed."}
+    changed = evaluate_ai_driven_approval(result, setup, require_ai_validation=True)
+    assert changed["approved"] is False
+    assert changed["ai_validated"] is False
+    assert any("changed after final AI validation" in item for item in changed["blockers"])
 
 
 @pytest.mark.anyio

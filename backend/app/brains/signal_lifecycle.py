@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping
 
 from app.data_sources.binance_public import interval_seconds
+from app.data_sources.execution_tape_ws import publication_flow_is_qualified
 
 
 OPEN_SIGNAL_STATUSES = {"PENDING_ENTRY", "ACTIVE", "TP1_SECURED", "TP2_SECURED"}
@@ -99,7 +100,8 @@ def _entry_flow_confirmation(side: str, market_context: Mapping[str, Any] | None
     context = market_context if isinstance(market_context, Mapping) else {}
     tape = context.get("execution_tape") or {}
     actual_flow = tape.get("actual_flow") or {} if isinstance(tape, Mapping) else {}
-    available = bool(actual_flow.get("available"))
+    observed = bool(actual_flow.get("available"))
+    available = publication_flow_is_qualified(dict(tape)) if isinstance(tape, Mapping) else False
     bias = str(actual_flow.get("bias", "UNAVAILABLE")).upper()
     status = str(actual_flow.get("status", "UNAVAILABLE")).upper()
     expected_bias = "BULLISH" if side == "LONG" else "BEARISH"
@@ -111,7 +113,10 @@ def _entry_flow_confirmation(side: str, market_context: Mapping[str, Any] | None
             f"Live {expected_bias.lower()} aggression is producing matching price acceptance."
         )
     elif not available:
-        reason = "Waiting for a qualified Binance/Bybit execution-tape observation."
+        reason = (
+            "Waiting for qualified actual flow from both Binance and Bybit without "
+            "cross-venue disagreement."
+        )
     elif opposed:
         reason = (
             f"Live execution flow is {bias.lower()} ({status.lower().replace('_', ' ')}), "
@@ -124,6 +129,7 @@ def _entry_flow_confirmation(side: str, market_context: Mapping[str, Any] | None
         )
     return {
         "available": available,
+        "observed": observed,
         "passed": passed,
         "opposed": opposed,
         "bias": bias,
@@ -131,6 +137,7 @@ def _entry_flow_confirmation(side: str, market_context: Mapping[str, Any] | None
         "price_response": actual_flow.get("price_response", "UNAVAILABLE"),
         "active_aggressor": actual_flow.get("active_aggressor", "UNAVAILABLE"),
         "qualified_source_count": int(_number(actual_flow.get("qualified_source_count"))),
+        "qualified_venue_count": int(_number(actual_flow.get("qualified_venue_count"))),
         "captured_at": tape.get("captured_at") if isinstance(tape, Mapping) else None,
         "reason": reason,
     }
@@ -816,10 +823,15 @@ def check_drawdown_breaker(
     if not recent_signals:
         return []
 
-    # Filter to terminal signals only (ones with known outcomes)
+    # Cancelled/expired and pre-entry invalidations are censored setup records,
+    # not trading losses. Only entered trades belong in a drawdown breaker.
     terminal = [
         s for s in recent_signals
-        if str(s.get("status", "")) in TERMINAL_SIGNAL_STATUSES
+        if str(s.get("status", "")) in {"COMPLETED", "STOPPED_OUT"}
+        or (
+            str(s.get("status", "")) == "INVALIDATED"
+            and s.get("entry_price") is not None
+        )
     ]
 
     if not terminal:

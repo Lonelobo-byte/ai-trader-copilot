@@ -14,7 +14,7 @@ Rules:
 8. Audit `evidence_manifest` before forming a thesis. If `core_ready` is false, decision must be WAIT. State unavailable supplemental domains as unknowns, never as confirmations.
 9. Respect the completed-candle market-story lifecycle. `MISSED`, `EXTENDED_DO_NOT_CHASE`, `INVALIDATED`, and `EXPIRED` can describe a correct historical direction but can never authorize a new BUY_WATCH or SELL_WATCH. Only a fresh `ACTIONABLE_NOW` or held `RETESTING` event may advance, and deterministic Risk Committee controls remain authoritative.
 10. Describe the next move only as conditional continuation and failure scenarios. Never convert the market story into a guaranteed forecast.
-11. Interpret the execution tape causally. `BUYING_CONFIRMED` and `SELLING_CONFIRMED` mean taker aggression achieved matching price acceptance. `BUYERS_ABSORBED`, `SELLERS_ABSORBED`, exhaustion, or aggression without price progress are contradictions or warnings, not directional confirmation. Source agreement changes confidence; never require a particular exchange pairing when qualified flow exists.
+11. Interpret the execution tape causally. `BUYING_CONFIRMED` and `SELLING_CONFIRMED` mean taker aggression achieved matching price acceptance. `BUYERS_ABSORBED`, `SELLERS_ABSORBED`, exhaustion, or aggression without price progress are contradictions or warnings, not directional confirmation. Partial flow may inform monitoring, but publication requires qualified evidence from both Binance and Bybit without cross-venue disagreement.
 
 Return JSON only with these keys:
 

@@ -21,8 +21,9 @@ accounts, subscriptions, payments, refresh-token hashes, and audit events.
    `PAYMENT_PROVIDER=nowpayments`, `NOWPAYMENTS_API_KEY`, and
    `NOWPAYMENTS_IPN_SECRET`, then run `docker compose up -d --build`.
 
-NOWPayments creates a hosted crypto invoice and sends signed IPNs to
-`/billing/webhooks/nowpayments`. The app then fetches the provider payment ID
+NOWPayments creates the selected token/network payment route for the in-page
+checkout and sends signed IPNs to
+`/billing/webhooks/nowpayments`. The app re-fetches the known provider payment
 server-to-server before activating a plan; only verified `finished` or
 `confirmed` states grant access. The redirect back to `/dashboard` is only a
 customer-experience step and never grants access on its own. The provider
@@ -49,18 +50,19 @@ NOWPAYMENTS_API_KEY=your-sandbox-key
 NOWPAYMENTS_IPN_SECRET=your-sandbox-ipn-secret
 ```
 
-Use the hosted sandbox invoice to exercise checkout. For automatic
+Use the in-page sandbox payment route to exercise checkout. For automatic
 subscription activation and the return-to-dashboard redirect, use a staging
 HTTPS URL instead of `localhost`, because the provider must be able to reach
-the webhook. The app intentionally blocks checkout when `PUBLIC_BASE_URL` is
-not public HTTPS so a customer cannot pay into an unverifiable local setup.
+the webhook. Live/non-sandbox checkout intentionally requires a public HTTPS
+`PUBLIC_BASE_URL` so a customer cannot pay into an unverifiable deployment.
 
 When `APP_ENV=local` and `NOWPAYMENTS_SANDBOX=true`, local checkout is allowed
-solely to test invoice creation and the hosted payment screen. A localhost
-server cannot receive the signed provider IPN, so the subscription will remain
-pending; use a temporary HTTPS tunnel or staging URL to test automatic
-activation. The public-HTTPS requirement remains mandatory for production or
-non-sandbox payments.
+to test provider payment creation and the in-page payment screen. A localhost
+server cannot receive the signed provider IPN, but the authenticated payment
+status poll can still verify the known payment server-to-server and unlock a
+provider-confirmed sandbox result. Use a temporary HTTPS tunnel or staging URL
+to test the real webhook path. Public HTTPS remains mandatory for production
+or non-sandbox payments.
 Return all values to the production defaults before launch.
 
 ## Institutional committee architecture
@@ -73,8 +75,11 @@ evidence is reported as unavailable rather than inferred.
 Adversarial Review attempts to falsify the provisional thesis. The Risk
 Committee then applies expected-value, model-validation, data-quality,
 drawdown, exposure, macro, and adversarial controls. These vetoes are enforced
-in code and cannot be overridden by the CIO language model. The optional CIO
-model is limited to synthesizing the dossier and writing the investment memo.
+in code and cannot be overridden by the CIO language model. The CIO model is
+limited to synthesizing the dossier and writing the investment memo.
+Deterministic analysis remains available as watch-only research, but a new
+signal publication requires successful model synthesis by default
+(`REQUIRE_AI_FOR_SIGNAL_PUBLICATION=true`).
 
 The default manual-review policy can publish a `CONDITIONAL_MANUAL_REVIEW`
 idea without a validated model or live portfolio drawdown, but risk is capped
@@ -100,8 +105,8 @@ trades. It checks the primary Radar page, all shared Radar timeframe pairs,
 the server-synchronized Radar clock, premium Research authentication, and a
 60-second public Binance/Bybit execution-flow window. Individual unsupported
 pairs or venues may remain partial or unavailable; the proof requires qualified
-flow from at least one configured symbol and never treats missing evidence as
-neutral confirmation.
+flow for at least one configured symbol from at least two independent qualified
+sources, and never treats missing evidence as neutral confirmation.
 
 REST analysis now uses one shared snapshot for candles, higher timeframes, order book, trades, derivatives, macro, sentiment, news, and calendar context. The response includes `data_quality` so missing core sources are visible and can block signal publication.
 

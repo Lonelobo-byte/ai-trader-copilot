@@ -5,7 +5,10 @@ import httpx
 from typing import List, Dict, Any, Tuple, Set
 
 from app.data_sources.binance_public import Candle
-from app.data_sources.execution_tape_ws import get_execution_tape_snapshot
+from app.data_sources.execution_tape_ws import (
+    get_execution_tape_snapshot,
+    publication_flow_is_qualified,
+)
 from app.indicators.market_story import (
     build_market_story,
     evaluate_story_playbook,
@@ -195,13 +198,12 @@ async def _fetch_live_confirmation(client: httpx.AsyncClient, symbol: str) -> Di
     taker_latest = taker[-1] if isinstance(taker, list) and taker else {}
 
     execution_tape = get_execution_tape_snapshot(symbol)
-    tape_flow_ready = bool(
-        (execution_tape.get("actual_flow") or {}).get("available")
-    )
+    actual_flow = execution_tape.get("actual_flow") or {}
+    tape_flow_ready = publication_flow_is_qualified(execution_tape)
     return {
         "data_complete": bool(
             bids and asks and premium and len(oi_values) >= 2
-            and (taker_latest or tape_flow_ready)
+            and tape_flow_ready
         ),
         "depth_imbalance": round((bid_notional - ask_notional) / total_depth, 4) if total_depth else None,
         "spread_bps": round(spread_bps, 3) if spread_bps is not None else None,

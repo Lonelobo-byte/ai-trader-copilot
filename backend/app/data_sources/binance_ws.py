@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from contextlib import suppress
+from dataclasses import dataclass, field
 from time import monotonic
 from typing import Any, AsyncGenerator
 
@@ -169,3 +171,123 @@ class BinanceWSSubscriber:
                 logger.error(f"Error in Binance WS connection loop: {e}", exc_info=True)
                 await asyncio.sleep(2)
                 continue
+
+
+class SharedStreamCapacityError(RuntimeError):
+    """Raised when every bounded upstream market stream is actively in use."""
+
+
+@dataclass
+class _SharedStream:
+    queues: set[asyncio.Queue[dict[str, Any]]] = field(default_factory=set)
+    latest: dict[str, Any] | None = None
+    task: asyncio.Task[None] | None = None
+    idle_task: asyncio.Task[None] | None = None
+
+
+class SharedBinanceStreamHub:
+    """Fan one Binance upstream connection out to every local Research client.
+
+    A browser tab receives its own one-item queue, so a slow tab drops obsolete
+    intermediate ticks instead of adding memory or back-pressure to the public
+    exchange feed.  Streams with no listeners are closed after a short grace
+    period, which also makes rapid page navigation inexpensive.
+    """
+
+    def __init__(self, settings: Any):
+        self.settings = settings
+        self.max_pairs = max(1, int(settings.analysis_stream_max_pairs))
+        self.idle_seconds = max(0.0, float(settings.analysis_stream_idle_seconds))
+        self._streams: dict[tuple[str, str], _SharedStream] = {}
+        self._lock = asyncio.Lock()
+
+    async def events(self, symbol: str, timeframe: str) -> AsyncGenerator[dict[str, Any], None]:
+        key = (symbol.upper().strip(), timeframe)
+        queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=1)
+        async with self._lock:
+            state = self._streams.get(key)
+            if state is None:
+                self._remove_finished_streams()
+                if len(self._streams) >= self.max_pairs:
+                    raise SharedStreamCapacityError(
+                        "Live market-stream capacity is busy. Close an unused research pair and retry shortly."
+                    )
+                state = _SharedStream()
+                self._streams[key] = state
+                state.task = asyncio.create_task(
+                    self._produce(key, state),
+                    name=f"shared-binance-{key[0]}-{key[1]}",
+                )
+            if state.idle_task is not None:
+                state.idle_task.cancel()
+                state.idle_task = None
+            state.queues.add(queue)
+            if state.latest is not None:
+                initial = dict(state.latest)
+                initial["type"] = "init"
+                initial["new_candle_closed"] = False
+                queue.put_nowait(initial)
+
+        try:
+            while True:
+                yield await queue.get()
+        finally:
+            async with self._lock:
+                current = self._streams.get(key)
+                if current is state:
+                    current.queues.discard(queue)
+                    if not current.queues and current.idle_task is None:
+                        current.idle_task = asyncio.create_task(
+                            self._close_when_idle(key, current),
+                            name=f"shared-binance-idle-{key[0]}-{key[1]}",
+                        )
+
+    def _remove_finished_streams(self) -> None:
+        for key, state in list(self._streams.items()):
+            if not state.queues and state.task is not None and state.task.done():
+                self._streams.pop(key, None)
+
+    async def _produce(self, key: tuple[str, str], state: _SharedStream) -> None:
+        symbol, timeframe = key
+        while True:
+            try:
+                subscriber = BinanceWSSubscriber(symbol, timeframe, self.settings)
+                async for event in subscriber.start():
+                    state.latest = event
+                    for queue in tuple(state.queues):
+                        if queue.full():
+                            with suppress(asyncio.QueueEmpty):
+                                queue.get_nowait()
+                        with suppress(asyncio.QueueFull):
+                            queue.put_nowait(event)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Shared Binance stream failed; reconnecting.", extra={"symbol": symbol, "timeframe": timeframe})
+                await asyncio.sleep(2)
+
+    async def _close_when_idle(self, key: tuple[str, str], state: _SharedStream) -> None:
+        try:
+            if self.idle_seconds:
+                await asyncio.sleep(self.idle_seconds)
+            async with self._lock:
+                if self._streams.get(key) is not state or state.queues:
+                    return
+                self._streams.pop(key, None)
+                task = state.task
+            if task is not None:
+                task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await task
+        except asyncio.CancelledError:
+            raise
+
+
+_SHARED_HUB: SharedBinanceStreamHub | None = None
+
+
+def get_shared_binance_stream_hub(settings: Any) -> SharedBinanceStreamHub:
+    global _SHARED_HUB
+    if _SHARED_HUB is None:
+        _SHARED_HUB = SharedBinanceStreamHub(settings)
+    return _SHARED_HUB

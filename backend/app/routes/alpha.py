@@ -5,7 +5,7 @@ calculated information coefficients (IC) / edge decay on historical databases.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
@@ -14,8 +14,14 @@ from app.db.models import TradeSignal
 from app.brains.signal_lifecycle import TERMINAL_SIGNAL_STATUSES
 from app.quant.research import list_hypotheses, validate_series
 from app.rate_limit import enforce_rate_limit
+from app.auth import require_active_subscription
+from app.db.models import User
 
-router = APIRouter(prefix="/alpha", tags=["Alpha Research Engine"])
+router = APIRouter(
+    prefix="/alpha",
+    tags=["Alpha Research Engine"],
+    dependencies=[Depends(require_active_subscription)],
+)
 
 
 class ValidationRequest(BaseModel):
@@ -31,12 +37,16 @@ def get_hypotheses():
 
 
 @router.post("/validate")
-def post_validate_series(req: ValidationRequest, request: Request):
+def post_validate_series(
+    req: ValidationRequest,
+    request: Request,
+    user: User = Depends(require_active_subscription),
+):
     """Validate a custom features candidate series against future return lags."""
+    enforce_rate_limit(request, "alpha_validate", limit=10, window_seconds=60, identity=user.id)
     try:
-        enforce_rate_limit(request, "alpha_validate", limit=10, window_seconds=60)
         return validate_series(req.feature, req.future_returns, train_fraction=req.train_fraction)
-    except Exception as exc:
+    except (TypeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail="The feature series could not be validated. Ensure both arrays are aligned numeric observations.") from exc
 
 
@@ -47,7 +57,12 @@ async def get_alpha_report():
     Calculates correlation coefficients, win rates by regime type, and edge stability.
     """
     async with AsyncSessionLocal() as session:
-        stmt = select(TradeSignal).where(TradeSignal.status.in_(TERMINAL_SIGNAL_STATUSES))
+        stmt = (
+            select(TradeSignal)
+            .where(TradeSignal.status.in_(TERMINAL_SIGNAL_STATUSES))
+            .order_by(TradeSignal.id.desc())
+            .limit(5_000)
+        )
         res = await session.execute(stmt)
         records = res.scalars().all()
 
@@ -67,7 +82,25 @@ async def get_alpha_report():
 
     regime_stats: dict[str, dict[str, int]] = {}
 
-    for r in records:
+    # CANCELLED/EXPIRED and pre-entry INVALIDATED signals are censored setup
+    # observations, not losing trades. Including them as zero-return losses
+    # corrupts every information coefficient and reported win rate.
+    outcome_records = [
+        record
+        for record in records
+        if record.status in {"COMPLETED", "STOPPED_OUT"}
+        or (record.status == "INVALIDATED" and record.entry_price is not None)
+    ]
+    if not outcome_records:
+        return {
+            "status": "insufficient_data",
+            "sessions_analyzed": 0,
+            "censored_setups": len(records),
+            "message": "No entered trades with resolved outcomes are available yet.",
+            "edges": {},
+        }
+
+    for r in outcome_records:
         success = 1.0 if r.status == "COMPLETED" else 0.0
         outcomes.append(success)
 
@@ -142,7 +175,8 @@ async def get_alpha_report():
 
     return {
         "status": "active",
-        "sessions_analyzed": len(records),
+        "sessions_analyzed": len(outcome_records),
+        "censored_setups": len(records) - len(outcome_records),
         "regime_performance": regime_report,
         "discovered_edges": {
             "actual_execution_flow": {

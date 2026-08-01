@@ -25,7 +25,9 @@ async def get_historical_performance_summary() -> dict[str, Any]:
     try:
         async with AsyncSessionLocal() as db:
             result = await db.execute(
-                select(TradeSignal).order_by(TradeSignal.id.desc())
+                select(TradeSignal)
+                .order_by(TradeSignal.id.desc())
+                .limit(5_000)
             )
             signals = result.scalars().all()
 
@@ -33,19 +35,28 @@ async def get_historical_performance_summary() -> dict[str, Any]:
                 return _default_performance_metrics()
 
             terminal_signals = [s for s in signals if s.status in TERMINAL_SIGNAL_STATUSES]
+            outcome_signals = [
+                signal
+                for signal in terminal_signals
+                if signal.status in {"COMPLETED", "STOPPED_OUT"}
+                or (signal.status == "INVALIDATED" and signal.entry_price is not None)
+            ]
 
             total_generated = len(signals)
-            total_completed = len(terminal_signals)
+            total_completed = len(outcome_signals)
 
-            if not terminal_signals:
+            if not outcome_signals:
                 return {
                     "total_signals_generated": total_generated,
                     "total_completed": 0,
-                    "win_rate_pct": 50.0,  # Default fallback
+                    "decided_trades": 0,
+                    "win_rate_pct": None,
                     "wins": 0,
                     "losses": 0,
-                    "profit_factor": 1.0,
+                    "cancelled_or_expired": len(terminal_signals),
+                    "profit_factor": None,
                     "expectancy_r": 0.0,
+                    "net_r_multiple": 0.0,
                     "current_streak": {"type": "NONE", "count": 0},
                     "regime_breakdown": {},
                     "timeframe_breakdown": {},
@@ -88,12 +99,12 @@ async def get_historical_performance_summary() -> dict[str, Any]:
                     regime_entry["wins"] += 1
                     stage = getattr(sig, "target_stage", 1) or 1
                     total_r += stage * 1.5
-                elif status in {"STOPPED_OUT", "INVALIDATED"}:
+                elif status == "STOPPED_OUT" or (status == "INVALIDATED" and sig.entry_price is not None):
                     losses += 1
                     tf_entry["losses"] += 1
                     regime_entry["losses"] += 1
                     total_r -= 1.0
-                elif status in {"CANCELLED", "EXPIRED"}:
+                elif status in {"CANCELLED", "EXPIRED", "INVALIDATED"}:
                     cancelled += 1
 
             decided_count = wins + losses
@@ -108,7 +119,7 @@ async def get_historical_performance_summary() -> dict[str, Any]:
                 st = sig.status
                 if st in {"COMPLETED", "TP1_SECURED", "TP2_SECURED", "TP3_SECURED"}:
                     curr = "WIN"
-                elif st in {"STOPPED_OUT", "INVALIDATED"}:
+                elif st == "STOPPED_OUT" or (st == "INVALIDATED" and sig.entry_price is not None):
                     curr = "LOSS"
                 else:
                     continue
@@ -165,8 +176,8 @@ def _default_performance_metrics() -> dict[str, Any]:
         "wins": 0,
         "losses": 0,
         "cancelled_or_expired": 0,
-        "win_rate_pct": 50.0,
-        "profit_factor": 1.0,
+        "win_rate_pct": None,
+        "profit_factor": None,
         "expectancy_r": 0.0,
         "net_r_multiple": 0.0,
         "current_streak": {"type": "NONE", "count": 0},

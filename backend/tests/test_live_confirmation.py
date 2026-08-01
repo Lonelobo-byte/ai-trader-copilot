@@ -34,6 +34,22 @@ def _live_inputs(price: float) -> dict:
             "oi_history": {"available": True, "oi_change_pct": 1.2},
             "taker_buy_sell_volume": {"available": True, "buy_sell_ratio": 1.10},
         },
+        "multi_venue": {
+            "actual_flow": {
+                "available": True,
+                "status": "BUYING_CONFIRMED",
+                "bias": "BULLISH",
+                "qualified_source_count": 2,
+                "qualified_venue_count": 2,
+                "cross_venue_alignment": "ALIGNED",
+                "active_aggressor": "BUYERS",
+                "production_qualified": True,
+            },
+            "displayed_liquidity_stability": {
+                "status": "STABLE",
+                "publication_veto": False,
+            },
+        },
     }
 
 
@@ -107,6 +123,7 @@ def test_main_signal_uses_radar_equivalent_confirmation_gate() -> None:
         result = verify_main_signal_snapshot(
             symbol="TESTUSDT", timeframe="5m", side="LONG", candles=primary, higher_candles=higher,
             order_book=inputs["order_book"], funding=inputs["funding"], derivatives=inputs["derivatives"],
+            multi_venue=inputs["multi_venue"],
         )
     assert result["passed"] is True
     assert result["status"] == "LIVE_CONFIRMED_REVIEW"
@@ -153,6 +170,7 @@ def test_main_signal_keeps_depth_as_supporting_evidence_not_a_snapshot_veto() ->
         result = verify_main_signal_snapshot(
             symbol="TESTUSDT", timeframe="5m", side="LONG", candles=primary, higher_candles=higher,
             order_book=inputs["order_book"], funding=inputs["funding"], derivatives=inputs["derivatives"],
+            multi_venue=inputs["multi_venue"],
         )
     assert result["passed"] is True
     assert result["status"] == "LIVE_CONFIRMED_REVIEW"
@@ -169,6 +187,7 @@ def test_main_signal_uses_prior_break_while_current_candle_retests() -> None:
         result = verify_main_signal_snapshot(
             symbol="TESTUSDT", timeframe="5m", side="LONG", candles=primary, higher_candles=higher,
             order_book=inputs["order_book"], funding=inputs["funding"], derivatives=inputs["derivatives"],
+            multi_venue=inputs["multi_venue"],
         )
 
     event = result["metrics"]["selected_structure_event"]
@@ -187,6 +206,7 @@ def test_main_signal_rejects_correct_direction_when_entry_is_extended() -> None:
         result = verify_main_signal_snapshot(
             symbol="TESTUSDT", timeframe="5m", side="LONG", candles=primary, higher_candles=higher,
             order_book=inputs["order_book"], funding=inputs["funding"], derivatives=inputs["derivatives"],
+            multi_venue=inputs["multi_venue"],
         )
 
     assert result["passed"] is False
@@ -201,6 +221,7 @@ def test_planned_notional_is_blocked_when_displayed_depth_capacity_is_too_small(
     result = verify_main_signal_snapshot(
         symbol="TESTUSDT", timeframe="5m", side="LONG", candles=primary, higher_candles=higher,
         order_book=inputs["order_book"], funding=inputs["funding"], derivatives=inputs["derivatives"],
+        multi_venue=inputs["multi_venue"],
         planned_notional_usd=10_000.0,
     )
     assert result["passed"] is False
@@ -221,6 +242,7 @@ def test_errored_funding_payload_is_missing_data_not_neutral_funding() -> None:
         order_book=inputs["order_book"],
         funding={"funding_rate": 0.0, "error": "provider unavailable"},
         derivatives=inputs["derivatives"],
+        multi_venue=inputs["multi_venue"],
     )
     assert result["passed"] is False
     assert result["publication_coverage"]["requirements"]["funding"] is False
@@ -245,6 +267,7 @@ def test_main_signal_accepts_completed_range_sweep_with_context_acceptance() -> 
         result = verify_main_signal_snapshot(
             symbol="TESTUSDT", timeframe="5m", side="LONG", candles=primary, higher_candles=higher,
             order_book=inputs["order_book"], funding=inputs["funding"], derivatives=inputs["derivatives"],
+            multi_venue=inputs["multi_venue"],
         )
 
     assert result["passed"] is True
@@ -266,6 +289,7 @@ def test_main_signal_accepts_accumulation_inside_higher_timeframe_range_with_swe
         result = verify_main_signal_snapshot(
             symbol="TESTUSDT", timeframe="5m", side="LONG", candles=primary, higher_candles=higher,
             order_book=inputs["order_book"], funding=inputs["funding"], derivatives=inputs["derivatives"],
+            multi_venue=inputs["multi_venue"],
         )
 
     assert result["passed"] is True
@@ -282,6 +306,7 @@ def test_primary_setup_remains_visible_as_tactical_when_higher_timeframe_mismatc
         result = verify_main_signal_snapshot(
             symbol="TESTUSDT", timeframe="5m", side="LONG", candles=primary, higher_candles=higher,
             order_book=inputs["order_book"], funding=inputs["funding"], derivatives=inputs["derivatives"],
+            multi_venue=inputs["multi_venue"],
         )
 
     assert result["passed"] is False

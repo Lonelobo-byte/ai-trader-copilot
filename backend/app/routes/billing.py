@@ -6,8 +6,8 @@ import uuid
 import asyncio
 from decimal import Decimal, InvalidOperation
 
-from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from ..auth import current_user, subscription_is_active, utcnow
@@ -34,14 +34,19 @@ router = APIRouter(prefix="/billing", tags=["billing"])
 logger = logging.getLogger(__name__)
 
 _ACTIVE_PROVIDER_STATUSES = {"waiting", "confirming", "sending", "partially_paid"}
-_TERMINAL_PROVIDER_STATUSES = {"finished", "confirmed", "failed", "expired", "refunded"}
 _CHECKOUT_LOCKS: dict[str, asyncio.Lock] = {}
 _MAX_CHECKOUT_LOCKS = 2_000
 
 
 class CheckoutRequest(BaseModel):
-    plan_code: str
-    pay_currency: str
+    plan_code: str = Field(min_length=3, max_length=20, pattern=r"^[a-z_]+$")
+    pay_currency: str = Field(min_length=2, max_length=32, pattern=r"^[A-Za-z0-9]+$")
+
+
+def _payment_extra_id(payload: dict | None) -> str | None:
+    """Return the destination memo/tag field used by NOWPayments pay-ins."""
+    data = payload or {}
+    return data.get("payin_extra_id") or data.get("payment_extra_id")
 
 
 @router.get("/plans")
@@ -68,7 +73,7 @@ async def plans():
 @router.get("/payment-currencies")
 async def payment_currencies(request: Request, plan_code: str, user: User = Depends(current_user)):
     """Return merchant-enabled assets without fan-out calls to the provider."""
-    enforce_rate_limit(request, "payment_currencies", limit=20, window_seconds=60)
+    enforce_rate_limit(request, "payment_currencies", limit=20, window_seconds=60, identity=user.id)
     try:
         plan_details(plan_code)
         currencies = await fetch_nowpayments_currencies()
@@ -124,7 +129,7 @@ def _payment_view(payment: Payment | None, subscription: Subscription | None) ->
         "confirmations": payment.confirmations,
         "payment_expires_at": (payment.raw_payload or {}).get("expiration_estimate_date"),
         "network": (payment.raw_payload or {}).get("network"),
-        "payment_extra_id": (payment.raw_payload or {}).get("payment_extra_id"),
+        "payment_extra_id": _payment_extra_id(payment.raw_payload),
         "transaction_hash": payment.transaction_hash,
         "subscription": _subscription_view(subscription),
         "awaiting_provider_callback": payment.provider_payment_id is None and payment.status in {"waiting", "confirming"},
@@ -152,7 +157,7 @@ def _checkout_view(payment: Payment, subscription: Subscription, *, reused: bool
             "pay_amount": str(pay_amount),
             "pay_currency": str(pay_currency).upper(),
             "network": payload.get("network"),
-            "payment_extra_id": payload.get("payment_extra_id"),
+            "payment_extra_id": _payment_extra_id(payload),
             "expires_at": payload.get("expiration_estimate_date"),
             "qr_data_uri": payment_qr_data_uri(str(address)),
             "reused": reused,
@@ -192,8 +197,15 @@ def _apply_provider_status(payment: Payment, subscription: Subscription, payload
         if payment.completed_at is None:
             complete_subscription(subscription)
             payment.completed_at = utcnow()
-    elif status_value in {"failed", "expired", "refunded"} and subscription.status == "pending":
-        subscription.status = "cancelled" if status_value == "refunded" else "expired"
+    elif status_value == "refunded":
+        # A refund revokes the entitlement created by this payment even when
+        # the subscription was already active. Leaving it active grants access
+        # after the provider has returned the customer's funds.
+        subscription.status = "cancelled"
+        subscription.ends_at = utcnow()
+        subscription.grace_ends_at = None
+    elif status_value in {"failed", "expired"} and subscription.status == "pending":
+        subscription.status = "expired"
 
 
 def _expire_pending_checkout(payment: Payment, subscription: Subscription) -> None:
@@ -314,6 +326,12 @@ async def checkout(body: CheckoutRequest, request: Request, user: User = Depends
                 _CHECKOUT_LOCKS.pop(stale_user, None)
             if len(_CHECKOUT_LOCKS) < _MAX_CHECKOUT_LOCKS:
                 break
+    if user.id not in _CHECKOUT_LOCKS and len(_CHECKOUT_LOCKS) >= _MAX_CHECKOUT_LOCKS:
+        raise HTTPException(
+            status_code=503,
+            detail="Checkout capacity is briefly busy. Retry in a few seconds.",
+            headers={"Retry-After": "5"},
+        )
     lock = _CHECKOUT_LOCKS.setdefault(user.id, asyncio.Lock())
     async with lock:
         async with AsyncSessionLocal() as session:
@@ -335,26 +353,45 @@ async def checkout(body: CheckoutRequest, request: Request, user: User = Depends
                     if existing.status not in _ACTIVE_PROVIDER_STATUSES:
                         existing = None
                 if existing:
-                    if existing.provider_invoice_id and not existing.provider_payment_id:
-                        raise HTTPException(
-                            status_code=409,
-                            detail=(
-                                "The previous provider checkout could not be verified. "
-                                "Confirm that the NOWPayments API key and sandbox/live mode match the original payment, then retry."
-                            ),
-                        )
-                    if existing.pay_currency and existing.pay_currency.lower() != body.pay_currency.lower():
-                        raise HTTPException(
-                            status_code=409,
-                            detail=(
-                                f"A {existing.pay_currency.upper()} payment is still {existing.status}. "
-                                "Complete it or wait for it to expire before choosing another token, so you cannot be charged twice."
-                            ),
-                        )
-                    return _checkout_view(existing, subscription, reused=True, verification_pending=not reconciled)
+                    # A new explicit checkout request replaces the previous UI
+                    # route. Keep the old row as an immutable audit/payment
+                    # reference (a blockchain address cannot be revoked), but
+                    # remove it from the active-checkout lock so the customer
+                    # can select another provider asset without a 409 loop.
+                    previous_status = existing.status
+                    existing.status = "abandoned"
+                    existing.raw_payload = {
+                        **(existing.raw_payload or {}),
+                        "locally_abandoned_at": utcnow().isoformat(),
+                        "locally_abandoned_reason": "replaced_by_new_checkout",
+                    }
+                    if subscription.status == "pending":
+                        subscription.status = "expired"
+                    session.add(AuditEvent(
+                        id=str(uuid.uuid4()),
+                        user_id=user.id,
+                        event_type="payment_checkout_replaced",
+                        metadata_json={
+                            "order_id": existing.order_id,
+                            "provider_status": previous_status,
+                            "reconciled": reconciled,
+                        },
+                    ))
+                    existing = None
 
                 # Only genuine creation attempts consume checkout quota.
-                enforce_rate_limit(request, "checkout", limit=5, window_seconds=15 * 60)
+                checkout_settings = get_settings()
+                local_sandbox = bool(
+                    checkout_settings.nowpayments_sandbox
+                    and checkout_settings.app_env.lower() in {"local", "development", "test"}
+                )
+                enforce_rate_limit(
+                    request,
+                    "checkout",
+                    limit=30 if local_sandbox else 5,
+                    window_seconds=15 * 60,
+                    identity=user.id,
+                )
                 subscription_id, payment_id, order_id = str(uuid.uuid4()), str(uuid.uuid4()), f"atc-{uuid.uuid4().hex}"
                 try:
                     provider_payment = await create_nowpayments_payment(order_id, body.plan_code, body.pay_currency)
@@ -394,11 +431,11 @@ async def checkout(body: CheckoutRequest, request: Request, user: User = Depends
 async def payment_status(request: Request, user: User = Depends(current_user)):
     """Return the latest payment and recheck known provider transaction IDs.
 
-    This endpoint is called after the hosted checkout redirects back.  It never
-    trusts the redirect: activation happens only after a signed IPN followed by
-    an authoritative NOWPayments payment-status response.
+    This endpoint supports in-page polling and return-page recovery. It never
+    trusts browser state: activation happens only after an authoritative
+    NOWPayments payment-status response (or the same verified IPN workflow).
     """
-    enforce_rate_limit(request, f"payment_status:{user.id}", limit=18, window_seconds=60)
+    enforce_rate_limit(request, "payment_status", limit=18, window_seconds=60, identity=user.id)
     async with AsyncSessionLocal() as session:
         payment = await session.scalar(select(Payment).where(Payment.user_id == user.id).order_by(Payment.created_at.desc()))
         if payment is None:
@@ -411,12 +448,66 @@ async def payment_status(request: Request, user: User = Depends(current_user)):
             if reconciled:
                 session.add(AuditEvent(id=str(uuid.uuid4()), user_id=user.id, event_type="payment_status_reconciled", metadata_json={"order_id": payment.order_id, "status": payment.status}))
                 await session.commit()
-        return {"payment": _payment_view(payment, subscription), "verification_pending": verification_pending}
+        subscriptions = list(await session.scalars(
+            select(Subscription)
+            .where(Subscription.user_id == user.id)
+            .order_by(Subscription.created_at.desc())
+        ))
+        active_subscription = next(
+            (item for item in subscriptions if subscription_is_active(item)),
+            None,
+        )
+        return {
+            "payment": _payment_view(payment, subscription),
+            "active_subscription": _subscription_view(active_subscription),
+            "verification_pending": verification_pending,
+        }
+
+
+async def _reconcile_nowpayments_webhook(payload: dict) -> None:
+    """Perform authoritative provider reconciliation after the IPN is acknowledged."""
+    order_id = str(payload.get("order_id", ""))
+    provider_id = str(payload.get("payment_id", ""))
+    try:
+        provider_payload = await fetch_nowpayments_payment(provider_id)
+        async with AsyncSessionLocal() as session:
+            payment = await session.scalar(
+                select(Payment).where(Payment.order_id == order_id).with_for_update()
+            )
+            if payment is None:
+                logger.warning("NOWPayments webhook references unknown order %s", order_id)
+                return
+            subscription = await session.get(
+                Subscription, payment.subscription_id, with_for_update=True
+            )
+            if subscription is None:
+                logger.error("NOWPayments webhook order %s has no subscription", order_id)
+                return
+            _apply_provider_status(payment, subscription, provider_payload)
+            session.add(AuditEvent(
+                id=str(uuid.uuid4()),
+                user_id=payment.user_id,
+                event_type="payment_webhook",
+                metadata_json={"order_id": order_id, "status": payment.status},
+            ))
+            await session.commit()
+    except (PaymentProviderError, ValueError) as exc:
+        # NOWPayments already received a fast 204. Status polling and later IPNs
+        # remain authoritative recovery paths if this asynchronous lookup fails.
+        logger.warning(
+            "NOWPayments webhook reconciliation delayed for %s: %s",
+            provider_id,
+            exc,
+        )
+    except Exception:
+        logger.exception("Unexpected NOWPayments webhook reconciliation failure for %s", provider_id)
 
 
 @router.post("/webhooks/nowpayments", status_code=204)
-async def nowpayments_webhook(request: Request):
+async def nowpayments_webhook(request: Request, background_tasks: BackgroundTasks):
     raw = await request.body()
+    if len(raw) > max(1, int(get_settings().max_request_body_bytes)):
+        raise HTTPException(status_code=413, detail="Payment webhook is too large.")
     try:
         payload = verify_nowpayments_ipn(raw, request.headers.get("x-nowpayments-sig"))
     except ValueError as exc:
@@ -425,22 +516,7 @@ async def nowpayments_webhook(request: Request):
     provider_id = str(payload.get("payment_id", ""))
     if not order_id or not provider_id:
         raise HTTPException(status_code=422, detail="Payment webhook is missing identifiers.")
-    try:
-        # A signed webhook identifies the event.  The provider API is then
-        # queried server-to-server before an entitlement is granted.
-        provider_payload = await fetch_nowpayments_payment(provider_id)
-    except PaymentProviderError as exc:
-        logger.warning("NOWPayments webhook reconciliation delayed for %s: %s", provider_id, exc)
-        raise HTTPException(status_code=503, detail="Payment verification is temporarily unavailable; retry will occur.") from exc
-    async with AsyncSessionLocal() as session:
-        payment = await session.scalar(select(Payment).where(Payment.order_id == order_id).with_for_update())
-        if payment is None:
-            raise HTTPException(status_code=404, detail="Payment order not found.")
-        subscription = await session.get(Subscription, payment.subscription_id, with_for_update=True)
-        try:
-            _apply_provider_status(payment, subscription, provider_payload)
-        except ValueError as exc:
-            logger.warning("Rejected NOWPayments webhook for order %s: %s", order_id, exc)
-            raise HTTPException(status_code=409, detail="Payment verification did not match this order.") from exc
-        session.add(AuditEvent(id=str(uuid.uuid4()), user_id=payment.user_id, event_type="payment_webhook", metadata_json={"order_id": order_id, "status": payment.status}))
-        await session.commit()
+    # The provider requires a response within three seconds. A valid signature
+    # is acknowledged immediately; entitlement changes still wait for the
+    # authoritative server-to-server payment lookup in the background task.
+    background_tasks.add_task(_reconcile_nowpayments_webhook, payload)

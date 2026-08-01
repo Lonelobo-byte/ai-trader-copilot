@@ -56,6 +56,24 @@ def _is_fresh(snapshot: RadarSnapshot, *, now, settings: Settings) -> bool:
     return bool(snapshot.payload and captured_at and now - captured_at <= timedelta(seconds=freshness_seconds(snapshot.ltf, snapshot.htf, settings)))
 
 
+def max_stale_seconds(ltf: str, htf: str, settings: Settings) -> int:
+    return max(
+        60,
+        freshness_seconds(ltf, htf, settings)
+        * max(1, int(settings.radar_max_stale_multiplier)),
+    )
+
+
+def _is_servable_stale(snapshot: RadarSnapshot, *, now, settings: Settings) -> bool:
+    captured_at = as_utc(snapshot.captured_at)
+    return bool(
+        snapshot.payload
+        and captured_at
+        and now - captured_at
+        <= timedelta(seconds=max_stale_seconds(snapshot.ltf, snapshot.htf, settings))
+    )
+
+
 def _next_refresh_at(snapshot: RadarSnapshot, *, settings: Settings, stale: bool = False) -> str | None:
     """Return one server-owned countdown target for every browser."""
     if stale:
@@ -146,6 +164,11 @@ async def refresh_radar_pair(ltf: str, htf: str, *, settings: Settings | None = 
             return None
         try:
             candidates = await get_breakout_candidates(ltf=ltf, htf=htf, use_ai=False)
+            if not candidates:
+                # The scanner uses non-empty watch rows even when no setup is
+                # actionable. An empty result therefore means its upstream
+                # universe failed; retain the last valid shared snapshot.
+                raise RuntimeError("Radar market universe returned no candidates.")
         except Exception as exc:
             logger.exception("Shared Radar refresh failed for %s", key)
             async with AsyncSessionLocal() as db:
@@ -214,11 +237,39 @@ async def read_radar_pair(ltf: str, htf: str, *, settings: Settings | None = Non
                 copy.deepcopy(snapshot.payload), captured_at.isoformat() if captured_at else None,
                 _next_refresh_at(snapshot, settings=settings), "FRESH",
             )
-        _background_refresh(ltf, htf, settings)
-        return RadarRead(
-            copy.deepcopy(snapshot.payload), captured_at.isoformat() if captured_at else None,
-            _next_refresh_at(snapshot, settings=settings, stale=True), "STALE_REFRESHING",
-        )
+        if _is_servable_stale(snapshot, now=now, settings=settings):
+            _background_refresh(ltf, htf, settings)
+            return RadarRead(
+                copy.deepcopy(snapshot.payload), captured_at.isoformat() if captured_at else None,
+                _next_refresh_at(snapshot, settings=settings, stale=True), "STALE_REFRESHING",
+            )
+
+        # The stored snapshot exceeded the hard safety age. Do not expose it as
+        # research data; block once for a current replacement or fail closed.
+        previous_captured_at = captured_at
+        refreshed = await refresh_radar_pair(ltf, htf, settings=settings)
+        if refreshed is not None and refreshed.state == "FRESH":
+            return refreshed
+        for _ in range(50):
+            await asyncio.sleep(0.2)
+            async with AsyncSessionLocal() as db:
+                current = await db.get(RadarSnapshot, pair_key(ltf, htf))
+                current_captured_at = as_utc(current.captured_at) if current else None
+                if (
+                    current
+                    and current.payload
+                    and current_captured_at
+                    and (previous_captured_at is None or current_captured_at > previous_captured_at)
+                    and _is_servable_stale(current, now=utcnow(), settings=settings)
+                ):
+                    state = "FRESH" if _is_fresh(current, now=utcnow(), settings=settings) else "STALE_REFRESHING"
+                    return RadarRead(
+                        copy.deepcopy(current.payload),
+                        current_captured_at.isoformat(),
+                        _next_refresh_at(current, settings=settings, stale=state == "STALE_REFRESHING"),
+                        state,
+                    )
+        raise RuntimeError("The previous Radar snapshot expired before a current refresh completed.")
 
     refreshed = await refresh_radar_pair(ltf, htf, settings=settings)
     if refreshed is None:
@@ -230,9 +281,10 @@ async def read_radar_pair(ltf: str, htf: str, *, settings: Settings | None = Non
                 snapshot = await db.get(RadarSnapshot, pair_key(ltf, htf))
                 if snapshot and snapshot.payload:
                     captured_at = as_utc(snapshot.captured_at)
+                    state = "FRESH" if _is_fresh(snapshot, now=utcnow(), settings=settings) else "STALE_REFRESHING"
                     return RadarRead(
                         copy.deepcopy(snapshot.payload), captured_at.isoformat() if captured_at else None,
-                        _next_refresh_at(snapshot, settings=settings), "INITIAL",
+                        _next_refresh_at(snapshot, settings=settings, stale=state == "STALE_REFRESHING"), state,
                     )
         raise RuntimeError("The shared Radar snapshot is being prepared. Please retry shortly.")
     return refreshed

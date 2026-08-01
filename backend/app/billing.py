@@ -56,10 +56,10 @@ def callback_configuration_error() -> str | None:
     parsed = urlparse(settings.public_base_url)
     host = (parsed.hostname or "").lower()
     if parsed.scheme != "https" or not host or host in {"localhost", "127.0.0.1", "::1"}:
-        # A sandbox invoice is useful for exercising the local checkout UI.
-        # It cannot grant access from the redirect: only the signed IPN path
-        # can activate a subscription, and a local server is unreachable to
-        # the provider. Production/live payments always retain the HTTPS gate.
+        # A sandbox route is useful for exercising the local checkout UI. It
+        # cannot grant access from browser state: only an authoritative
+        # provider-status lookup (poll or signed IPN) can activate it.
+        # Production/live payments always retain the HTTPS callback gate.
         if settings.nowpayments_sandbox and settings.app_env.lower() in {"local", "development", "test"}:
             return None
         return "Crypto checkout needs a public HTTPS PUBLIC_BASE_URL before it can receive verified payment updates."
@@ -88,7 +88,14 @@ def _nowpayments_logo_url(value: Any) -> str | None:
     """Convert a provider logo path into a safe, usable public image URL."""
     if not isinstance(value, str) or not value.strip():
         return None
-    return urljoin("https://nowpayments.io", value.strip())
+    resolved = urljoin("https://nowpayments.io", value.strip())
+    parsed = urlparse(resolved)
+    host = (parsed.hostname or "").lower()
+    if parsed.scheme != "https" or not (
+        host == "nowpayments.io" or host.endswith(".nowpayments.io")
+    ):
+        return None
+    return resolved
 
 
 def _provider_cache_identity() -> str:
@@ -371,13 +378,26 @@ async def fetch_nowpayments_invoice_payments(invoice_id: str) -> list[dict[str, 
 
 
 def verify_nowpayments_ipn(raw: bytes, signature: str | None) -> dict[str, Any]:
+    """Validate a NOWPayments callback using its canonical sorted JSON body."""
     secret = get_settings().nowpayments_ipn_secret
-    expected = hmac.new(secret.encode(), raw, hashlib.sha512).hexdigest() if secret else ""
-    if not signature or not hmac.compare_digest(expected, signature):
-        raise ValueError("Webhook signature is invalid.")
-    payload = json.loads(raw)
+    try:
+        payload = json.loads(raw)
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise ValueError("Webhook payload is invalid.") from exc
     if not isinstance(payload, dict):
         raise ValueError("Webhook payload is invalid.")
+    # NOWPayments signs recursively key-sorted, compact JSON rather than the
+    # original wire representation. Signing raw bytes rejects valid callbacks
+    # whenever whitespace or object-key order differs.
+    canonical = json.dumps(
+        payload,
+        separators=(",", ":"),
+        sort_keys=True,
+        ensure_ascii=False,
+    ).encode("utf-8")
+    expected = hmac.new(secret.encode(), canonical, hashlib.sha512).hexdigest() if secret else ""
+    if not signature or not hmac.compare_digest(expected, signature):
+        raise ValueError("Webhook signature is invalid.")
     return payload
 
 

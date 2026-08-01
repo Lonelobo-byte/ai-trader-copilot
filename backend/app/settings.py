@@ -48,6 +48,9 @@ class Settings(BaseSettings):
     # Web dashboard requests should be BYOK by default so a public deployment
     # cannot silently spend the operator's OpenRouter credits.
     allow_platform_ai_fallback: bool = False
+    # Deterministic evidence may always produce a watch state, but a new
+    # published signal requires a successful final model synthesis by default.
+    require_ai_for_signal_publication: bool = True
 
     openai_api_key: str = ""
     openai_model_scanner: str = "gpt-5.4-mini"
@@ -85,6 +88,13 @@ class Settings(BaseSettings):
     market_snapshot_cache_seconds: float = 8.0
     market_snapshot_cache_max_entries: int = 96
     market_intelligence_max_concurrency: int = 8
+    # Research tabs share one Binance connection per symbol/timeframe.  These
+    # bounds protect small hosts from unbounded pairs and CPU-heavy analyses.
+    analysis_stream_max_pairs: int = 32
+    analysis_stream_idle_seconds: float = 30.0
+    analysis_compute_max_concurrency: int = 4
+    analysis_compute_wait_seconds: float = 20.0
+    analysis_websocket_config_timeout_seconds: float = 10.0
     # One bounded process-wide execution tape. These public feeds use no API
     # key and are shared by every dashboard, scanner, and analysis request.
     multi_venue_ws_enabled: bool = True
@@ -97,6 +107,9 @@ class Settings(BaseSettings):
     multi_venue_symbols: list[str] = ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
     # The bounded dynamic hub limits this to 12 even if configuration drifts.
     multi_venue_max_symbols: int = 12
+    # Do not evict a symbol that an active Research/Radar consumer requested
+    # recently; report the new pair unavailable instead of feed-churning.
+    multi_venue_symbol_idle_seconds: float = 30.0
     multi_venue_book_levels: int = 200
     multi_venue_min_book_levels: int = 5
     multi_venue_max_events: int = 2_000
@@ -111,9 +124,8 @@ class Settings(BaseSettings):
     multi_venue_subscription_retry_seconds: float = 900.0
 
     background_jobs_enabled: bool = True
-    # Set this on exactly one worker container. A database lease below prevents
-    # accidental duplicate job ownership if deployment config drifts.
-    background_worker_id: str = ""
+    # PostgreSQL advisory/row leases prevent duplicate writers if more than
+    # one serving process starts background loops accidentally.
     max_request_body_bytes: int = 1_000_000
     background_idle_check_seconds: int = 60
 
@@ -126,6 +138,9 @@ class Settings(BaseSettings):
     radar_fresh_5m_1h_seconds: int = 30
     radar_fresh_15m_4h_seconds: int = 120
     radar_fresh_1h_1d_seconds: int = 600
+    # A stale-while-refreshing snapshot is useful briefly, but must never turn
+    # into apparently live multi-hour/day-old market research.
+    radar_max_stale_multiplier: int = 6
 
     default_account_size_usd: float = 1000.0
     default_risk_per_idea_pct: float = 0.5

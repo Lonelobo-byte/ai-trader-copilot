@@ -62,6 +62,8 @@ SOURCE_SPECS: dict[str, dict[str, str]] = {
 }
 PERPETUAL_SOURCES = ("binance_perp", "bybit_perp")
 SPOT_SOURCES = ("binance_spot", "bybit_spot")
+MIN_PUBLICATION_SOURCES = 2
+MIN_PUBLICATION_VENUES = 2
 
 
 def _number(value: Any, default: float = 0.0) -> float:
@@ -676,11 +678,35 @@ def _aggregate_flow(rows: list[dict[str, Any]], market: str) -> dict[str, Any]:
         str(row["source"]): str(row["trade_flow"].get("bias", "NEUTRAL"))
         for row in qualified
     }
+    venues = sorted({str(row.get("exchange") or "").upper() for row in qualified if row.get("exchange")})
+    venue_biases: dict[str, str] = {}
+    for venue in venues:
+        venue_rows = [row for row in qualified if str(row.get("exchange") or "").upper() == venue]
+        venue_buy = sum(_number(row["trade_flow"].get("buy_notional")) for row in venue_rows)
+        venue_sell = sum(_number(row["trade_flow"].get("sell_notional")) for row in venue_rows)
+        venue_total = venue_buy + venue_sell
+        venue_biases[venue] = _flow_bias(
+            (venue_buy - venue_sell) / venue_total if venue_total else 0.0
+        )
+    directional_venue_biases = {
+        value for value in venue_biases.values() if value in {"BULLISH", "BEARISH"}
+    }
+    cross_venue_alignment = (
+        "UNAVAILABLE"
+        if len(venues) < MIN_PUBLICATION_VENUES
+        else "DIVERGENT"
+        if len(directional_venue_biases) > 1
+        else "ALIGNED"
+        if len(directional_venue_biases) == 1
+        else "NEUTRAL"
+    )
     return {
         "available": bool(qualified),
         "market": market,
         "qualified_source_count": len(qualified),
+        "qualified_venue_count": len(venues),
         "sources": [row["source"] for row in qualified],
+        "venues": venues,
         "trade_count": sum(int(row["trade_flow"].get("trade_count") or 0) for row in qualified),
         "buy_notional": round(buy, 2),
         "sell_notional": round(sell, 2),
@@ -711,7 +737,22 @@ def _aggregate_flow(rows: list[dict[str, Any]], market: str) -> dict[str, Any]:
             3,
         ) if qualified else 0.0,
         "source_biases": source_biases,
+        "venue_biases": venue_biases,
+        "cross_venue_alignment": cross_venue_alignment,
     }
+
+
+def publication_flow_is_qualified(execution_tape: dict[str, Any] | None) -> bool:
+    """Require fresh actual flow from two exchanges without venue disagreement."""
+    tape = execution_tape if isinstance(execution_tape, dict) else {}
+    actual_flow = tape.get("actual_flow") or {}
+    return bool(
+        actual_flow.get("available")
+        and int(actual_flow.get("qualified_source_count") or 0) >= MIN_PUBLICATION_SOURCES
+        and int(actual_flow.get("qualified_venue_count") or 0) >= MIN_PUBLICATION_VENUES
+        and str(actual_flow.get("cross_venue_alignment") or "UNAVAILABLE").upper()
+        != "DIVERGENT"
+    )
 
 
 class ExecutionTapeHub:
@@ -735,6 +776,7 @@ class ExecutionTapeHub:
         self.max_event_lag_seconds = max(1.0, min(float(self.settings.multi_venue_max_event_lag_seconds), 60.0))
         self.subscription_retry_seconds = max(60.0, min(float(self.settings.multi_venue_subscription_retry_seconds), 3_600.0))
         self.max_symbols = max(1, min(int(self.settings.multi_venue_max_symbols), 12))
+        self.symbol_idle_seconds = max(0.0, min(float(self.settings.multi_venue_symbol_idle_seconds), 600.0))
         configured: list[str] = []
         for item in self.settings.multi_venue_symbols:
             normalized = _symbol(item)
@@ -742,7 +784,7 @@ class ExecutionTapeHub:
                 configured.append(normalized)
         self.symbols = configured[: self.max_symbols]
         self.states: dict[tuple[str, str], _TapeInstrumentState] = {}
-        observed = monotonic()
+        observed = monotonic() - self.symbol_idle_seconds - 1.0
         self._symbol_last_requested = {
             symbol: observed + index * 1e-6
             for index, symbol in enumerate(self.symbols)
@@ -811,10 +853,18 @@ class ExecutionTapeHub:
             }
         evicted: str | None = None
         if len(self.symbols) >= self.max_symbols:
-            evicted = min(
+            oldest = min(
                 self.symbols,
                 key=lambda item: self._symbol_last_requested.get(item, 0.0),
             )
+            if observed - self._symbol_last_requested.get(oldest, 0.0) < self.symbol_idle_seconds:
+                return {
+                    "registered": False,
+                    "symbol": normalized,
+                    "reason": "active_symbol_capacity_reached",
+                    "evicted_symbol": None,
+                }
+            evicted = oldest
             self.symbols.remove(evicted)
             self._symbol_last_requested.pop(evicted, None)
             self._snapshot_cache.pop(evicted, None)
@@ -1253,13 +1303,20 @@ class ExecutionTapeHub:
         else:
             cross_market_alignment = "UNAVAILABLE"
         qualified_count = combined["qualified_source_count"]
+        qualified_venue_count = combined["qualified_venue_count"]
+        publication_qualified = bool(
+            combined["available"]
+            and qualified_count >= MIN_PUBLICATION_SOURCES
+            and qualified_venue_count >= MIN_PUBLICATION_VENUES
+            and combined["cross_venue_alignment"] != "DIVERGENT"
+        )
         confidence = (
             "HIGH"
-            if qualified_count >= 3 and cross_market_alignment == "ALIGNED"
+            if publication_qualified and qualified_count >= 3 and cross_market_alignment == "ALIGNED"
             else "MEDIUM"
-            if qualified_count >= 2
+            if publication_qualified
             else "LOW"
-            if qualified_count == 1
+            if qualified_count >= 1
             else "UNAVAILABLE"
         )
         actual_flow = {
@@ -1270,6 +1327,7 @@ class ExecutionTapeHub:
             "perpetual": perp,
             "spot": spot,
             "method": "public_taker_trade_tape_v1",
+            "production_qualified": publication_qualified,
             "limitations": (
                 "Taker side identifies the aggressor, not participant identity or future intent."
             ),
@@ -1323,8 +1381,8 @@ class ExecutionTapeHub:
             "symbol": normalized,
             "captured_at": datetime.now(timezone.utc).isoformat(),
             "status": (
-                "HEALTHY" if qualified_count >= 2
-                else "PARTIAL" if qualified_count == 1
+                "HEALTHY" if publication_qualified
+                else "PARTIAL" if qualified_count >= 1
                 else "SUBSCRIBING"
                 if any(source["connected"] for source in sources.values())
                 else "UNAVAILABLE"
@@ -1333,18 +1391,20 @@ class ExecutionTapeHub:
             "operational_metrics": dict(self.metrics),
             "actual_flow": actual_flow,
             "flow_confirmed": actual_flow["available"],
+            "publication_flow_confirmed": publication_qualified,
             "flow_consensus": actual_flow["bias"],
             "flow_score": actual_flow["signed_flow"],
             "flow_source_count": qualified_count,
             "source_flow_biases": actual_flow["source_biases"],
             "fresh_source_count": sum(bool(source["available"]) for source in sources.values()),
-            "required_source_count": 1,
+            "required_source_count": MIN_PUBLICATION_SOURCES,
+            "required_venue_count": MIN_PUBLICATION_VENUES,
             "observed_liquidations": liquidations,
             "displayed_liquidity_stability": stability,
             "sources": sources,
             "limitations": [
                 "The verdict measures market-order aggression and price response; every execution still has both a buyer and seller.",
-                "Spot/perpetual agreement raises confidence but is not mandatory for an observation.",
+                "Partial or single-venue flow remains observable, but publication requires qualified Binance and Bybit evidence without cross-venue disagreement.",
                 "Displayed books cannot reveal hidden liquidity or participant identity.",
             ],
         }

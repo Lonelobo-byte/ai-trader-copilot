@@ -8,7 +8,7 @@ from datetime import timedelta
 
 from fastapi import APIRouter, Cookie, HTTPException, Request, Response
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import delete, or_, select
 
 from ..auth import as_utc, create_access_token, hash_password, utcnow, verify_password
 from ..db.database import AsyncSessionLocal
@@ -47,7 +47,15 @@ async def _issue_tokens(user: User, response: Response) -> dict:
     async with AsyncSessionLocal() as session:
         session.add(RefreshToken(id=str(uuid.uuid4()), user_id=user.id, token_hash=hashlib.sha256(token.encode()).hexdigest(), expires_at=utcnow() + timedelta(days=settings.auth_refresh_token_days)))
         await session.commit()
-    response.set_cookie("refresh_token", token, httponly=True, secure=settings.app_env != "local", samesite="strict", max_age=settings.auth_refresh_token_days * 86400, path="/auth")
+    response.set_cookie(
+        "refresh_token",
+        token,
+        httponly=True,
+        secure=settings.app_env.lower() not in {"local", "test", "development"},
+        samesite="strict",
+        max_age=settings.auth_refresh_token_days * 86400,
+        path="/auth",
+    )
     return {"access_token": create_access_token(user), "token_type": "bearer", "user": _view(user)}
 
 
@@ -86,13 +94,28 @@ async def login(body: Credentials, response: Response, request: Request):
 
 
 @router.post("/refresh")
-async def refresh(response: Response, refresh_token: str | None = Cookie(default=None)):
+async def refresh(request: Request, response: Response, refresh_token: str | None = Cookie(default=None)):
+    enforce_rate_limit(request, "refresh", limit=20, window_seconds=15 * 60)
     if not refresh_token:
         raise HTTPException(status_code=401, detail="Refresh token is missing.")
     token_hash = hashlib.sha256(refresh_token.encode()).hexdigest()
     async with AsyncSessionLocal() as session:
-        stored = await session.scalar(select(RefreshToken).where(RefreshToken.token_hash == token_hash))
+        now = utcnow()
+        await session.execute(
+            delete(RefreshToken).where(
+                or_(
+                    RefreshToken.expires_at <= now,
+                    RefreshToken.revoked_at <= now - timedelta(days=1),
+                )
+            )
+        )
+        stored = await session.scalar(
+            select(RefreshToken)
+            .where(RefreshToken.token_hash == token_hash)
+            .with_for_update()
+        )
         if not stored or stored.revoked_at or as_utc(stored.expires_at) <= utcnow():
+            await session.commit()
             raise HTTPException(status_code=401, detail="Refresh token is invalid or expired.")
         user = await session.get(User, stored.user_id)
         if not user or not user.is_active:
@@ -103,7 +126,8 @@ async def refresh(response: Response, refresh_token: str | None = Cookie(default
 
 
 @router.post("/logout", status_code=204)
-async def logout(response: Response, refresh_token: str | None = Cookie(default=None)):
+async def logout(request: Request, response: Response, refresh_token: str | None = Cookie(default=None)):
+    enforce_rate_limit(request, "logout", limit=30, window_seconds=15 * 60)
     if refresh_token:
         async with AsyncSessionLocal() as session:
             stored = await session.scalar(select(RefreshToken).where(RefreshToken.token_hash == hashlib.sha256(refresh_token.encode()).hexdigest()))

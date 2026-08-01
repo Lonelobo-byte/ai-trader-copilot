@@ -19,6 +19,7 @@ def _settings(**overrides) -> Settings:
         "app_env": "test",
         "multi_venue_symbols": ["BTCUSDT"],
         "multi_venue_max_symbols": 12,
+        "multi_venue_symbol_idle_seconds": 0.0,
         "multi_venue_book_levels": 20,
         "multi_venue_max_events": 100,
         "multi_venue_min_book_levels": 1,
@@ -153,7 +154,7 @@ def test_trade_ids_are_deduplicated() -> None:
     assert flow["buy_notional"] == 100.0
 
 
-def test_single_qualified_source_produces_low_confidence_actual_flow() -> None:
+def test_single_qualified_source_is_observed_but_not_publication_qualified() -> None:
     hub = ExecutionTapeHub(_settings())
     _connect(hub, "binance_spot")
     hub.process_binance_message(
@@ -171,7 +172,29 @@ def test_single_qualified_source_produces_low_confidence_actual_flow() -> None:
     assert result["actual_flow"]["status"] == "BUYING_CONFIRMED"
     assert result["actual_flow"]["confidence"] == "LOW"
     assert result["actual_flow"]["cross_market_alignment"] == "SPOT_ONLY"
-    assert result["required_source_count"] == 1
+    assert result["required_source_count"] == 2
+    assert result["publication_flow_confirmed"] is False
+
+
+def test_two_sources_from_one_exchange_are_not_two_venue_publication_proof() -> None:
+    hub = ExecutionTapeHub(_settings())
+    for source in ("binance_spot", "binance_perp"):
+        _connect(hub, source)
+        hub.process_binance_message(
+            source,
+            _binance_trade(trade_id=1, maker_buyer=False, price="100"),
+            now=101.0,
+        )
+        hub.process_binance_message(
+            source,
+            _binance_trade(trade_id=2, maker_buyer=False, price="101"),
+            now=102.0,
+        )
+    result = hub.snapshot("BTCUSDT", now=103.0)
+    assert result["actual_flow"]["qualified_source_count"] == 2
+    assert result["actual_flow"]["qualified_venue_count"] == 1
+    assert result["publication_flow_confirmed"] is False
+    assert result["status"] == "PARTIAL"
 
 
 def test_spot_perpetual_agreement_raises_confidence_without_becoming_a_gate() -> None:
@@ -317,6 +340,22 @@ def test_invalid_symbols_are_not_registered() -> None:
     assert hub.ensure_symbol("../BTCUSDT")["registered"] is False
 
 
+def test_active_symbols_are_not_evicted_by_registration_churn() -> None:
+    hub = ExecutionTapeHub(
+        _settings(
+            multi_venue_symbols=["BTCUSDT"],
+            multi_venue_max_symbols=2,
+            multi_venue_symbol_idle_seconds=60.0,
+        )
+    )
+    assert hub.ensure_symbol("ETHUSDT")["registered"] is True
+    hub.snapshot("BTCUSDT")
+    result = hub.ensure_symbol("SOLUSDT")
+    assert result["registered"] is False
+    assert result["reason"] == "active_symbol_capacity_reached"
+    assert set(hub.symbols) == {"BTCUSDT", "ETHUSDT"}
+
+
 def test_production_rejects_non_tls_public_feed_endpoints() -> None:
     with pytest.raises(ValueError, match="wss"):
         ExecutionTapeHub(
@@ -394,7 +433,7 @@ def test_live_tape_overrides_conflicting_legacy_taker_ratio() -> None:
     assert candidate["status"] == "LIVE_CONFIRMATION_REJECTED"
 
 
-def test_confirmed_tape_can_replace_missing_legacy_ratio() -> None:
+def test_single_source_tape_cannot_replace_missing_publication_ratio() -> None:
     tape = {
         "actual_flow": {
             "available": True,
@@ -414,11 +453,11 @@ def test_confirmed_tape_can_replace_missing_legacy_ratio() -> None:
     live["taker_buy_sell_ratio"] = None
     apply_live_confirmation(candidate, live)
     checks = candidate["advanced_confirmation"]["checks"]
-    assert checks["actual_flow_aligned"] is True
-    assert checks["execution_evidence_confirmed"] is True
+    assert checks["actual_flow_aligned"] is False
+    assert checks["execution_evidence_confirmed"] is False
     # Quote cancellation risk remains visible but is not a publication veto.
     assert "displayed_liquidity_stable" not in candidate["advanced_confirmation"]["required_checks"]
-    assert candidate["status"] == "LIVE_CONFIRMED_REVIEW"
+    assert candidate["status"] == "LIVE_CONFIRMATION_REJECTED"
 
 
 def test_absorbed_aggression_is_not_directional_confirmation() -> None:

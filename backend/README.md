@@ -2,7 +2,9 @@
 
 The primary decision path now uses the evidence-driven institutional committee
 described in [ARCHITECTURE.md](ARCHITECTURE.md). Specialist analysis and vetoes
-are deterministic; the optional CIO model is limited to memorandum synthesis.
+are deterministic; the CIO model is limited to memorandum synthesis. A
+deterministic fallback is labelled watch-only, and new signal publication
+requires a successful final AI synthesis by default.
 
 A research-first market-analysis platform for discovering, validating, and monitoring statistical trading edges. It does **not** produce deterministic BUY/SELL commands and never submits exchange orders.
 
@@ -31,8 +33,8 @@ The signal path and research path now share a single market-intelligence snapsho
 
 The platform exposes a hypothesis registry and a minimum viable validation primitive:
 
-- `GET /research/alpha/hypotheses` lists research hypotheses and their required raw data.
-- `POST /research/alpha/validate` accepts aligned `feature` and `future_returns` series and reports train/test information coefficients, held-out t-statistic, and edge-stability ratio.
+- `GET /alpha/hypotheses` lists research hypotheses and their required raw data.
+- `POST /alpha/validate` accepts aligned `feature` and `future_returns` series and reports train/test information coefficients, held-out t-statistic, and edge-stability ratio.
 
 This is intentionally conservative. A candidate must subsequently pass purged walk-forward validation, realistic transaction-cost and capacity analysis, cross-instrument/regime checks, and multiple-testing controls before it is registered for allocation.
 

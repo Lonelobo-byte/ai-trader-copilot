@@ -6,7 +6,10 @@ const accessToken = () => sessionStorage.getItem('atc_access_token') || '';
 const originalFetch = window.fetch.bind(window);
 window.fetch = (input, init = {}) => {
   const url = typeof input === 'string' ? input : input.url;
-  if (url.startsWith('/auth/')) return originalFetch(input, init);
+  const resolved = new URL(url, window.location.href);
+  if (resolved.origin !== window.location.origin || resolved.pathname.startsWith('/auth/')) {
+    return originalFetch(input, init);
+  }
   const headers = new Headers(init.headers || (typeof input !== 'string' ? input.headers : undefined));
   const token = accessToken();
   if (token) headers.set('Authorization', `Bearer ${token}`);
@@ -14,6 +17,7 @@ window.fetch = (input, init = {}) => {
 };
 
 let tokenRefreshTimer = null;
+let tokenRefreshInFlight = null;
 
 function tokenExpiresWithin(token, seconds) {
   try {
@@ -27,17 +31,24 @@ function tokenExpiresWithin(token, seconds) {
 async function ensureFreshAccessToken() {
   const current = accessToken();
   if (current && !tokenExpiresWithin(current, 60)) return current;
-  const response = await originalFetch('/auth/refresh', { method: 'POST' });
-  if (!response.ok) {
-    sessionStorage.removeItem('atc_access_token');
-    window.location.reload();
-    throw new Error('Your session expired. Please sign in again.');
+  if (tokenRefreshInFlight) return tokenRefreshInFlight;
+  tokenRefreshInFlight = (async () => {
+    const response = await originalFetch('/auth/refresh', { method: 'POST' });
+    if (!response.ok) {
+      sessionStorage.removeItem('atc_access_token');
+      throw new Error('Your session expired. Please sign in again.');
+    }
+    const data = await response.json();
+    sessionStorage.setItem('atc_access_token', data.access_token);
+    scheduleAccessTokenRefresh(data.access_token);
+    window.dispatchEvent(new CustomEvent('atc:token-refreshed', { detail: { token: data.access_token } }));
+    return data.access_token;
+  })();
+  try {
+    return await tokenRefreshInFlight;
+  } finally {
+    tokenRefreshInFlight = null;
   }
-  const data = await response.json();
-  sessionStorage.setItem('atc_access_token', data.access_token);
-  scheduleAccessTokenRefresh(data.access_token);
-  window.dispatchEvent(new CustomEvent('atc:token-refreshed', { detail: { token: data.access_token } }));
-  return data.access_token;
 }
 
 function scheduleAccessTokenRefresh(token) {
@@ -641,6 +652,9 @@ function renderCioMemorandum(data, ai, decision, confidence) {
   const riskWarnings = Array.isArray(ai.risk_warnings) ? ai.risk_warnings : [];
   const failedGate = data.failed_gate || liveConfirmation.reason || riskWarnings[0] || '';
   const livePassed = liveConfirmation.passed === true;
+  const provenance = data.ai_provenance || ai.ai_provenance || {};
+  const approval = data.approval || data.analysis_snapshot?.execution?.approval || {};
+  const aiValidated = approval.ai_validated === true;
   const grade = data.trade_grade || ai.trade_grade || '—';
   const thesis = ai.explanation || ai.summary || (normalizedDecision === 'HOLD'
     ? 'The committee has not established a tradeable imbalance with sufficient evidence.'
@@ -658,14 +672,17 @@ function renderCioMemorandum(data, ai, decision, confidence) {
   if (aiConfidenceVal) aiConfidenceVal.textContent = Number.isFinite(Number(confidence)) ? Math.round(Number(confidence)) : '—';
   if (cioThesis) cioThesis.textContent = thesis;
   if (cioMemoStatus) {
-    cioMemoStatus.textContent = macro.active ? 'MACRO RESTRICTED' : (livePassed ? 'LIVE CHECK PASSED' : 'RESEARCH / MANUAL CHECK');
-    cioMemoStatus.className = `cio-memo-status ${macro.active || !livePassed ? 'caution' : 'verified'}`;
+    cioMemoStatus.textContent = macro.active
+      ? 'MACRO RESTRICTED'
+      : aiValidated && livePassed ? 'AI + LIVE VERIFIED' : 'DETERMINISTIC WATCH';
+    cioMemoStatus.className = `cio-memo-status ${macro.active || !livePassed || !aiValidated ? 'caution' : 'verified'}`;
   }
 
   if (cioControlStrip) {
     const controls = [
       { label: 'Live confirmation', value: livePassed ? 'Confirmed' : (liveConfirmation.quality_badge || 'Manual review'), tone: livePassed ? 'ok' : 'caution' },
       { label: 'Macro control', value: macro.active ? (macro.reason || 'Block active') : 'No active block', tone: macro.active ? 'risk' : 'ok' },
+      { label: 'Final AI validation', value: aiValidated ? `${provenance.provider || 'AI'} · validated` : 'Not used · watch only', tone: aiValidated ? 'ok' : 'caution' },
       { label: 'Committee control', value: failedGate || 'No hard blocker reported', tone: failedGate ? 'caution' : 'ok' },
     ];
     cioControlStrip.innerHTML = controls.map(control => `
@@ -1441,9 +1458,11 @@ function stopLoaderAnimation() {
 // Live WebSockets control & user disconnect intent tracking
 let userIntentDisconnect = true;
 let reconnectTimer = null;
+let reconnectAttempts = 0;
 
 function disconnectStream() {
   userIntentDisconnect = true;
+  reconnectAttempts = 0;
   if (reconnectTimer) {
     clearTimeout(reconnectTimer);
     reconnectTimer = null;
@@ -1488,7 +1507,7 @@ function updateConnectionUI(connected) {
         <div class="loader-line blinking">[ APEX NETWORK LINK ACTIVE ]</div>
         <div class="loader-line" style="color: var(--neon-gold); margin: 0.25rem 0;">[ SYNCING QUANT MARKET FEEDS... ]</div>
         <div class="loader-line">[ INGESTING LIQUIDITY GUARDRAILS ]</div>
-        <div class="loader-line" style="color: var(--neon-purple); margin: 0.25rem 0;">[ CONVENING 9 MULTI-AGENT ANALYSTS ]</div>
+        <div class="loader-line" style="color: var(--neon-purple); margin: 0.25rem 0;">[ ASSEMBLING INDEPENDENT EVIDENCE ENGINES ]</div>
         <div class="progress-bar-container">
           <div class="progress-bar-fill"></div>
         </div>
@@ -1502,7 +1521,7 @@ function updateConnectionUI(connected) {
     reportMdRender.innerHTML = `
       <div class="scifi-loading-console" style="width: 100%; margin: 0.5rem 0;">
         <div class="loader-line blinking">[ ESTABLISHING SECURE INTEL STREAM ]</div>
-        <div class="loader-line" style="color: var(--neon-gold); margin: 0.25rem 0;">[ GENERATING SMC STRATEGIST SCHEMAS... ]</div>
+        <div class="loader-line" style="color: var(--neon-gold); margin: 0.25rem 0;">[ VERIFYING STRUCTURE, FLOW AND POSITIONING... ]</div>
         <div class="loader-line">[ DRAFTING CHIEF INVESTMENT REPORT ]</div>
         <div class="progress-bar-container">
           <div class="progress-bar-fill"></div>
@@ -1645,13 +1664,14 @@ async function startStream(symbol, timeframe, useAi) {
   socket = new WebSocket(wsUrl, ['atc-auth', token]);
 
   socket.onopen = () => {
+    reconnectAttempts = 0;
     logMsg('WebSocket connection active.', 'system');
     updateConnectionUI(true);
 
     // Subscribe
     const subPayload = { symbol, timeframe, use_ai: useAi };
     socket.send(JSON.stringify(subPayload));
-    logMsg(`Subscribed to ${symbol} [${timeframe}]. AI review convened.`, 'ws-send');
+    logMsg(`Subscribed to ${symbol} [${timeframe}]. Evidence review convened.`, 'ws-send');
   };
 
   socket.onmessage = (event) => {
@@ -1659,11 +1679,12 @@ async function startStream(symbol, timeframe, useAi) {
       const payload = JSON.parse(event.data);
       if (payload.error) {
         const capacityError = payload.code === 'research_capacity_exceeded';
+        const retryable = payload.code === 'research_temporarily_unavailable';
         logMsg(capacityError ? `Research capacity reached: ${payload.error}` : `Server Error: ${payload.error}`, 'error');
-        if (capacityError) window.showAppToast?.(payload.error, 'error');
-        userIntentDisconnect = true;
+        window.showAppToast?.(payload.error, retryable ? 'warning' : 'error');
+        userIntentDisconnect = !retryable;
         if (socket) {
-          socket.close(1000, "Server error reported");
+          socket.close(retryable ? 1013 : 1000, "Server error reported");
         }
         return;
       }
@@ -1692,14 +1713,17 @@ async function startStream(symbol, timeframe, useAi) {
     socket = null;
     updateConnectionUI(false);
     logMsg(`WebSocket closed (code ${event.code}${event.reason ? `: ${event.reason}` : ''}).`, event.code === 1000 ? 'system' : 'error');
-    // Only attempt reconnect if the user did NOT intentionally disconnect
-    if (!userIntentDisconnect && !event.wasClean) {
-      logMsg('Connection dropped unexpectedly. Reconnecting in 5s...', 'error');
+    const terminalCode = [4400, 4403, 4429].includes(event.code);
+    if (!userIntentDisconnect && !terminalCode) {
+      reconnectAttempts += 1;
+      const baseDelay = event.code === 4401 ? 500 : Math.min(30_000, 1_000 * (2 ** Math.min(reconnectAttempts, 5)));
+      const delay = Math.round(baseDelay * (0.8 + Math.random() * 0.4));
+      logMsg(`Live connection paused. Reconnecting in ${Math.max(1, Math.round(delay / 1000))}s...`, 'error');
       reconnectTimer = setTimeout(() => {
         if (!userIntentDisconnect && socket === null) {
           startStream(symbol, timeframe, useAi);
         }
-      }, 5000);
+      }, delay);
     }
   };
 
@@ -2093,9 +2117,10 @@ function renderConfirmationEvidence(data) {
   );
   const confidence = String(actualFlow.confidence || 'UNAVAILABLE').toUpperCase();
   const sourceCount = Number(actualFlow.qualified_source_count || 0);
+  const venueCount = Number(actualFlow.qualified_venue_count || 0);
   setTapeValue(
     tapeConfidenceValue,
-    `${confidence} · ${sourceCount}/4 SOURCES`,
+    `${confidence} · ${sourceCount}/4 SOURCES · ${venueCount}/2 VENUES`,
     confidence === 'HIGH' ? 'positive' : confidence === 'MEDIUM' ? 'warning' : 'neutral',
   );
   const capacity = lc.live_evidence?.execution_capacity || {};
@@ -2120,7 +2145,7 @@ function renderConfirmationEvidence(data) {
     tapeEvidenceNote.textContent = networkStatus === 'SUBSCRIBING'
       ? 'The selected market was registered automatically. Binance and Bybit spot/perpetual feeds are warming one shared server-side tape.'
       : flowAvailable
-        ? `${sourceCount}/4 sources are flow-qualified. Spot/perpetual agreement changes confidence; it is not a mandatory venue gate.`
+        ? `${sourceCount}/4 sources across ${venueCount}/2 venues are flow-qualified. Partial flow stays visible; publication requires Binance + Bybit without cross-venue disagreement.`
         : 'Live aggressor evidence is partial or warming. The system keeps it unknown instead of treating missing flow as neutral.';
   }
 }

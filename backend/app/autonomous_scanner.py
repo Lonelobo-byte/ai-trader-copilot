@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from typing import Any
 from sqlalchemy import select, text
 
-from app.brains.council import run_ai_council
+from app.brains.council import finalize_ai_council_validation, run_ai_council
 from app.brains.signal_builder import build_ai_driven_trade_setup, evaluate_ai_driven_approval
 from app.data_sources.data_aggregator import (
     attach_live_execution_tape_snapshot,
@@ -221,7 +221,13 @@ async def run_single_symbol_scan(symbol: str, timeframe: str, settings: Any) -> 
         # gate used by the main research workspace before anything can enter
         # the shared signal ledger.
         intelligence = await fetch_market_intelligence(symbol, timeframe, settings)
-        cio_result = await run_ai_council(symbol, timeframe, settings, intelligence=intelligence)
+        cio_result = await run_ai_council(
+            symbol,
+            timeframe,
+            settings,
+            intelligence=intelligence,
+            defer_ai_validation=True,
+        )
         # Council work can outlive the feed freshness window. Refresh the
         # process-shared evidence immediately before the publication gate so
         # stale flow cannot confirm or veto a signal.
@@ -243,9 +249,29 @@ async def run_single_symbol_scan(symbol: str, timeframe: str, settings: Any) -> 
             multi_venue=intelligence.get("execution_tape", {}) or {},
             planned_notional_usd=(trade_setup.get("position") or {}).get("notional_usd"),
         )
-
-        # Evaluate approval
-        approval = evaluate_ai_driven_approval(cio_result, trade_setup)
+        # Code-owned gates are cheaper and non-overridable. Do not spend a
+        # provider request on a candidate that already failed structure,
+        # live-flow, risk, data-quality, or trade-plan controls.
+        preliminary_approval = evaluate_ai_driven_approval(
+            cio_result,
+            trade_setup,
+            require_ai_validation=False,
+        )
+        if preliminary_approval["approved"] and settings.require_ai_for_signal_publication:
+            cio_result = await finalize_ai_council_validation(
+                cio_result,
+                trade_setup,
+                cio_result["live_confirmation"],
+                settings,
+            )
+            trade_setup = build_ai_driven_trade_setup(cio_result, features, settings)
+            approval = evaluate_ai_driven_approval(
+                cio_result,
+                trade_setup,
+                require_ai_validation=True,
+            )
+        else:
+            approval = preliminary_approval
         observation = _scanner_observation(
             symbol=symbol,
             timeframe=timeframe,

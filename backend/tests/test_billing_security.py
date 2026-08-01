@@ -108,6 +108,14 @@ def test_currency_picker_uses_only_merchant_checked_coins() -> None:
     assert currencies[1]["name"] == "Tether USD"
 
 
+def test_currency_logo_url_rejects_non_provider_origins() -> None:
+    assert billing._nowpayments_logo_url("javascript:alert(1)") is None
+    assert billing._nowpayments_logo_url("https://tracker.example/coin.svg") is None
+    assert billing._nowpayments_logo_url("/images/coins/btc.svg") == (
+        "https://nowpayments.io/images/coins/btc.svg"
+    )
+
+
 def test_checkout_rejects_a_plan_below_the_selected_asset_minimum() -> None:
     with (
         patch(

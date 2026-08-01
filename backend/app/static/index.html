@@ -1383,6 +1383,12 @@
         paymentModal.setAttribute('aria-hidden', 'false');
         requestAnimationFrame(() => paymentModal.classList.add('motion-open'));
       };
+      const readApiPayload = async (response) => {
+        const raw = await response.text();
+        if (!raw) return {};
+        try { return JSON.parse(raw); }
+        catch { return { detail: raw.slice(0, 500) || `Request failed with HTTP ${response.status}.` }; }
+      };
       const loadPaymentCurrencies = async (plan, currency, token) => {
         openPaymentModal(plan, currency, token);
         document.getElementById('payment-loading-title').textContent = 'Loading enabled payment assets';
@@ -1390,7 +1396,7 @@
         setPaymentWorkspace('loading');
         try {
           const response = await fetch(`/billing/payment-currencies?plan_code=${encodeURIComponent(plan.code)}`, { headers: { 'Authorization': `Bearer ${token}` } });
-          const data = await response.json();
+          const data = await readApiPayload(response);
           if (!response.ok) throw new Error(data.detail || 'Could not load payment currencies.');
           const currencies = Array.isArray(data.currencies) ? data.currencies : [];
           if (!currencies.length) throw new Error('No enabled payment currencies are available right now.');
@@ -1426,9 +1432,7 @@
             headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${checkoutToken}` },
             body: JSON.stringify({ plan_code: selectedPlan.code, pay_currency: payCurrency })
           });
-          const raw = await response.text();
-          let payment = {};
-          try { payment = raw ? JSON.parse(raw) : {}; } catch { payment = { detail: raw || `Checkout failed with HTTP ${response.status}.` }; }
+          const payment = await readApiPayload(response);
           if (!response.ok) throw new Error(payment.detail || 'Checkout is unavailable.');
           renderPaymentInstructions(payment);
           checkoutInProgress = false;
@@ -1477,7 +1481,8 @@
         const options = document.getElementById('plan-options'), planError = document.getElementById('plan-error');
         checkoutInProgress = false;
         try {
-          const response = await fetch('/billing/plans'); const data = await response.json();
+          const response = await fetch('/billing/plans'); const data = await readApiPayload(response);
+          if (!response.ok) throw new Error(data.detail || 'Plans are temporarily unavailable.');
           if (!data.checkout_available) { planError.textContent = data.checkout_message || 'Checkout is temporarily unavailable.'; return; }
           const planLabels = { monthly: 'Monthly', quarterly: 'Quarterly', half_yearly: 'Half-yearly', annual: 'Annual' };
           const planNotes = {
@@ -1523,9 +1528,9 @@
         try {
           const r = await fetch('/billing/payment-status', { headers: { 'Authorization': `Bearer ${token}` } });
           if (r.status === 401) return restore(true);
-          const d = await r.json();
+          const d = await readApiPayload(r);
           if (!r.ok) throw new Error(d.detail || 'Could not verify the payment.');
-          const subscription = d.payment?.subscription;
+          const subscription = d.active_subscription || d.payment?.subscription;
           if (subscription?.active) {
             if (paymentPollTimer) clearTimeout(paymentPollTimer);
             paymentPollTimer = null;
@@ -1546,6 +1551,10 @@
           paymentPollTimer = setTimeout(() => waitForPayment(token, attempts + 1), 5000);
         } catch (err) {
           planError.textContent = err.message || 'Could not verify the payment yet. Please refresh shortly.';
+          if (attempts < 30) {
+            const retryDelay = Math.min(15000, 5000 + attempts * 500);
+            paymentPollTimer = setTimeout(() => waitForPayment(token, attempts + 1), retryDelay);
+          }
         }
       };
       const routeAfterAuth = async (token, wasRefreshed = false) => {
@@ -1555,7 +1564,7 @@
             sessionStorage.removeItem('atc_access_token');
             return wasRefreshed ? showLogin('Your session expired. Please sign in again.') : restore(true);
           }
-          const d = await r.json();
+          const d = await readApiPayload(r);
           if (!r.ok) throw new Error('Could not verify your account.');
           // The server is the entitlement authority.  In local/test mode it
           // may deliberately grant access with subscription enforcement off;
@@ -1577,7 +1586,7 @@
         try {
           const r = await fetch('/auth/refresh', { method: 'POST' });
           if (!r.ok) return showLogin(expiredSession ? 'Your session expired. Please sign in again.' : '');
-          const d = await r.json(); sessionStorage.setItem('atc_access_token', d.access_token); routeAfterAuth(d.access_token, true);
+          const d = await readApiPayload(r); sessionStorage.setItem('atc_access_token', d.access_token); routeAfterAuth(d.access_token, true);
         } catch (_) { showLogin('Could not restore your session. Please sign in again.'); }
       };
       // Always mint a fresh short-lived token from the HttpOnly refresh cookie
@@ -1589,7 +1598,7 @@
         event.preventDefault(); error.textContent = ''; submit.disabled = true;
         try {
           const r = await fetch(register ? '/auth/register' : '/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: document.getElementById('auth-email').value, password: document.getElementById('auth-password').value }) });
-          const d = await r.json(); if (!r.ok) throw new Error(d.detail || 'Could not authenticate.');
+          const d = await readApiPayload(r); if (!r.ok) throw new Error(d.detail || 'Could not authenticate.');
           sessionStorage.setItem('atc_access_token', d.access_token); routeAfterAuth(d.access_token);
         } catch (e) { error.textContent = e.message; } finally { submit.disabled = false; }
       };

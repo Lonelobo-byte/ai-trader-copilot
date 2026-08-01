@@ -1540,6 +1540,7 @@
       </div>
     </header>
 
+    <template id="legacy-radar-layout">
     <main class="radar-container flight-deck-container">
       <!-- SUMMARY BANNER CARDS -->
       <div class="radar-summary-cards">
@@ -1672,6 +1673,8 @@
         <div class="research-brief-list" id="research-brief-list"></div>
       </section>
     </main>
+    </template>
+    <main class="radar-container flight-deck-container"></main>
 
     <!-- AI VERIFICATION OVERLAY MODAL -->
     <div class="modal-overlay" id="ai-modal-overlay">
@@ -1687,9 +1690,9 @@
     </div>
 
     <script>
-      // The source keeps the legacy table as a no-JavaScript fallback. The
-      // interactive surface is rebuilt into the approved Causal Flight Deck
-      // before any Radar state or DOM references are initialized.
+      // Mount only the approved Causal Flight Deck. The archived table source
+      // lives in an inert template, so it cannot create duplicate IDs or cost
+      // an unnecessary browser layout before being replaced.
       const radarContainer = document.querySelector('main.radar-container');
       radarContainer.innerHTML = `
         <section class="flight-deck" aria-label="Causal Flight Deck">
@@ -1751,6 +1754,7 @@
             </section>
           </div>
         </section>`;
+      document.getElementById('legacy-radar-layout')?.remove();
 
       // State management
       let activeFilter = 'all';
@@ -1763,6 +1767,9 @@
       let nextRadarRefreshAtMs = 0;
       let radarServerClockOffsetMs = 0;
       let isFetchingRadar = false;
+      let radarSnapshotStale = false;
+      let radarSnapshotAtMs = 0;
+      let radarFailureCount = 0;
 
       function setResearchButtonState(state = 'READY') {
         const button = document.getElementById('ai-radar-btn');
@@ -1771,10 +1778,11 @@
         const building = state === 'BUILDING';
         const empty = state === 'EMPTY';
         const scanning = state === 'SCANNING';
+        const stale = state === 'STALE';
         const ready = radarScanReady && rawBreakouts.length > 0 && !building;
         button.disabled = !ready;
-        button.title = ready ? 'Refresh the top three Radar research briefs' : scanning ? 'Radar is scanning for current market contexts' : empty ? 'No eligible Radar contexts were found in this scan' : 'Wait for Radar to finish its scan';
-        badge.textContent = building ? 'BUILDING' : scanning ? 'SCANNING' : empty ? 'NO SETUPS' : ready ? 'READY' : 'WAITING';
+        button.title = ready ? 'Refresh the top three Radar research briefs' : stale ? 'Research is locked until the shared snapshot is current' : scanning ? 'Radar is scanning for current market contexts' : empty ? 'No eligible Radar contexts were found in this scan' : 'Wait for Radar to finish its scan';
+        badge.textContent = building ? 'BUILDING' : scanning ? 'SCANNING' : stale ? 'REFRESHING' : empty ? 'NO SETUPS' : ready ? 'READY' : 'WAITING';
         badge.style.color = building || scanning ? 'var(--neon-blue)' : empty ? 'var(--text-muted)' : ready ? 'var(--neon-green)' : 'var(--neon-gold)';
         badge.style.borderColor = building || scanning ? 'rgba(62,151,255,.35)' : empty ? 'rgba(255,255,255,.16)' : ready ? 'rgba(80,205,137,.35)' : 'rgba(241,188,0,.35)';
       }
@@ -1835,6 +1843,13 @@
       // here and retry one premium request after a refresh.
       const radarOriginalFetch = window.fetch.bind(window);
       const radarAccessToken = () => sessionStorage.getItem('atc_access_token') || '';
+      let radarRefreshInFlight = null;
+      async function radarReadApiPayload(response) {
+        const raw = await response.text();
+        if (!raw) return {};
+        try { return JSON.parse(raw); }
+        catch (_) { return { detail: raw.slice(0, 500) || `Request failed with HTTP ${response.status}.` }; }
+      }
       function radarTokenExpiresWithin(token, seconds = 60) {
         try {
           const payload = JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
@@ -1844,14 +1859,19 @@
         }
       }
       async function refreshRadarToken() {
-        const response = await radarOriginalFetch('/auth/refresh', { method: 'POST', credentials: 'same-origin' });
-        if (!response.ok) {
-          sessionStorage.removeItem('atc_access_token');
-          throw new Error('Your Radar session expired. Please sign in again.');
-        }
-        const data = await response.json();
-        sessionStorage.setItem('atc_access_token', data.access_token);
-        return data.access_token;
+        if (radarRefreshInFlight) return radarRefreshInFlight;
+        radarRefreshInFlight = (async () => {
+          const response = await radarOriginalFetch('/auth/refresh', { method: 'POST', credentials: 'same-origin' });
+          const data = await radarReadApiPayload(response);
+          if (!response.ok) {
+            sessionStorage.removeItem('atc_access_token');
+            throw new Error(data.detail || 'Your Radar session expired. Please sign in again.');
+          }
+          sessionStorage.setItem('atc_access_token', data.access_token);
+          return data.access_token;
+        })();
+        try { return await radarRefreshInFlight; }
+        finally { radarRefreshInFlight = null; }
       }
       async function ensureRadarAccessToken(forceRefresh = false) {
         const token = radarAccessToken();
@@ -1877,7 +1897,7 @@
         return radarOriginalFetch(url, { ...options, headers, credentials: 'same-origin', cache: 'no-store' });
       }
       // Render breakout records
-      function renderTable() {
+      function renderLegacyBreakoutTable() {
         stopRadarEvidenceLoading();
         const filtered = rawBreakouts.filter(item => {
           if (activeFilter === 'recommended') {
@@ -2171,7 +2191,7 @@
         </section>`;
       }
 
-      function renderTable() {
+      function renderLegacyCausalTable() {
         const filtered = rawBreakouts.filter(item => {
           if (activeFilter === 'recommended') return item.review_status === 'REVIEW_CANDIDATE';
           if (activeFilter === 'bullish') return item.direction === 'BULLISH';
@@ -2409,7 +2429,7 @@
             <p class="flight-opportunity-thesis">${escapeResearch(thesis)}</p>
             <div class="flight-opportunity-footer">
               <span class="flight-coverage">EVIDENCE ${coverage.available_domains || 0}/${coverage.required_domains || 4} DOMAINS · ${story.age ?? '—'} BARS</span>
-              <button class="flight-review-inline" type="button" data-review-symbol="${escapeResearch(item.symbol)}">Review</button>
+              <button class="flight-review-inline" type="button" data-review-symbol="${escapeResearch(item.symbol)}" ${radarSnapshotStale ? 'disabled title="Waiting for a current shared snapshot"' : ''}>Review</button>
             </div>
           </article>`;
         }).join('');
@@ -2428,6 +2448,7 @@
         recordsTbody.querySelectorAll('[data-review-symbol]').forEach(button => {
           button.addEventListener('click', event => {
             event.stopPropagation();
+            if (radarSnapshotStale) return;
             selectRadarOpportunity(button.dataset.reviewSymbol);
             verifySetupWithAI(button.dataset.reviewSymbol);
           });
@@ -2436,7 +2457,7 @@
       }
 
       // Trigger causal review modal
-      async function verifySetupWithAI(symbol) {
+      async function verifyLegacySetupWithAI(symbol) {
         modalTitleSymbol.textContent = `AI SMC structure analysis: ${symbol}`;
         modalOverlay.classList.add('active');
         modalBodyContent.innerHTML = `
@@ -2454,7 +2475,7 @@
             body: JSON.stringify({ symbol })
           });
 
-          const data = await response.json();
+          const data = await radarReadApiPayload(response);
           if (!response.ok) throw new Error(data.detail || 'AI Verification query failed.');
 
           renderAIResult(data);
@@ -2463,14 +2484,14 @@
           <div class="radar-empty-state" style="color: var(--neon-red); padding: 2rem 1rem;">
             <span class="icon">⚠️</span>
             <p>Setup Verification Failed</p>
-            <span class="text-muted" style="font-size: 0.8rem; display: block; margin-top: 0.5rem;">${err.message}</span>
+            <span class="text-muted" style="font-size: 0.8rem; display: block; margin-top: 0.5rem;">${escapeResearch(err.message)}</span>
           </div>
         `;
         }
       }
 
       // Render AI setup verification payload
-      function renderAIResult(data) {
+      function renderLegacyAIResult(data) {
         // Normalize underscores to spaces for style matching
         const normalizedVerdict = (data.verdict || '').replace(/_/g, ' ').toUpperCase();
 
@@ -2598,11 +2619,14 @@
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ symbol, ltf, htf }),
           });
-          const data = await response.json();
+          const raw = await response.text();
+          let data = {};
+          try { data = raw ? JSON.parse(raw) : {}; }
+          catch { data = { detail: raw.slice(0, 500) || `Research failed with HTTP ${response.status}.` }; }
           if (!response.ok) throw new Error(data.detail || 'Causal review query failed.');
           renderAIResult(data);
         } catch (err) {
-          modalBodyContent.innerHTML = `<div class="radar-empty-state" style="color:var(--neon-red);padding:2rem 1rem"><span class="icon">⚠</span><p>Causal review failed</p><span class="text-muted" style="font-size:.8rem">${err.message}</span></div>`;
+          modalBodyContent.innerHTML = `<div class="radar-empty-state" style="color:var(--neon-red);padding:2rem 1rem"><span class="icon">⚠</span><p>Causal review failed</p><span class="text-muted" style="font-size:.8rem">${escapeResearch(err.message)}</span></div>`;
         }
       }
 
@@ -2618,12 +2642,12 @@
         const limitations = (data.limitations || []).map(item => `<li>${escapeResearch(item)}</li>`).join('');
         const contradictions = (context.contradictions || []).map(label).join(', ') || 'None reported';
         modalBodyContent.innerHTML = `
-          <div class="ai-verdict-banner ${data.verdict === 'REVIEW_CANDIDATE' ? 'verdict-continuation' : 'verdict-reversal'}"><span>${label(data.verdict)}</span><span>Evidence score: ${data.evidence_score ?? 0}/100</span></div>
-          <div class="ai-levels-grid"><div class="ai-level-item"><span>Regime</span><strong>${label(data.market_structure?.phase)}</strong></div><div class="ai-level-item"><span>Liquidity target</span><strong>${pool}</strong></div><div class="ai-level-item invalid"><span>Contradictions</span><strong>${contradictions}</strong></div></div>
+          <div class="ai-verdict-banner ${data.verdict === 'REVIEW_CANDIDATE' ? 'verdict-continuation' : 'verdict-reversal'}"><span>${escapeResearch(label(data.verdict))}</span><span>Evidence score: ${Number(data.evidence_score || 0)}/100</span></div>
+          <div class="ai-levels-grid"><div class="ai-level-item"><span>Regime</span><strong>${escapeResearch(label(data.market_structure?.phase))}</strong></div><div class="ai-level-item"><span>Liquidity target</span><strong>${escapeResearch(pool)}</strong></div><div class="ai-level-item invalid"><span>Contradictions</span><strong>${escapeResearch(contradictions)}</strong></div></div>
           ${renderRadarStoryDetail(data)}
-          <div class="ai-reasoning-section"><h4>Causal evidence</h4><ul class="ai-reasoning-list"><li>Positioning: ${label(positioning.state)}</li><li>Volume profile: ${label(profile.location)}</li><li>VWAP: ${label(vwap.price_relation)}</li><li>Coverage: ${(context.coverage || {}).available_domains || 0}/${(context.coverage || {}).required_domains || 4} required domains</li></ul></div>
+          <div class="ai-reasoning-section"><h4>Causal evidence</h4><ul class="ai-reasoning-list"><li>Positioning: ${escapeResearch(label(positioning.state))}</li><li>Volume profile: ${escapeResearch(label(profile.location))}</li><li>VWAP: ${escapeResearch(label(vwap.price_relation))}</li><li>Coverage: ${Number((context.coverage || {}).available_domains || 0)}/${Number((context.coverage || {}).required_domains || 4)} required domains</li></ul></div>
           <div class="ai-reasoning-section"><h4>Known limitations</h4><ul class="ai-reasoning-list">${limitations}</ul></div>
-          <p style="font-size:.78rem;color:var(--text-muted);margin:1rem 0 0">${data.trade_instruction || 'Radar does not authorize execution.'}</p>`;
+          <p style="font-size:.78rem;color:var(--text-muted);margin:1rem 0 0">${escapeResearch(data.trade_instruction || 'Radar does not authorize execution.')}</p>`;
       }
 
       function researchLabel(value, fallback = 'UNAVAILABLE') {
@@ -2765,7 +2789,7 @@
                 body: JSON.stringify({ symbol: candidate.symbol, ltf, htf }),
                 signal: controller.signal,
               });
-              const detail = await response.json();
+              const detail = await radarReadApiPayload(response);
               if (!response.ok) throw new Error(detail.detail || 'The current research snapshot could not be refreshed.');
               return { candidate, detail };
             } catch (error) {
@@ -2814,14 +2838,17 @@
           const response = await publicRadarFetch(`/quant/breakout-radar?ltf=${ltf}&htf=${htf}`);
           const responseReceivedAt = Date.now();
           if (!response.ok) {
-            const errData = await response.json().catch(() => ({}));
+            const errData = await radarReadApiPayload(response);
             throw new Error(errData.detail || 'API query failed.');
           }
-          rawBreakouts = await response.json();
+          rawBreakouts = await radarReadApiPayload(response);
           const snapshotState = response.headers.get('X-Radar-Snapshot-State');
           const snapshotAt = response.headers.get('X-Radar-Snapshot-At');
           const nextRefreshAt = response.headers.get('X-Radar-Next-Refresh-At');
           const serverNow = response.headers.get('X-Radar-Server-Time');
+          radarSnapshotStale = snapshotState === 'STALE_REFRESHING';
+          radarSnapshotAtMs = snapshotAt ? Date.parse(snapshotAt) : 0;
+          radarFailureCount = 0;
           const parsedServerNow = serverNow ? Date.parse(serverNow) : NaN;
           if (Number.isFinite(parsedServerNow)) {
             const estimatedServerTimeAtReceipt = parsedServerNow + (responseReceivedAt - requestStartedAt) / 2;
@@ -2840,28 +2867,43 @@
           } else if (snapshotAt) {
             refreshText.textContent = `Shared market snapshot · ${new Date(snapshotAt).toLocaleTimeString()}`;
           }
-          radarScanReady = true;
+          radarScanReady = !radarSnapshotStale;
           clearResearchBriefs();
           renderTable();
           updateSummary();
           if (rawBreakouts.length) {
-            setResearchButtonState();
+            setResearchButtonState(radarSnapshotStale ? 'STALE' : 'READY');
           } else {
             setResearchButtonState('EMPTY');
             showResearchBriefNotice('No eligible Radar contexts', 'The scan completed, but current structure, liquidity, and volatility conditions did not produce a researchable setup. Radar will check again automatically.', 'NO SETUPS');
           }
         } catch (error) {
-          rawBreakouts = [];
+          const hasLastSnapshot = rawBreakouts.length > 0;
           radarScanReady = false;
+          radarSnapshotStale = hasLastSnapshot;
+          if (!hasLastSnapshot) radarSnapshotAtMs = 0;
+          radarFailureCount += 1;
+          const retrySeconds = Math.min(60, 10 * (2 ** Math.min(radarFailureCount - 1, 3)));
+          nextRadarRefreshAtMs = sharedRadarNow() + retrySeconds * 1000;
           console.error('Error loading Radar data:', error);
-          setResearchButtonState();
-          showResearchBriefNotice('Radar scan unavailable', 'Public market discovery could not complete. Check the market-data connection, then let Radar retry.', 'SCAN FAILED');
+          setResearchButtonState(hasLastSnapshot ? 'STALE' : 'EMPTY');
+          if (hasLastSnapshot) {
+            renderTable();
+            updateSummary();
+          }
+          showResearchBriefNotice(
+            hasLastSnapshot ? 'Live refresh unavailable' : 'Radar scan unavailable',
+            hasLastSnapshot
+              ? 'The last shared snapshot remains visible for context, but Research is locked until a fresh server snapshot arrives.'
+              : 'Public market discovery could not complete. Check the market-data connection, then let Radar retry.',
+            hasLastSnapshot ? 'STALE · RESEARCH LOCKED' : 'SCAN FAILED'
+          );
         } finally {
           isFetchingRadar = false;
           stopRadarEvidenceLoading();
           spinner.style.display = 'none';
           spinner.classList.remove('is-active');
-          if (!nextRadarRefreshAtMs) {
+          if (!nextRadarRefreshAtMs || nextRadarRefreshAtMs <= sharedRadarNow()) {
             nextRadarRefreshAtMs = sharedRadarNow() + radarRefreshSeconds(ltf, htf) * 1000;
           }
         }
@@ -2879,7 +2921,7 @@
       });
 
       // Update Summary Header metrics
-      function updateSummary() {
+      function updateLegacySummary() {
         const activeCount = rawBreakouts.filter(item => item.review_status === 'REVIEW_CANDIDATE').length;
         breakoutCountEl.textContent = activeCount;
 
@@ -2942,6 +2984,11 @@
           secondsRemaining = Math.max(0, Math.ceil((nextRadarRefreshAtMs - sharedRadarNow()) / 1000));
           if (secondsRemaining <= 0) {
             fetchBreakouts();
+          } else if (radarSnapshotStale) {
+            const ageSeconds = radarSnapshotAtMs
+              ? Math.max(0, Math.floor((sharedRadarNow() - radarSnapshotAtMs) / 1000))
+              : null;
+            refreshText.textContent = `Refreshing shared snapshot${ageSeconds === null ? '' : ` - ${ageSeconds}s old`} - retry in ${secondsRemaining}s`;
           } else {
             refreshText.textContent = `Refreshes in ${secondsRemaining}s`;
           }
@@ -3033,7 +3080,5 @@
     </script>
   </div>
 </body>
-
-</html>
 
 </html>

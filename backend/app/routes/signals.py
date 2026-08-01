@@ -10,7 +10,7 @@ from ..signal_service import (
     list_signal_history,
     _view as signal_service_view,
 )
-from ..auth import require_admin
+from ..auth import require_active_subscription, require_admin
 from ..db.models import User
 
 router = APIRouter(prefix="/signals", tags=["signals"])
@@ -20,13 +20,13 @@ class SignalCancelRequest(BaseModel):
     reason: str = Field(default="Dismissed by operator.", min_length=1, max_length=300)
 
 
-@router.get("/active")
+@router.get("/active", dependencies=[Depends(require_active_subscription)])
 async def active_signal(symbol: str = "BTCUSDT", timeframe: str = "15m"):
     signal = await get_active_signal(symbol.upper().strip(), timeframe)
     return {"signal": signal_service_view(signal)}
 
 
-@router.get("/history")
+@router.get("/history", dependencies=[Depends(require_active_subscription)])
 async def signal_history(limit: int = 20):
     return {"signals": await list_signal_history(max(1, min(limit, 100)))}
 

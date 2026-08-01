@@ -1,4 +1,4 @@
-import os
+import asyncio
 import logging
 from pathlib import Path
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncAttrs
@@ -18,20 +18,37 @@ DATABASE_URL = get_settings().database_url or f"sqlite+aiosqlite:///{db_path.as_
 
 engine = create_async_engine(DATABASE_URL, echo=False)
 AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False)
+_initialized = False
+_initialization_lock = asyncio.Lock()
 
 class Base(AsyncAttrs, DeclarativeBase):
     pass
 
 async def init_db():
+    global _initialized
+    if _initialized:
+        return
     # Import models to guarantee registration with Base.metadata before creation
     from .models import (
         AnalysisSession, TradeSignal, User, UserAIConnection, Subscription,
         Payment, RefreshToken, AuditEvent, ScannerConfiguration, PlatformAIUsage,
         ResearchSlot, RadarSnapshot,
     )
-    try:
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
-        logger.info("Database initialized successfully.")
-    except Exception as e:
-        logger.error(f"Failed to initialize database: {e}", exc_info=True)
+    async with _initialization_lock:
+        if _initialized:
+            return
+        try:
+            async with engine.begin() as conn:
+                if get_settings().app_env.lower() in {"local", "test", "development"}:
+                    # Local SQLite remains zero-setup. Production schema changes
+                    # are owned exclusively by the Alembic migrate container.
+                    await conn.run_sync(Base.metadata.create_all)
+                else:
+                    await conn.execute(text("SELECT 1"))
+            _initialized = True
+            logger.info("Database readiness verified successfully.")
+        except Exception:
+            # Startup must fail closed. Swallowing this exception let Docker
+            # report a healthy application with an unusable database.
+            logger.exception("Failed to initialize or verify the database.")
+            raise

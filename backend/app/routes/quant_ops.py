@@ -11,7 +11,7 @@ from app.ml.model import train_walk_forward_model, get_weights_filepath
 from app.quant.backtest import run_backtest
 from app.quant.performance_tracker import get_historical_performance_summary
 from app.settings import get_settings
-from app.auth import require_admin
+from app.auth import require_active_subscription, require_admin
 from app.db.models import User
 from app.rate_limit import enforce_rate_limit
 from fastapi import Request
@@ -27,17 +27,17 @@ class BacktestRequest(BaseModel):
 
 
 class TrainRequest(BaseModel):
-    symbol: str = Field(default="BTCUSDT")
-    timeframe: str = Field(default="15m")
+    symbol: str = Field(default="BTCUSDT", min_length=5, max_length=20, pattern=r"^[A-Za-z0-9]+$")
+    timeframe: str = Field(default="15m", pattern=r"^(1m|5m|15m|1h|4h|1d)$")
     candle_limit: int = Field(default=500, ge=100, le=1000)
     train_fraction: float = Field(default=0.7, gt=0.5, lt=0.9)
 
 
 @router.post("/backtest")
-async def post_backtest(req: BacktestRequest, request: Request, _: User = Depends(require_admin)):
+async def post_backtest(req: BacktestRequest, request: Request, user: User = Depends(require_admin)):
     """Replay historical candles through the analysis pipeline and calculate stats."""
     settings = get_settings()
-    enforce_rate_limit(request, "backtest", limit=3, window_seconds=15 * 60)
+    enforce_rate_limit(request, "backtest", limit=3, window_seconds=15 * 60, identity=user.id)
     client = BinancePublicClient(settings.binance_public_base_url)
 
     try:
@@ -56,10 +56,10 @@ async def post_backtest(req: BacktestRequest, request: Request, _: User = Depend
 
 
 @router.post("/train")
-async def post_train_model(req: TrainRequest, request: Request, _: User = Depends(require_admin)):
+async def post_train_model(req: TrainRequest, request: Request, user: User = Depends(require_admin)):
     """Perform walk-forward model training on historical klines and update model weights."""
     settings = get_settings()
-    enforce_rate_limit(request, "model_train", limit=2, window_seconds=60 * 60)
+    enforce_rate_limit(request, "model_train", limit=2, window_seconds=60 * 60, identity=user.id)
     client = BinancePublicClient(settings.binance_public_base_url)
 
     try:
@@ -90,7 +90,7 @@ async def post_train_model(req: TrainRequest, request: Request, _: User = Depend
         raise HTTPException(status_code=500, detail="Model training could not be completed. Check server logs for details.") from exc
 
 
-@router.get("/performance")
+@router.get("/performance", dependencies=[Depends(require_active_subscription)])
 async def get_live_performance():
     """Return the authoritative TradeSignal performance ledger."""
     return await get_historical_performance_summary()

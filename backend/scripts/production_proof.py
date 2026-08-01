@@ -14,6 +14,7 @@ import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
@@ -21,6 +22,7 @@ from urllib.request import Request, urlopen
 
 
 RADAR_PAIRS = (("5m", "1h"), ("15m", "4h"), ("1h", "1d"))
+RADAR_MAX_STALE_SECONDS = {("5m", "1h"): 180, ("15m", "4h"): 720, ("1h", "1d"): 3600}
 
 
 @dataclass
@@ -71,6 +73,18 @@ def _header(headers: dict[str, str], name: str) -> str | None:
     return next((value for key, value in headers.items() if key.lower() == target), None)
 
 
+def _snapshot_age_seconds(value: str | None) -> float | None:
+    if not value:
+        return None
+    try:
+        captured = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if captured.tzinfo is None:
+            captured = captured.replace(tzinfo=timezone.utc)
+        return max(0.0, (datetime.now(timezone.utc) - captured).total_seconds())
+    except ValueError:
+        return None
+
+
 def run_proof(args: argparse.Namespace) -> Proof:
     proof = Proof()
 
@@ -81,6 +95,13 @@ def run_proof(args: argparse.Namespace) -> Proof:
         http_status=status,
         mode=health.get("mode") if isinstance(health, dict) else None,
         version=health.get("version") if isinstance(health, dict) else None,
+    )
+    ready_status, ready, _, _ = _request(args.base_url, "/ready", timeout=args.timeout)
+    proof.record(
+        "application_readiness",
+        ready_status == 200 and isinstance(ready, dict) and ready.get("status") == "ready",
+        http_status=ready_status,
+        database=ready.get("database") if isinstance(ready, dict) else None,
     )
 
     status, page, _, final_url = _request(args.base_url, "/", timeout=args.timeout)
@@ -102,6 +123,7 @@ def run_proof(args: argparse.Namespace) -> Proof:
         snapshot_at = _header(headers, "X-Radar-Snapshot-At")
         next_refresh_at = _header(headers, "X-Radar-Next-Refresh-At")
         state = _header(headers, "X-Radar-Snapshot-State")
+        snapshot_age = _snapshot_age_seconds(snapshot_at)
         key = f"{lower}/{higher}"
         radar_evidence[key] = {
             "http_status": status,
@@ -109,6 +131,7 @@ def run_proof(args: argparse.Namespace) -> Proof:
             "state": state,
             "snapshot_at": snapshot_at,
             "next_refresh_at": next_refresh_at,
+            "snapshot_age_seconds": round(snapshot_age, 2) if snapshot_age is not None else None,
         }
         proof.record(
             f"radar_pair_{key}",
@@ -117,7 +140,9 @@ def run_proof(args: argparse.Namespace) -> Proof:
             and bool(rows)
             and bool(snapshot_at)
             and bool(next_refresh_at)
-            and state in {"FRESH", "STALE_REFRESHING"},
+            and state in {"FRESH", "STALE_REFRESHING"}
+            and snapshot_age is not None
+            and snapshot_age <= RADAR_MAX_STALE_SECONDS[(lower, higher)],
             **radar_evidence[key],
         )
 
@@ -190,9 +215,14 @@ def run_proof(args: argparse.Namespace) -> Proof:
         )
         symbols = market_health.get("symbols", {}) if isinstance(market_health, dict) else {}
         qualified = {
-            symbol: int(payload.get("qualified_source_count") or 0)
+            symbol: {
+                "sources": int(payload.get("qualified_source_count") or 0),
+                "venues": int(payload.get("qualified_venue_count") or 0),
+            }
             for symbol, payload in symbols.items()
-            if int(payload.get("qualified_source_count") or 0) > 0
+            if int(payload.get("qualified_source_count") or 0) >= args.min_qualified_sources
+            and int(payload.get("qualified_venue_count") or 0) >= args.min_qualified_venues
+            and payload.get("publication_flow_confirmed") is True
         }
         max_qualified_symbols = max(max_qualified_symbols, len(qualified))
         final_qualified_symbols = len(qualified)
@@ -241,6 +271,8 @@ def main() -> int:
     parser.add_argument("--interval", type=float, default=5.0)
     parser.add_argument("--timeout", type=float, default=45.0)
     parser.add_argument("--min-qualified-symbols", type=int, default=1)
+    parser.add_argument("--min-qualified-sources", type=int, default=2)
+    parser.add_argument("--min-qualified-venues", type=int, default=2)
     args = parser.parse_args()
 
     try:

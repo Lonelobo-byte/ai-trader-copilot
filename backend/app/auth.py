@@ -145,4 +145,7 @@ async def websocket_subscription(websocket: WebSocket) -> User | None:
             if not any(subscription_is_active(item) for item in result.scalars()):
                 await websocket.close(code=4403)
                 return None
+        # Long-lived WebSockets must not outlive the access token that opened
+        # them. The lease heartbeat reads this value and closes at expiry.
+        setattr(user, "_access_token_expires_at", int(claims["exp"]))
         return user

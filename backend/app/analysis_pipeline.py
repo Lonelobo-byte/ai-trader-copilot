@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from hashlib import sha256
 from typing import Any
 
-from app.brains.council import run_ai_council
+from app.brains.council import finalize_ai_council_validation, run_ai_council
 from app.ai_client import AIRequestConfig
 from app.brains.signal_builder import build_ai_driven_trade_setup, evaluate_ai_driven_approval
 from app.quant.feature_engine import compute_quant_features
@@ -38,6 +38,10 @@ def _council_lock(cache_key: str) -> asyncio.Lock:
     """Serialize a user's identical council requests within one process."""
     lock = _ai_council_locks.get(cache_key)
     if lock is None:
+        if len(_ai_council_locks) >= _AI_COUNCIL_CACHE_MAX_ENTRIES * 2:
+            for old_key, old_lock in list(_ai_council_locks.items()):
+                if not old_lock.locked() and old_key not in _ai_council_cache:
+                    _ai_council_locks.pop(old_key, None)
         lock = asyncio.Lock()
         _ai_council_locks[cache_key] = lock
     return lock
@@ -52,6 +56,9 @@ def _trim_council_cache() -> None:
         lock = _ai_council_locks.get(stale_key)
         if lock is not None and not lock.locked():
             _ai_council_locks.pop(stale_key, None)
+    for key, lock in list(_ai_council_locks.items()):
+        if key not in _ai_council_cache and not lock.locked():
+            _ai_council_locks.pop(key, None)
 
 
 def _build_analysis_snapshot(
@@ -215,6 +222,7 @@ async def run_full_analysis(
             ),
             "committee_controls": active_review.get("committee_controls") or {},
             "investment_memo": active_review.get("investment_memo") or {},
+            "ai_provenance": active_review.get("ai_provenance") or {},
         }
     else:
         # Check Volatility/Volume Ratios for logging
@@ -252,7 +260,14 @@ async def run_full_analysis(
                     # WebSocket candle/ticker/order-book snapshot. Passing the original
                     # optional argument here caused the WebSocket path to fetch a second
                     # snapshot and let the committee decide on different data.
-                    cio_result = await run_ai_council(symbol, timeframe, settings, intelligence=intel, ai_override=ai_override)
+                    cio_result = await run_ai_council(
+                        symbol,
+                        timeframe,
+                        settings,
+                        intelligence=intel,
+                        ai_override=ai_override,
+                        defer_ai_validation=True,
+                    )
                     features = cio_result.get("full_quant_features") or features
                     _ai_council_cache[cache_key] = cio_result
                     _ai_council_cache_candle[cache_key] = current_candle_open_time
@@ -338,6 +353,14 @@ async def run_full_analysis(
                 "historical_stats": historical_stats,
                 "quant_features": features,
                 "data_quality": features.get("data_quality", {}),
+                "ai_provenance": {
+                    "attempted": False,
+                    "synthesis_used": False,
+                    "deterministic_fallback_used": True,
+                    "failure_reason": "AI analysis was disabled for this request.",
+                    "provider": None,
+                    "model": None,
+                },
             }
 
     # ── Step 2: Build trade setup and evaluate approval ──────────────────
@@ -366,6 +389,44 @@ async def run_full_analysis(
             multi_venue=intel.get("execution_tape", {}) or {},
             planned_notional_usd=(trade_setup.get("position") or {}).get("notional_usd"),
         )
+    if (
+        use_ai
+        and not active_signal
+        and not historical_replay
+        and (cio_result.get("ai_provenance") or {}).get("pending_final_validation")
+    ):
+        # The one paid model call happens only after the deterministic trade
+        # plan and exact live gate exist. Concurrent tabs reuse the completed
+        # synthesis for the same user/candle under the council cache lock.
+        async with _council_lock(cache_key):
+            cached = _ai_council_cache.get(cache_key)
+            cached_provenance = (cached or {}).get("ai_provenance") or {}
+            if (
+                cached
+                and _ai_council_cache_candle.get(cache_key) == current_candle_open_time
+                and not cached_provenance.get("pending_final_validation")
+            ):
+                current_live_confirmation = cio_result.get("live_confirmation") or {}
+                cio_result = cached.copy()
+                cio_result["quant_features"] = features
+                cio_result["full_quant_features"] = features
+                cio_result["data_quality"] = features.get("data_quality", {})
+                cio_result["live_confirmation"] = current_live_confirmation
+            else:
+                cio_result = await finalize_ai_council_validation(
+                    cio_result,
+                    trade_setup,
+                    cio_result.get("live_confirmation") or {},
+                    settings,
+                    ai_override,
+                )
+                _ai_council_cache[cache_key] = cio_result
+                _ai_council_cache_candle[cache_key] = current_candle_open_time
+                _trim_council_cache()
+        # The final model may only preserve the measured side or veto it. A
+        # veto must also collapse the visible setup to HOLD/WATCH rather than
+        # leaving the pre-validation plan looking executable.
+        trade_setup = build_ai_driven_trade_setup(cio_result, features, settings)
     if cio_result.get("institutional_dossier"):
         from app.institutional.committee import build_investment_memo, render_investment_memo
         cio_result["deterministic_trade_plan"] = trade_setup
@@ -376,6 +437,11 @@ async def run_full_analysis(
         cio_result,
         trade_setup,
         require_live_confirmation=not historical_replay,
+        require_ai_validation=bool(
+            settings.require_ai_for_signal_publication
+            and reconcile_signals
+            and not historical_replay
+        ),
     )
 
     # ── Step 3: Reconcile active signal or publish new one ───────────────
@@ -519,7 +585,9 @@ async def run_full_analysis(
         "confidence": cio_result["confidence_pct"],
         "trade_grade": cio_result["trade_grade"],
         "failed_gate": approval["blockers"][0] if approval["blockers"] else None,
-        "ai_calls": 1 if use_ai else 0,
+        "approval": approval,
+        "ai_calls": 1 if (cio_result.get("ai_provenance") or {}).get("attempted") else 0,
+        "ai_synthesis_used": bool((cio_result.get("ai_provenance") or {}).get("synthesis_used")),
         "ai_allowed": use_ai,
         "ai_provider": settings.ai_provider,
         "market": analysis_snapshot["market"],
@@ -579,6 +647,7 @@ async def run_full_analysis(
             "status": "no_history",
         },
         "ai_analysis": cio_result,
+        "ai_provenance": cio_result.get("ai_provenance") or {},
         "news_sentiment": analysis_snapshot["research"]["news_sentiment"],
         "historical_stats": historical_stats,
         "calendar_events": analysis_snapshot["research"]["calendar_events"],

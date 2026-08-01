@@ -6,7 +6,7 @@ from typing import List
 from fastapi import APIRouter, BackgroundTasks, Depends
 from pydantic import BaseModel, Field, field_validator
 
-from app.auth import require_admin
+from app.auth import require_active_subscription, require_admin
 from app.autonomous_scanner import (
     get_scanner_diagnostics,
     get_scanner_configuration,
@@ -38,7 +38,7 @@ class ScannerToggle(BaseModel):
     discovery: bool | None = None
 
 
-@router.get("/status")
+@router.get("/status", dependencies=[Depends(require_active_subscription)])
 async def get_scanner_status():
     """Get current scanner state plus durable calibration diagnostics."""
     config = await get_scanner_configuration()
@@ -73,7 +73,7 @@ def trigger_scanner(background_tasks: BackgroundTasks, _: User = Depends(require
     return {"status": "triggered", "message": "Autonomous scan cycle triggered in background."}
 
 
-@router.get("/watchlist")
+@router.get("/watchlist", dependencies=[Depends(require_active_subscription)])
 async def get_watchlist():
     """Get the currently configured watchlist."""
     return {"watchlist": (await get_scanner_configuration())["watchlist"]}

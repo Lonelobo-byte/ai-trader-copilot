@@ -12,7 +12,7 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from .background_tasks import signal_monitor_loop
+from .background_tasks import singleton_signal_monitor_loop
 from .logging_config import configure_structured_logging
 from .routes.alpha import router as alpha_router
 from .routes.analyze import router as analyze_router
@@ -46,8 +46,16 @@ async def lifespan(app: FastAPI):
     )
 
     settings = get_settings()
-    if settings.app_env.lower() not in {"local", "test", "development"} and not settings.auth_jwt_secret:
-        raise RuntimeError("AUTH_JWT_SECRET must be configured outside local development.")
+    production = settings.app_env.lower() not in {"local", "test", "development"}
+    if production and len(settings.auth_jwt_secret.strip()) < 32:
+        raise RuntimeError("AUTH_JWT_SECRET must contain at least 32 characters outside local development.")
+    if production and settings.user_secrets_encryption_key and len(settings.user_secrets_encryption_key.strip()) < 32:
+        raise RuntimeError("USER_SECRETS_ENCRYPTION_KEY must contain at least 32 characters in production.")
+    if production and settings.payment_provider == "nowpayments":
+        if not settings.nowpayments_api_key or not settings.nowpayments_ipn_secret:
+            raise RuntimeError("NOWPayments API and IPN credentials are required when production checkout is enabled.")
+        if settings.nowpayments_sandbox:
+            raise RuntimeError("NOWPAYMENTS_SANDBOX must be disabled when APP_ENV is production.")
     if not settings.auth_jwt_secret:
         logger.warning("AUTH_JWT_SECRET is missing; existing sessions will be invalid after a restart.")
 
@@ -73,7 +81,7 @@ async def lifespan(app: FastAPI):
         )
     if settings.background_jobs_enabled:
         tasks.extend([
-            asyncio.create_task(signal_monitor_loop()),
+            asyncio.create_task(singleton_signal_monitor_loop(), name="signal-lifecycle-singleton"),
             asyncio.create_task(autonomous_scanner_loop()),
             asyncio.create_task(radar_warm_loop()),
         ])

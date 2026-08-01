@@ -1,10 +1,12 @@
 """Health and AI status endpoints."""
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
+from sqlalchemy import text
 
 from ..ai_client import ai_is_configured, get_model_for_task
 from ..data_sources.execution_tape_ws import get_execution_tape_hub
+from ..db.database import AsyncSessionLocal
 from ..settings import get_settings
 
 router = APIRouter()
@@ -23,6 +25,17 @@ def health():
     }
 
 
+@router.get("/ready")
+async def readiness():
+    """Readiness probe: the process is serving and its database is usable."""
+    try:
+        async with AsyncSessionLocal() as session:
+            await session.execute(text("SELECT 1"))
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="Database is unavailable.") from exc
+    return {"status": "ready", "database": "available"}
+
+
 @router.get("/health/market-data")
 async def public_market_data_health():
     """Expose optional public-feed readiness without leaking credentials."""
@@ -37,6 +50,12 @@ async def public_market_data_health():
             "status": snapshot.get("status", "UNAVAILABLE"),
             "qualified_source_count": (
                 (snapshot.get("actual_flow") or {}).get("qualified_source_count", 0)
+            ),
+            "qualified_venue_count": (
+                (snapshot.get("actual_flow") or {}).get("qualified_venue_count", 0)
+            ),
+            "publication_flow_confirmed": snapshot.get(
+                "publication_flow_confirmed", False
             ),
             "actual_flow_status": (
                 (snapshot.get("actual_flow") or {}).get("status", "UNAVAILABLE")

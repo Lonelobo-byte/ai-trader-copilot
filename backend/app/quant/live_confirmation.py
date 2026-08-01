@@ -9,6 +9,11 @@ from time import time
 from typing import Any
 
 from app.data_sources.binance_public import Candle, completed_candles
+from app.data_sources.execution_tape_ws import (
+    MIN_PUBLICATION_SOURCES,
+    MIN_PUBLICATION_VENUES,
+    publication_flow_is_qualified,
+)
 from app.indicators.market_story import (
     build_market_story,
     evaluate_story_direction,
@@ -19,38 +24,14 @@ from app.indicators.market_story import (
 from app.indicators.structure import classify_market_phase
 from app.quant.market_context import build_volume_profile, build_vwap_context
 
+MIN_EXECUTION_TAPE_SOURCES = MIN_PUBLICATION_SOURCES
+
 
 def _number(value: Any, default: float = 0.0) -> float:
     try:
         return float(value)
     except (TypeError, ValueError):
         return default
-
-
-def _ema(prices: list[float], period: int) -> float:
-    if len(prices) < period:
-        return 0.0
-    value = sum(prices[:period]) / period
-    alpha = 2.0 / (period + 1.0)
-    for price in prices[period:]:
-        value = price * alpha + value * (1.0 - alpha)
-    return value
-
-
-def _rsi(prices: list[float], period: int = 14) -> float:
-    if len(prices) < period + 1:
-        return 50.0
-    changes = [prices[index] - prices[index - 1] for index in range(1, len(prices))]
-    gains = [max(change, 0.0) for change in changes[:period]]
-    losses = [max(-change, 0.0) for change in changes[:period]]
-    average_gain = sum(gains) / period
-    average_loss = sum(losses) / period
-    for change in changes[period:]:
-        average_gain = (average_gain * (period - 1) + max(change, 0.0)) / period
-        average_loss = (average_loss * (period - 1) + max(-change, 0.0)) / period
-    if average_loss == 0:
-        return 100.0 if average_gain > 0 else 50.0
-    return 100.0 - 100.0 / (1.0 + average_gain / average_loss)
 
 
 def _observable_structure_events(candles: list[Candle]) -> dict[str, dict[str, Any]]:
@@ -75,17 +56,23 @@ def apply_live_confirmation(candidate: dict[str, Any], live: dict[str, Any]) -> 
     )
     actual_flow = execution_tape.get("actual_flow", {}) or {}
     tape_available = bool(actual_flow.get("available"))
+    tape_source_count = int(actual_flow.get("qualified_source_count") or 0)
+    tape_venue_count = int(actual_flow.get("qualified_venue_count") or 0)
+    tape_production_qualified = publication_flow_is_qualified(execution_tape)
     tape_bias = str(actual_flow.get("bias", "UNAVAILABLE")).upper()
     tape_verdict = str(actual_flow.get("status", "UNAVAILABLE")).upper()
     opposite_direction = "BEARISH" if direction == "BULLISH" else "BULLISH"
     tape_opposed = tape_available and tape_bias == opposite_direction
     tape_direction_confirmed = (
-        tape_available
+        tape_production_qualified
         and tape_bias == direction
         and (
             (direction == "BULLISH" and tape_verdict == "BUYING_CONFIRMED")
             or (direction == "BEARISH" and tape_verdict == "SELLING_CONFIRMED")
         )
+    )
+    production_tape_required = bool(
+        candidate.get("causal_radar") or candidate.get("require_production_tape")
     )
     quote_stability = execution_tape.get("displayed_liquidity_stability", {}) or {}
     quote_stability_status = str(quote_stability.get("status", "UNAVAILABLE")).upper()
@@ -134,9 +121,14 @@ def apply_live_confirmation(candidate: dict[str, Any], live: dict[str, Any]) -> 
             or (direction == "BEARISH" and taker_ratio <= 0.98)
         )
     )
-    # Prefer the live normalized taker tape. The candle/REST taker ratio is
-    # only a fallback while no public tape source has completed warm-up.
-    flow_aligned = tape_direction_confirmed if tape_available else legacy_flow_aligned
+    # Production Radar/signal authorization requires normalized proof from at
+    # least two independent public feeds. Legacy analytical callers may still
+    # inspect completed Binance taker ratios, but that evidence cannot publish.
+    flow_aligned = (
+        tape_direction_confirmed
+        if production_tape_required or tape_available
+        else legacy_flow_aligned
+    )
     price_change = live.get("price_change_pct")
     positioning_aligned = (
         oi_change is not None and abs(_number(oi_change)) >= 0.10
@@ -233,9 +225,20 @@ def apply_live_confirmation(candidate: dict[str, Any], live: dict[str, Any]) -> 
     required_checks = {key: checks[key] for key in required_names}
     risk_flags.extend(message for key, message in messages.items() if key in required_checks and not checks[key])
     supporting_warnings = [messages["depth_aligned"]] if not depth_aligned else []
-    if not tape_available:
+    if not tape_available and production_tape_required:
+        supporting_warnings.append(
+            "The Binance/Bybit execution tape is unavailable; two-source actual-flow proof is required for publication."
+        )
+    elif not tape_available:
         supporting_warnings.append(
             "The Binance/Bybit execution tape is warming or unavailable; completed taker-volume evidence is being used as a fallback."
+        )
+    elif not tape_production_qualified:
+        supporting_warnings.append(
+            f"Actual flow is observed on {tape_source_count} source(s) across "
+            f"{tape_venue_count} venue(s); publication requires at least "
+            f"{MIN_EXECUTION_TAPE_SOURCES} qualified sources across "
+            f"{MIN_PUBLICATION_VENUES} independent exchanges without venue disagreement."
         )
     elif not tape_direction_confirmed:
         supporting_warnings.append(
@@ -297,6 +300,10 @@ def apply_live_confirmation(candidate: dict[str, Any], live: dict[str, Any]) -> 
                 "cross_market_alignment", "UNAVAILABLE"
             ),
             "qualified_source_count": actual_flow.get("qualified_source_count", 0),
+            "qualified_venue_count": actual_flow.get("qualified_venue_count", 0),
+            "minimum_publication_sources": MIN_EXECUTION_TAPE_SOURCES,
+            "minimum_publication_venues": MIN_PUBLICATION_VENUES,
+            "production_qualified": tape_production_qualified,
         },
     }
     accepted = all(required_checks.values()) and candidate["score"] >= (65 if candidate.get("causal_radar") else 75)
@@ -615,8 +622,9 @@ def verify_main_signal_snapshot(
         and not funding.get("error")
     )
     execution_tape = multi_venue or {}
-    tape_flow_ready = bool((execution_tape.get("actual_flow") or {}).get("available"))
-    taker_flow_ready = bool(taker.get("available")) or tape_flow_ready
+    tape_actual_flow = execution_tape.get("actual_flow") or {}
+    tape_flow_ready = publication_flow_is_qualified(execution_tape)
+    taker_flow_ready = tape_flow_ready
     live = {
         "data_complete": bool(
             bids and asks and funding_available
@@ -645,13 +653,7 @@ def verify_main_signal_snapshot(
         "requirements": coverage_requirements,
         "missing": [name for name, available in coverage_requirements.items() if not available],
         "label": "PUBLICATION INPUTS COMPLETE" if all(coverage_requirements.values()) else "PUBLICATION INPUTS PARTIAL",
-        "taker_flow_source": (
-            "live_execution_tape"
-            if tape_flow_ready
-            else "binance_rest_taker_fallback"
-            if taker.get("available")
-            else "unavailable"
-        ),
+        "taker_flow_source": "live_execution_tape" if tape_flow_ready else "unavailable",
         "supplemental": {
             "execution_tape": {
                 "ready": tape_flow_ready,
@@ -668,7 +670,13 @@ def verify_main_signal_snapshot(
             ),
         },
     }
-    candidate = {"symbol": symbol, "direction": direction, "score": 75 if all(structure_checks.values()) else 0, "risk_flags": risk_flags}
+    candidate = {
+        "symbol": symbol,
+        "direction": direction,
+        "score": 75 if all(structure_checks.values()) else 0,
+        "risk_flags": risk_flags,
+        "require_production_tape": True,
+    }
     apply_live_confirmation(candidate, live)
     live_checks = candidate["advanced_confirmation"]["checks"]
     passed = all(structure_checks.values()) and candidate["status"] == "LIVE_CONFIRMED_REVIEW"
@@ -688,6 +696,7 @@ def verify_main_signal_snapshot(
         "symbol": symbol, "direction": direction,
         "score": 75 if all(tactical_structure_checks.values()) else 0,
         "risk_flags": tactical_risk_flags,
+        "require_production_tape": True,
     }
     apply_live_confirmation(tactical_candidate, live)
     tactical_live_checks = tactical_candidate["advanced_confirmation"]["checks"]

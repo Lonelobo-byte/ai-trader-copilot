@@ -8,6 +8,8 @@ write a memo, but this module owns eligibility, vetoes, and confidence caps.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import hashlib
+import json
 import math
 from typing import Any, Iterable
 
@@ -16,6 +18,67 @@ from app.indicators.market_story import evaluate_story_direction
 
 ACTIONABLE = {"BUY_WATCH", "SELL_WATCH"}
 ACTIVE_STATUSES = {"PENDING_ENTRY", "ACTIVE", "TP1_SECURED", "TP2_SECURED", "TP3_SECURED"}
+
+
+def final_validation_fingerprint(
+    trade_setup: dict[str, Any],
+    live_confirmation: dict[str, Any],
+) -> str:
+    """Bind final AI approval to the stable gate state it actually reviewed."""
+    live_evidence = live_confirmation.get("live_evidence") or {}
+    actual_flow = live_evidence.get("actual_flow_evidence") or {}
+    metrics = live_confirmation.get("metrics") or {}
+    selected_event = metrics.get("selected_structure_event") or {}
+    publication = live_confirmation.get("publication_coverage") or {}
+    scenarios = live_confirmation.get("scenarios") or {}
+    contract = {
+        "trade_setup": {
+            "status": trade_setup.get("status"),
+            "side": trade_setup.get("side"),
+            "execution_permitted": trade_setup.get("execution_permitted"),
+            "entry": trade_setup.get("entry"),
+            "stop": trade_setup.get("stop"),
+            "targets": trade_setup.get("targets"),
+            "position": trade_setup.get("position"),
+            "remaining_reward": trade_setup.get("remaining_reward"),
+            "allocation_tier": trade_setup.get("allocation_tier"),
+            "committee_restrictions": trade_setup.get("committee_restrictions"),
+            "leverage": trade_setup.get("leverage"),
+            "liquidity_objective": trade_setup.get("liquidity_objective"),
+        },
+        "live_confirmation": {
+            "passed": live_confirmation.get("passed"),
+            "status": live_confirmation.get("status"),
+            "direction": live_confirmation.get("direction"),
+            "structure_checks": live_confirmation.get("structure_checks"),
+            "live_checks": live_confirmation.get("live_checks"),
+            "publication_requirements": publication.get("requirements"),
+            "publication_ready": publication.get("signal_publication_ready"),
+            "actual_flow": {
+                "status": actual_flow.get("status"),
+                "bias": actual_flow.get("bias"),
+                "production_qualified": actual_flow.get("production_qualified"),
+                "qualified_source_count": actual_flow.get("qualified_source_count"),
+            },
+            "selected_event_id": selected_event.get("event_id"),
+            "setup_state": (live_confirmation.get("structure_story") or {}).get("setup_state"),
+            "scenario_states": {
+                name: {
+                    "passed": (value or {}).get("passed"),
+                    "status": (value or {}).get("status"),
+                }
+                for name, value in scenarios.items()
+                if name in {"institutional", "tactical"}
+            },
+        },
+    }
+    encoded = json.dumps(
+        contract,
+        default=str,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def _number(value: Any, default: float = 0.0) -> float:
@@ -295,8 +358,9 @@ def _quant_engine(quantitative: dict[str, Any]) -> dict[str, Any]:
 def _microstructure_engine(features: dict[str, Any], quantitative: dict[str, Any]) -> dict[str, Any]:
     """Score measured taker aggression and its price response.
 
-    Source agreement raises confidence, but no specific exchange or
-    spot/perpetual pairing is mandatory. Displayed depth is contextual only.
+    Partial source evidence remains visible for analysis. Publication separately
+    requires two distinct exchanges; spot/perpetual pairing is not itself a gate.
+    Displayed depth is contextual only.
     """
     micro = quantitative.get("microstructure", {}) or features.get("microstructure", {}) or {}
     historical_flow = features.get("trade_flow", {}) or {}
@@ -333,8 +397,14 @@ def _microstructure_engine(features: dict[str, Any], quantitative: dict[str, Any
     available = tape_available or base_available
     bias = "BULLISH" if score >= 0.08 else "BEARISH" if score <= -0.08 else "NEUTRAL"
     source_count = int(actual.get("qualified_source_count") or 0)
+    venue_count = int(actual.get("qualified_venue_count") or 0)
     confidence = (
-        min(88.0, 42.0 + abs(score) * 100.0 + min(source_count, 4) * 5.0)
+        min(
+            88.0,
+            42.0 + abs(score) * 100.0
+            + min(source_count, 4) * 4.0
+            + min(venue_count, 2) * 3.0,
+        )
         if available else 0.0
     )
     contradictions: list[str] = []
@@ -409,7 +479,7 @@ def _microstructure_engine(features: dict[str, Any], quantitative: dict[str, Any
             {
                 "metric": "execution_tape_confidence",
                 "value": actual.get("confidence", "UNAVAILABLE"),
-                "source": "qualified source count and market alignment",
+                "source": "qualified source/venue counts and market alignment",
             },
             {
                 "metric": "displayed_liquidity_stability",
@@ -1128,9 +1198,26 @@ def apply_cio_policy(cio_result: dict[str, Any], dossier: dict[str, Any]) -> dic
         if proposed_decision in ACTIONABLE:
             first_blocker = next(iter(risk.get("hard_blockers", [])), "committee controls did not pass")
             result["explanation"] = f"Allocation withheld despite the proposed {proposed_decision}: {first_blocker}"
-    if decision in ACTIONABLE and dossier.get("provisional_thesis", {}).get("direction") == "NEUTRAL":
+    thesis_direction = str(
+        dossier.get("provisional_thesis", {}).get("direction", "NEUTRAL")
+    ).upper()
+    expected_decision = (
+        "BUY_WATCH"
+        if thesis_direction == "LONG"
+        else "SELL_WATCH"
+        if thesis_direction == "SHORT"
+        else None
+    )
+    if decision in ACTIONABLE and decision != expected_decision:
+        # A narrative model may reduce confidence or withhold a setup, but it
+        # can never reverse the measured committee thesis. Opposite-side
+        # output is treated as uncertainty and fails closed.
         decision = "WAIT"
         confidence = min(confidence, 55.0)
+        result["explanation"] = (
+            f"Allocation withheld because the proposed {proposed_decision} conflicts "
+            f"with the deterministic {thesis_direction.lower()} thesis."
+        )
 
     result["decision"] = decision
     result["confidence_pct"] = round(max(0.0, min(confidence, 100.0)), 2)

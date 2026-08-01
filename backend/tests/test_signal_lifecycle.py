@@ -47,6 +47,8 @@ def _live_flow(side: str = "LONG") -> dict:
                 "price_response": "ACCEPTING_HIGHER" if bullish else "ACCEPTING_LOWER",
                 "active_aggressor": "BUYERS" if bullish else "SELLERS",
                 "qualified_source_count": 2,
+                "qualified_venue_count": 2,
+                "cross_venue_alignment": "ALIGNED",
             },
         },
     }

@@ -11,13 +11,14 @@ from datetime import datetime
 from time import time
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from .data_sources.binance_public import BinancePublicClient, interval_seconds
 from .data_sources.execution_tape_ws import get_execution_tape_snapshot
 from .indicators.market_story import build_market_story, evaluate_story_direction
 from .settings import get_settings
 from .signal_service import monitor_open_signals
+from .db.database import engine
 
 logger = logging.getLogger(__name__)
 
@@ -161,7 +162,7 @@ async def signal_monitor_loop() -> None:
 
     # Start the sub-second WebSocket price monitor in the background
     from app.quant.active_signal_ws import run_active_signal_ws_monitor
-    ws_task = asyncio.create_task(run_active_signal_ws_monitor())
+    ws_task = asyncio.create_task(run_active_signal_ws_monitor(), name="active-signal-price-stream")
 
     async def latest_price(symbol: str) -> float:
         ticker = await client_for(symbol).ticker_24hr(symbol)
@@ -212,12 +213,79 @@ async def signal_monitor_loop() -> None:
             # time. This REST path is a low-frequency fallback, not another
             # competing live feed. An idle ledger checks less often.
             await asyncio.sleep(10 if has_open_signals else 30)
+            if ws_task.done():
+                try:
+                    ws_task.result()
+                except asyncio.CancelledError:
+                    logger.warning("Active signal WebSocket monitor ended; restarting it.")
+                except Exception:
+                    logger.exception("Active signal WebSocket monitor stopped; restarting it.")
+                ws_task = asyncio.create_task(
+                    run_active_signal_ws_monitor(),
+                    name="active-signal-price-stream",
+                )
             has_open_signals = await monitor_open_signals(
                 latest_price,
                 causal_market_context,
             )
         except asyncio.CancelledError:
             ws_task.cancel()
+            await asyncio.gather(ws_task, return_exceptions=True)
             raise
         except Exception:
             logger.exception("Signal lifecycle monitor failed for this cycle.")
+
+
+async def singleton_signal_monitor_loop() -> None:
+    """Run exactly one lifecycle monitor across PostgreSQL app replicas."""
+    if engine.dialect.name != "postgresql":
+        await signal_monitor_loop()
+        return
+
+    while True:
+        connection = None
+        acquired = False
+        monitor_task = None
+        retry_seconds = 30
+        try:
+            connection = await engine.connect()
+            acquired = bool(await connection.scalar(
+                text("SELECT pg_try_advisory_lock(hashtext('atc:signal-lifecycle-monitor'))")
+            ))
+            if not acquired:
+                retry_seconds = 30
+            else:
+                await connection.commit()
+                logger.info("Signal lifecycle monitor acquired the global worker lease.")
+                monitor_task = asyncio.create_task(
+                    signal_monitor_loop(),
+                    name="signal-lifecycle-owner",
+                )
+                while not monitor_task.done():
+                    await asyncio.sleep(20)
+                    # Session advisory locks disappear if PostgreSQL drops the
+                    # owning connection. Ping it so a dead lease cancels this
+                    # monitor before another replica takes ownership.
+                    await connection.execute(text("SELECT 1"))
+                    await connection.commit()
+                await monitor_task
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            retry_seconds = 10
+            logger.exception("Global signal lifecycle lease failed; retrying.")
+        finally:
+            if monitor_task is not None and not monitor_task.done():
+                monitor_task.cancel()
+                await asyncio.gather(monitor_task, return_exceptions=True)
+            if acquired and connection is not None:
+                try:
+                    await connection.execute(
+                        text("SELECT pg_advisory_unlock(hashtext('atc:signal-lifecycle-monitor'))")
+                    )
+                    await connection.commit()
+                except Exception:
+                    logger.debug("Could not explicitly release signal monitor lease.", exc_info=True)
+            if connection is not None and not connection.closed:
+                await connection.close()
+        await asyncio.sleep(retry_seconds)

@@ -11,6 +11,7 @@ import math
 from typing import Any, Mapping
 
 from app.indicators.market_story import evaluate_story_direction
+from app.institutional.committee import final_validation_fingerprint
 
 logger = logging.getLogger(__name__)
 MAX_LIVE_EVENT_CHASE_ATR = 2.5
@@ -504,6 +505,7 @@ def evaluate_ai_driven_approval(
     trade_setup: dict[str, Any],
     *,
     require_live_confirmation: bool = True,
+    require_ai_validation: bool = False,
 ) -> dict[str, Any]:
     """Evaluate whether the AI Council output meets criteria for publication."""
     blockers = []
@@ -513,6 +515,36 @@ def evaluate_ai_driven_approval(
     
     if decision not in {"BUY_WATCH", "SELL_WATCH"}:
         blockers.append(f"AI CIO decision is {decision} (needs BUY_WATCH or SELL_WATCH).")
+
+    ai_provenance = cio_result.get("ai_provenance") or {}
+    ai_scope_validated = (
+        ai_provenance.get("synthesis_used") is True
+        and (
+            not require_ai_validation
+            or ai_provenance.get("validation_scope") == "dossier_trade_plan_live_confirmation"
+        )
+    )
+    fingerprint_matches = (
+        ai_provenance.get("evidence_fingerprint")
+        == final_validation_fingerprint(
+            trade_setup,
+            cio_result.get("live_confirmation") or {},
+        )
+    )
+    ai_validated = bool(
+        ai_scope_validated
+        and (
+            not require_ai_validation
+            or decision not in {"BUY_WATCH", "SELL_WATCH"}
+            or fingerprint_matches
+        )
+    )
+    if require_ai_validation and decision in {"BUY_WATCH", "SELL_WATCH"} and not ai_validated:
+        blockers.append(
+            "Live evidence changed after final AI validation; wait for a newly validated setup before publication."
+            if ai_scope_validated and not fingerprint_matches
+            else "Final AI validation is unavailable; the deterministic setup remains watch-only and cannot be published."
+        )
     
     allocation_tier = (((cio_result.get("institutional_dossier") or {}).get("risk_committee") or {}).get("allocation_tier"))
     confidence_threshold = 60.0 if allocation_tier == "CONDITIONAL_MANUAL_REVIEW" else 65.0
@@ -599,5 +631,13 @@ def evaluate_ai_driven_approval(
         "confirmations": support_votes,
         "blockers": list(dict.fromkeys(blockers)),
         "validation_coverage": evidence_manifest,
-        "summary": "AI Council approved signal release." if not blockers else blockers[0],
+        "ai_validated": ai_validated,
+        "ai_provenance": ai_provenance,
+        "summary": (
+            "Committee gates passed with final AI validation."
+            if not blockers and ai_validated
+            else "Deterministic committee gates passed without AI synthesis."
+            if not blockers
+            else blockers[0]
+        ),
     }

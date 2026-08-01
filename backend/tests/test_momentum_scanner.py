@@ -119,6 +119,33 @@ def test_live_confirmation_requires_all_directional_checks():
     assert candidate["advanced_confirmation"]["checks"]["depth_aligned"] is True
 
 
+def test_production_radar_cannot_publish_from_single_venue_taker_fallback():
+    candidate = {
+        "symbol": "BTCUSDT",
+        "direction": "BEARISH",
+        "score": 80,
+        "risk_flags": [],
+        "causal_radar": True,
+    }
+    _apply_live_confirmation(candidate, {
+        "data_complete": True,
+        "spread_bps": 2.0,
+        "depth_imbalance": -0.12,
+        "taker_buy_sell_ratio": 0.80,
+        "oi_change_pct": 1.2,
+        "price_change_pct": -1.0,
+        "funding_rate": 0.0001,
+        "execution_tape": {"actual_flow": {"available": False}},
+    })
+
+    assert candidate["review_status"] == "WATCH_ONLY"
+    assert candidate["advanced_confirmation"]["checks"]["taker_flow_aligned"] is False
+    assert any(
+        "two-source actual-flow proof" in warning
+        for warning in candidate["advanced_confirmation"]["supporting_warnings"]
+    )
+
+
 def test_causal_radar_rejects_an_intrabar_quote_that_chased_the_event():
     candidate = {
         "symbol": "TESTUSDT",
@@ -350,43 +377,39 @@ def test_live_direction_change_rebuilds_the_story_playbook_and_old_flags():
 def test_verify_setup_endpoint_uses_deterministic_evidence():
     from fastapi.testclient import TestClient
     from app.main import app
+    from app.radar_service import RadarRead
     from unittest.mock import AsyncMock, patch
-    from time import time
 
     client = TestClient(app)
-
-    now_ms = int(time() * 1000)
-    candles = [
-        Candle(
-            open_time=now_ms - (101 - index) * 60_000,
-            open=100.0 + index * 0.1,
-            high=100.2 + index * 0.1,
-            low=99.9 + index * 0.1,
-            close=100.1 + index * 0.1,
-            volume=1_000.0,
-            close_time=now_ms - (100 - index) * 60_000,
-            quote_volume=120_000.0 + index * 50.0,
-            trade_count=100,
-            taker_buy_base_volume=600.0,
-            taker_buy_quote_volume=60_000.0,
-        )
-        for index in range(100)
-    ]
-
-    with patch("app.data_sources.binance_public.BinancePublicClient") as MockBinanceClient:
-        mock_instance = MockBinanceClient.return_value
-        mock_instance.klines = AsyncMock(side_effect=[candles, candles])
-        mock_instance.order_book = AsyncMock(return_value={
-            "bids": [[110.0, 500.0]], "asks": [[110.01, 500.0]],
-        })
-
+    row = {
+        "symbol": "BTCUSDT",
+        "review_status": "WATCH_ONLY",
+        "direction": "BULLISH",
+        "score": 72,
+        "market_context": {"limitations": []},
+        "market_story": {"what_happened": "A completed structure event was observed."},
+        "market_structure": {"phase": "TRENDING"},
+        "advanced_confirmation": {
+            "checks": {"data_complete": True},
+            "spread_bps": 1.2,
+            "bid_depth_notional": 100_000,
+            "ask_depth_notional": 90_000,
+            "actual_flow_evidence": {"available": True, "status": "BUYING_CONFIRMED"},
+        },
+        "positioning": {"available": True},
+    }
+    shared = RadarRead(
+        candidates=[row], captured_at="2026-08-01T00:00:00+00:00",
+        next_refresh_at="2026-08-01T00:02:00+00:00", state="FRESH",
+    )
+    reader = AsyncMock(return_value=shared)
+    with patch("app.routes.radar.read_radar_pair", reader):
         response = client.post("/quant/verify-setup", json={"symbol": "BTCUSDT", "ltf": "15m", "htf": "4h"})
         assert response.status_code == 200
-        assert [call.args[1] for call in mock_instance.klines.await_args_list] == ["15m", "4h"]
-        assert [call.kwargs["limit"] for call in mock_instance.klines.await_args_list] == [200, 200]
+        reader.assert_awaited_once_with("15m", "4h")
         data = response.json()
         assert data["verdict"] in {"REVIEW_CANDIDATE", "WATCH_ONLY"}
-        assert data["evaluation_mode"] == "causal_manual_review"
+        assert data["evaluation_mode"] == "shared_causal_radar_snapshot"
         assert "not a probability" in data["confidence_label"].lower()
         assert "liquidity" in data
         assert "spread_pct" in data["liquidity"]
