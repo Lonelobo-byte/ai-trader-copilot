@@ -140,6 +140,19 @@ async def release_research_slot(lease_id: str) -> None:
         await session.commit()
 
 
+async def release_user_research_slot(lease_id: str, *, user_id: str) -> bool:
+    """Release exactly one caller-owned lease; safe to repeat during teardown."""
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            delete(ResearchSlot).where(
+                ResearchSlot.id == lease_id,
+                ResearchSlot.user_id == user_id,
+            )
+        )
+        await session.commit()
+    return bool(result.rowcount)
+
+
 async def research_capacity_view(user: User) -> dict:
     """Return the authenticated user's plan and only their active leases."""
     lock = _user_lock(user.id)

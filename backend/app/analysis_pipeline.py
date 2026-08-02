@@ -185,7 +185,7 @@ async def run_full_analysis(
     intel = attach_live_execution_tape_snapshot(intel, symbol, settings)
     # The explicit route arguments remain authoritative for streaming callers.
     intel["candles"], intel["ticker"], intel["order_book"] = candles, ticker, order_book_raw
-    features = compute_quant_features(intel)
+    features = await asyncio.to_thread(compute_quant_features, intel)
 
     # ── Check if an active signal is already open in the database ────────
     from app.signal_service import get_active_signal
@@ -267,6 +267,7 @@ async def run_full_analysis(
                         intelligence=intel,
                         ai_override=ai_override,
                         defer_ai_validation=True,
+                        precomputed_features=features,
                     )
                     features = cio_result.get("full_quant_features") or features
                     _ai_council_cache[cache_key] = cio_result
@@ -382,7 +383,8 @@ async def run_full_analysis(
         confirmation_htf = confirmation_timeframes.get(timeframe)
         higher_candles = (intel.get("multi_tf_candles", {}) or {}).get(confirmation_htf, []) if confirmation_htf else []
         direction_side = "LONG" if cio_result.get("decision") == "BUY_WATCH" else "SHORT" if cio_result.get("decision") == "SELL_WATCH" else None
-        cio_result["live_confirmation"] = verify_main_signal_snapshot(
+        cio_result["live_confirmation"] = await asyncio.to_thread(
+            verify_main_signal_snapshot,
             symbol=symbol, timeframe=timeframe, side=direction_side, candles=candles,
             higher_candles=higher_candles, order_book=order_book_raw,
             funding=intel.get("funding", {}) or {}, derivatives=intel.get("derivatives", {}) or {},
@@ -538,7 +540,8 @@ async def run_full_analysis(
     # Rebuild this deterministic assessment each render.  A cached council
     # memo must never leave an earlier order-book/candle state in one card.
     from app.quant.engine import build_quantitative_assessment
-    quantitative = build_quantitative_assessment(
+    quantitative = await asyncio.to_thread(
+        build_quantitative_assessment,
         candles,
         order_book_raw,
         account_value=settings.default_account_size_usd,
@@ -554,7 +557,8 @@ async def run_full_analysis(
         cio_result=cio_result, trade_setup=trade_setup, signal_monitor=signal_monitor,
         approval=approval, data_freshness=data_freshness, liquidity=liquidity,
     )
-    chart_contract = build_hawk_eye_chart_contract(
+    chart_contract = await asyncio.to_thread(
+        build_hawk_eye_chart_contract,
         candles,
         symbol=symbol,
         timeframe=timeframe,

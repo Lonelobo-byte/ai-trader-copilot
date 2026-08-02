@@ -417,7 +417,9 @@
         },
       ],
     };
-    chart.setOption(option, { notMerge: true, lazyUpdate: true });
+    // Live market ticks must paint immediately; deferring the ECharts update
+    // could leave a continuously busy page showing the previous close.
+    chart.setOption(option, { notMerge: true, lazyUpdate: false });
   }
 
   function displayAction(decision) {
@@ -487,6 +489,51 @@
     render();
   }
 
+  function consumeTick(tick) {
+    if (!tick || tick.schema_version !== 'hawk_eye_tick.v1') return;
+    bindControls();
+    const lastPrice = finite(tick.last_price);
+    const rows = Array.isArray(tick.candles) && tick.candles.length
+      ? tick.candles.map((candle) => ({ ...candle }))
+      : tick.candle
+        ? [{ ...tick.candle }]
+        : [];
+    if (!rows.length) return;
+    const candle = rows[rows.length - 1];
+    if (lastPrice !== null && candle) {
+      candle.close = lastPrice;
+      candle.high = Math.max(finite(candle.high) ?? lastPrice, lastPrice);
+      candle.low = Math.min(finite(candle.low) ?? lastPrice, lastPrice);
+    }
+    if (!state.contract) {
+      state.contract = {
+        schema_version: 'hawk_eye_chart.v1',
+        mode: 'delta',
+        symbol: tick.symbol,
+        timeframe: tick.timeframe,
+        annotations: {},
+        decision: {},
+      };
+    } else {
+      state.contract = {
+        ...state.contract,
+        symbol: tick.symbol || state.contract.symbol,
+        timeframe: tick.timeframe || state.contract.timeframe,
+      };
+    }
+    mergeCandles({
+      mode: tick.mode === 'snapshot' ? 'snapshot' : 'delta',
+      candles: rows,
+    });
+    element('hawk-chart-empty')?.classList.add('is-hidden');
+    const badge = element('hawk-chart-live-badge');
+    if (badge) {
+      badge.className = 'hawk-chart-live-badge live';
+      badge.innerHTML = '<i></i>LIVE';
+    }
+    render();
+  }
+
   function reset() {
     state.candles.clear();
     state.contract = null;
@@ -503,5 +550,5 @@
   }
 
   bindControls();
-  window.HawkEyeChart = { consume, reset };
+  window.HawkEyeChart = { consume, consumeTick, reset };
 })();

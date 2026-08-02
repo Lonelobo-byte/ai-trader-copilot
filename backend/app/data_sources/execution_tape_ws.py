@@ -1153,6 +1153,11 @@ class ExecutionTapeHub:
                         except asyncio.TimeoutError:
                             continue
                         self.process_binance_message(source, json.loads(raw))
+                        # A hot public stream can keep recv() immediately
+                        # ready for long bursts. Explicitly hand control back
+                        # to Uvicorn so readiness and user requests cannot be
+                        # starved by market-data ingestion.
+                        await asyncio.sleep(0)
                         delay = 1.0
             except asyncio.CancelledError:
                 raise
@@ -1215,6 +1220,7 @@ class ExecutionTapeHub:
                         except asyncio.TimeoutError:
                             continue
                         self.process_bybit_message(source, json.loads(raw))
+                        await asyncio.sleep(0)
                         delay = 1.0
             except asyncio.CancelledError:
                 raise

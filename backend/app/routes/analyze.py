@@ -5,6 +5,7 @@ import json
 import logging
 import asyncio
 from contextlib import suppress
+from time import monotonic
 from typing import Any, AsyncGenerator
 
 import httpx
@@ -16,7 +17,7 @@ from ..data_sources.binance_public import Candle
 from ..data_sources.data_aggregator import fetch_market_intelligence_cached
 from ..data_sources.binance_ws import SharedStreamCapacityError, get_shared_binance_stream_hub
 from ..settings import get_settings
-from ..auth import require_active_subscription, utcnow, websocket_subscription
+from ..auth import current_user, require_active_subscription, utcnow, websocket_subscription
 from ..db.models import User
 from ..user_ai import UserAIConnectionError, ai_cache_identity, resolve_user_ai_config
 from ..rate_limit import enforce_rate_limit
@@ -28,9 +29,12 @@ from ..research_capacity import (
     heartbeat_research_slot,
     research_capacity_view,
     release_research_slot,
+    release_user_research_slot,
 )
 
 logger = logging.getLogger(__name__)
+
+CLIENT_LIVENESS_TIMEOUT_SECONDS = 70.0
 
 router = APIRouter()
 _ANALYSIS_SEMAPHORE: asyncio.Semaphore | None = None
@@ -39,6 +43,43 @@ _ANALYSIS_SEMAPHORE_LIMIT = 0
 
 class AnalysisCapacityBusy(RuntimeError):
     pass
+
+
+def _market_tick_payload(
+    *, symbol: str, timeframe: str, candles: list[dict[str, Any]], ticker: dict[str, Any],
+    snapshot: bool = False,
+) -> dict[str, Any]:
+    """Build the tiny live transport that must never wait for full analysis."""
+    transport_candles = (
+        [dict(candle) for candle in candles[-200:]]
+        if snapshot
+        else [dict(candles[-1])] if candles else []
+    )
+    latest = transport_candles[-1] if transport_candles else None
+    last_price = ticker.get("lastPrice")
+    try:
+        numeric_price = float(last_price)
+    except (TypeError, ValueError):
+        numeric_price = None
+    if latest is not None and numeric_price is not None:
+        latest["close"] = numeric_price
+        latest["high"] = max(float(latest.get("high") or numeric_price), numeric_price)
+        latest["low"] = min(float(latest.get("low") or numeric_price), numeric_price)
+    return {
+        "type": "market_tick",
+        "symbol": symbol,
+        "timeframe": timeframe,
+        "market": {"last_price": numeric_price},
+        "chart_tick": {
+            "schema_version": "hawk_eye_tick.v1",
+            "mode": "snapshot" if snapshot else "delta",
+            "symbol": symbol,
+            "timeframe": timeframe,
+            "last_price": numeric_price,
+            "candle": latest,
+            "candles": transport_candles,
+        },
+    }
 
 
 def _analysis_semaphore() -> asyncio.Semaphore:
@@ -103,20 +144,52 @@ async def _maintain_websocket_research_slot(
     lease_id: str,
     user: User,
     handler_task: asyncio.Task[Any] | None,
+    client_liveness: dict[str, float],
 ) -> None:
     while True:
         await asyncio.sleep(RESEARCH_SLOT_HEARTBEAT_SECONDS)
+        if monotonic() - client_liveness.get("last_seen", 0.0) > CLIENT_LIVENESS_TIMEOUT_SECONDS:
+            await release_research_slot(lease_id)
+            with suppress(RuntimeError):
+                await websocket.close(code=4408, reason="Research page stopped responding")
+            if handler_task is not None:
+                handler_task.cancel()
+            return
         token_expires_at = int(getattr(user, "_access_token_expires_at", 0) or 0)
         if token_expires_at and token_expires_at <= int(utcnow().timestamp()):
-            await websocket.close(code=4401, reason="Access token expired")
+            with suppress(RuntimeError):
+                await websocket.close(code=4401, reason="Access token expired")
             if handler_task is not None:
                 handler_task.cancel()
             return
         if not await heartbeat_research_slot(lease_id, user_id=user.id):
-            await websocket.close(code=4403, reason="Research entitlement is no longer active")
+            with suppress(RuntimeError):
+                await websocket.close(code=4403, reason="Research entitlement is no longer active")
             if handler_task is not None:
                 handler_task.cancel()
             return
+
+
+async def _receive_websocket_client_liveness(
+    websocket: WebSocket,
+    client_liveness: dict[str, float],
+    handler_task: asyncio.Task[Any] | None,
+) -> None:
+    """Detect clean closes immediately and require a real browser heartbeat."""
+    try:
+        while True:
+            message = await websocket.receive_text()
+            if len(message) > 1_024:
+                continue
+            try:
+                payload = json.loads(message)
+            except json.JSONDecodeError:
+                continue
+            if payload.get("type") == "client_heartbeat":
+                client_liveness["last_seen"] = monotonic()
+    except (WebSocketDisconnect, RuntimeError):
+        if handler_task is not None and not handler_task.done():
+            handler_task.cancel()
 
 
 class AnalyzeRequest(BaseModel):
@@ -126,10 +199,24 @@ class AnalyzeRequest(BaseModel):
     candle_limit: int = Field(default=200, ge=60, le=1000)
 
 
+class ReleaseResearchSessionRequest(BaseModel):
+    lease_id: str = Field(min_length=36, max_length=36)
+
+
 @router.get("/research/capacity")
 async def research_capacity(user: User = Depends(require_active_subscription)):
     """Membership plan and active live-research leases for the current user."""
     return await research_capacity_view(user)
+
+
+@router.post("/research/session/release")
+async def release_research_session(
+    request: ReleaseResearchSessionRequest,
+    user: User = Depends(current_user),
+):
+    """Idempotently release one research session owned by this user."""
+    released = await release_user_research_slot(request.lease_id, user_id=user.id)
+    return {"released": released}
 
 @router.post("/analyze")
 async def analyze(request: AnalyzeRequest, user: User = Depends(_reserved_rest_research_slot)):
@@ -189,6 +276,8 @@ async def websocket_analyze(websocket: WebSocket):
     await websocket.accept(subprotocol="atc-auth")
     research_lease = None
     heartbeat_task = None
+    receiver_task = None
+    analysis_task: asyncio.Task[Any] | None = None
     try:
         settings = get_settings()
         config_msg = await asyncio.wait_for(
@@ -230,12 +319,30 @@ async def websocket_analyze(websocket: WebSocket):
             })
             await websocket.close(code=4429, reason="Research capacity reached")
             return
+        handler_task = asyncio.current_task()
+        client_liveness = {"last_seen": monotonic()}
+        await websocket.send_json({
+            "type": "research_session",
+            "lease_id": research_lease.id,
+            "plan_code": research_lease.plan_code,
+            "limit": research_lease.limit,
+            "active_slots": research_lease.active_slots,
+        })
+        receiver_task = asyncio.create_task(
+            _receive_websocket_client_liveness(
+                websocket,
+                client_liveness,
+                handler_task,
+            ),
+            name=f"research-client-liveness-{research_lease.id}",
+        )
         heartbeat_task = asyncio.create_task(
             _maintain_websocket_research_slot(
                 websocket,
                 research_lease.id,
                 user,
-                asyncio.current_task(),
+                handler_task,
+                client_liveness,
             )
         )
 
@@ -253,8 +360,24 @@ async def websocket_analyze(websocket: WebSocket):
         # timeframes, derivatives, news, macro) is shared briefly across tabs
         # instead of triggering a full upstream fan-out on every websocket tick.
         intelligence = None
+        send_lock = asyncio.Lock()
+        pending_new_candle = False
+        last_analysis_started_at = 0.0
+        analysis_refresh_seconds = max(
+            2.0,
+            min(float(settings.analysis_live_refresh_seconds), 30.0),
+        )
 
-        async for event in stream_hub.events(symbol, timeframe):
+        async def send_json(payload: dict[str, Any]) -> None:
+            async with send_lock:
+                await websocket.send_json(payload)
+
+        async def analyze_event(
+            event: dict[str, Any],
+            *,
+            force_new_candle: bool,
+        ) -> None:
+            nonlocal intelligence, last_ai_open_time
             raw_candles = event["candles"]
             candles = [
                 Candle(
@@ -272,39 +395,83 @@ async def websocket_analyze(websocket: WebSocket):
                 )
                 for c in raw_candles
             ]
-            ticker = event["ticker"]
-            order_book = event["order_book"]
-
-            if intelligence is None or event["type"] == "init" or bool(event.get("new_candle_closed")):
+            is_init = event["type"] == "init"
+            if intelligence is None or is_init or force_new_candle:
                 intelligence = await fetch_market_intelligence_cached(
-                    symbol, timeframe, settings, candle_limit=len(candles)
+                    symbol,
+                    timeframe,
+                    settings,
+                    candle_limit=len(candles),
                 )
-
             payload, last_ai_open_time = await _run_analysis_bounded(
                 symbol=symbol,
                 timeframe=timeframe,
                 candles=candles,
-                ticker=ticker,
-                order_book_raw=order_book,
+                ticker=event["ticker"],
+                order_book_raw=event["order_book"],
                 settings=settings,
                 use_ai=use_ai,
-                is_new_candle=bool(event.get("new_candle_closed")),
-                is_init_event=event["type"] == "init",
+                is_new_candle=force_new_candle,
+                is_init_event=is_init,
                 last_ai_open_time=last_ai_open_time,
                 market_intelligence=intelligence,
                 ai_override=ai_override,
                 ai_cache_key=ai_cache_identity(user.id, ai_override),
                 reconcile_signals=True,
                 chart_mode=(
-                    "snapshot"
-                    if event["type"] == "init"
-                    else "rollover"
-                    if bool(event.get("new_candle_closed"))
+                    "snapshot" if is_init
+                    else "rollover" if force_new_candle
                     else "delta"
                 ),
             )
-            payload["type"] = event["type"]
-            await websocket.send_json(payload)
+            payload["type"] = "analysis_update"
+            await send_json(payload)
+
+        async for event in stream_hub.events(symbol, timeframe):
+            # Price/candle transport is intentionally independent of the
+            # council. The browser receives it immediately even while a full
+            # synchronized dossier is still calculating.
+            await send_json(_market_tick_payload(
+                symbol=symbol,
+                timeframe=timeframe,
+                candles=event["candles"],
+                ticker=event["ticker"],
+                snapshot=event["type"] == "init",
+            ))
+
+            pending_new_candle = pending_new_candle or bool(
+                event.get("new_candle_closed")
+            )
+            if analysis_task is not None and analysis_task.done():
+                completed = analysis_task
+                analysis_task = None
+                error = completed.exception()
+                if error is not None:
+                    raise error
+
+            now = monotonic()
+            analysis_due = (
+                event["type"] == "init"
+                or pending_new_candle
+                or now - last_analysis_started_at >= analysis_refresh_seconds
+            )
+            if analysis_task is None and analysis_due:
+                force_new_candle = pending_new_candle
+                pending_new_candle = False
+                last_analysis_started_at = now
+                analysis_event = {
+                    **event,
+                    "candles": [dict(candle) for candle in event["candles"]],
+                    "ticker": dict(event["ticker"]),
+                    "order_book": dict(event["order_book"]),
+                }
+                analysis_task = asyncio.create_task(
+                    analyze_event(
+                        analysis_event,
+                        force_new_candle=force_new_candle,
+                    ),
+                    name=f"live-analysis-{user.id}-{symbol}-{timeframe}",
+                )
 
     except WebSocketDisconnect as exc:
         logger.info("WebSocket client disconnected.", extra={"close_code": exc.code})
@@ -322,6 +489,14 @@ async def websocket_analyze(websocket: WebSocket):
         except Exception:
             pass
     finally:
+        if analysis_task is not None:
+            analysis_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await analysis_task
+        if receiver_task is not None:
+            receiver_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await receiver_task
         if heartbeat_task is not None:
             heartbeat_task.cancel()
             with suppress(asyncio.CancelledError):

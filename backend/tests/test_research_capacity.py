@@ -2,14 +2,20 @@
 from __future__ import annotations
 
 from datetime import timedelta
+from time import monotonic
+from unittest.mock import AsyncMock
 
 import pytest
 
 from app.auth import utcnow
 from app.db.database import AsyncSessionLocal
 from app.db.models import Subscription, User
-from app.research_capacity import ResearchCapacityExceeded, ResearchEntitlementUnavailable, acquire_research_slot, heartbeat_research_slot, release_research_slot, research_capacity_view
+from app.research_capacity import ResearchCapacityExceeded, ResearchEntitlementUnavailable, acquire_research_slot, heartbeat_research_slot, release_research_slot, release_user_research_slot, research_capacity_view
 from app.settings import get_settings
+from app.routes.analyze import (
+    CLIENT_LIVENESS_TIMEOUT_SECONDS,
+    _maintain_websocket_research_slot,
+)
 
 
 async def _active_user(plan_code: str) -> User:
@@ -52,6 +58,54 @@ async def test_releasing_a_research_slot_makes_capacity_available_immediately() 
         assert second.active_slots == 1
     finally:
         await release_research_slot(second.id)
+
+
+@pytest.mark.asyncio
+async def test_page_release_can_only_remove_callers_own_research_slot() -> None:
+    owner = await _active_user("monthly")
+    other = await _active_user("quarterly")
+    lease = await acquire_research_slot(
+        user=owner,
+        symbol="BTCUSDT",
+        timeframe="15m",
+        channel="websocket",
+    )
+    try:
+        assert await release_user_research_slot(lease.id, user_id=other.id) is False
+        assert (await research_capacity_view(owner))["active_slots"] == 1
+        assert await release_user_research_slot(lease.id, user_id=owner.id) is True
+        assert (await research_capacity_view(owner))["active_slots"] == 0
+    finally:
+        await release_research_slot(lease.id)
+
+
+@pytest.mark.asyncio
+async def test_unresponsive_page_is_reaped_instead_of_heartbeating_forever(monkeypatch) -> None:
+    user = await _active_user("annual")
+    lease = await acquire_research_slot(
+        user=user,
+        symbol="BTCUSDT",
+        timeframe="15m",
+        channel="websocket",
+    )
+
+    class FakeWebSocket:
+        closed = None
+
+        async def close(self, *, code: int, reason: str) -> None:
+            self.closed = (code, reason)
+
+    websocket = FakeWebSocket()
+    monkeypatch.setattr("app.routes.analyze.asyncio.sleep", AsyncMock(return_value=None))
+    await _maintain_websocket_research_slot(
+        websocket,
+        lease.id,
+        user,
+        None,
+        {"last_seen": monotonic() - CLIENT_LIVENESS_TIMEOUT_SECONDS - 1},
+    )
+    assert websocket.closed == (4408, "Research page stopped responding")
+    assert (await research_capacity_view(user))["active_slots"] == 0
 
 
 @pytest.mark.asyncio

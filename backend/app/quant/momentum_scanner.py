@@ -231,7 +231,7 @@ async def _enrich_live_confirmations(
     async def enrich(candidate: Dict[str, Any]) -> None:
         async with semaphore:
             live = await _fetch_live_confirmation(client, candidate["symbol"])
-            _refresh_causal_context_from_live(candidate, live)
+            await asyncio.to_thread(_refresh_causal_context_from_live, candidate, live)
             if (
                 candidate.get("direction") == "NEUTRAL"
                 or (candidate.get("market_context") or {}).get("status") != "SETUP_CANDIDATE"
@@ -1211,15 +1211,32 @@ async def get_breakout_candidates(ltf: str = "5m", htf: str = "1h", use_ai: bool
             asyncio.gather(*(bounded(symbol, htf) for symbol, _ in universe)),
         )
         now_ms = int(time.time() * 1000)
-        candidates: list[dict[str, Any]] = []
-        for (symbol, volume), raw_ltf, raw_htf in zip(universe, ltf_rows, htf_rows):
-            candles = [candle for candle in _candles_from_klines(raw_ltf) if candle.close_time <= now_ms]
-            higher = [candle for candle in _candles_from_klines(raw_htf) if candle.close_time <= now_ms]
-            candidate = _candidate_from_causal_context(
-                symbol=symbol, candles=candles, higher_candles=higher, quote_volume_24h=volume,
-            )
-            if candidate:
-                candidates.append(candidate)
+
+        def build_candidates() -> list[dict[str, Any]]:
+            built: list[dict[str, Any]] = []
+            for (symbol, volume), raw_ltf, raw_htf in zip(universe, ltf_rows, htf_rows):
+                candles = [
+                    candle for candle in _candles_from_klines(raw_ltf)
+                    if candle.close_time <= now_ms
+                ]
+                higher = [
+                    candle for candle in _candles_from_klines(raw_htf)
+                    if candle.close_time <= now_ms
+                ]
+                candidate = _candidate_from_causal_context(
+                    symbol=symbol,
+                    candles=candles,
+                    higher_candles=higher,
+                    quote_volume_24h=volume,
+                )
+                if candidate:
+                    built.append(candidate)
+            return built
+
+        # Market-story reconstruction across the liquid universe is CPU work.
+        # Keep it off the sole ASGI event loop so Docker readiness and public
+        # Radar reads remain responsive while a shared refresh is calculated.
+        candidates = await asyncio.to_thread(build_candidates)
 
         candidates.sort(key=lambda item: (item["score"], item["coverage"].get("available_domains", 0), item["volume_usdt"]), reverse=True)
         await _enrich_live_confirmations(client, candidates)

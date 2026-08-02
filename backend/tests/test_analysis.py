@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 from app.data_sources.gdelt import get_news_query
 from app.data_sources.binance_public import Candle
 from app.main import app
+from app.routes.analyze import _market_tick_payload
 
 
 def test_get_news_query() -> None:
@@ -36,6 +37,60 @@ def test_ai_status_endpoint() -> None:
     data = response.json()
     assert "provider" in data
     assert "configured" in data
+
+
+def test_market_tick_updates_active_candle_with_latest_futures_price() -> None:
+    tick = _market_tick_payload(
+        symbol="BTCUSDT",
+        timeframe="15m",
+        candles=[{
+            "open_time": 1_700_000_000_000,
+            "close_time": 1_700_000_899_999,
+            "open": 100.0,
+            "high": 101.0,
+            "low": 99.0,
+            "close": 100.5,
+            "volume": 10.0,
+            "quote_volume": 1_000.0,
+            "trade_count": 20,
+            "taker_buy_base_volume": 6.0,
+            "taker_buy_quote_volume": 600.0,
+        }],
+        ticker={"lastPrice": "102.25"},
+    )
+    assert tick["type"] == "market_tick"
+    assert tick["market"]["last_price"] == 102.25
+    assert tick["chart_tick"]["candle"]["close"] == 102.25
+    assert tick["chart_tick"]["candle"]["high"] == 102.25
+
+
+def test_initial_market_tick_bootstraps_full_chart_history() -> None:
+    candles = [
+        {
+            "open_time": index * 60_000,
+            "close_time": (index + 1) * 60_000 - 1,
+            "open": 100.0,
+            "high": 101.0,
+            "low": 99.0,
+            "close": 100.5,
+            "volume": 10.0,
+            "quote_volume": 1_000.0,
+            "trade_count": 20,
+            "taker_buy_base_volume": 6.0,
+            "taker_buy_quote_volume": 600.0,
+        }
+        for index in range(220)
+    ]
+    tick = _market_tick_payload(
+        symbol="BTCUSDT",
+        timeframe="1m",
+        candles=candles,
+        ticker={"lastPrice": "103.0"},
+        snapshot=True,
+    )
+    assert tick["chart_tick"]["mode"] == "snapshot"
+    assert len(tick["chart_tick"]["candles"]) == 200
+    assert tick["chart_tick"]["candles"][-1]["close"] == 103.0
 
 
 def test_kelly_sizing() -> None:

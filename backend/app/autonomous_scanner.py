@@ -241,7 +241,8 @@ async def run_single_symbol_scan(symbol: str, timeframe: str, settings: Any) -> 
         direction_side = "LONG" if cio_result.get("decision") == "BUY_WATCH" else "SHORT" if cio_result.get("decision") == "SELL_WATCH" else None
         confirmation_timeframes = {"1m": "5m", "5m": "1h", "15m": "4h", "1h": "1d", "4h": "1d", "1d": "1w"}
         higher = (intelligence.get("multi_tf_candles", {}) or {}).get(confirmation_timeframes.get(timeframe), [])
-        cio_result["live_confirmation"] = verify_main_signal_snapshot(
+        cio_result["live_confirmation"] = await asyncio.to_thread(
+            verify_main_signal_snapshot,
             symbol=symbol, timeframe=timeframe, side=direction_side,
             candles=intelligence.get("candles", []), higher_candles=higher,
             order_book=intelligence.get("order_book", {}), funding=intelligence.get("funding", {}),

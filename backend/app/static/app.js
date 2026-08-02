@@ -68,6 +68,8 @@ if (window.atcAuthenticated && accessToken()) scheduleAccessTokenRefresh(accessT
 
 // State Variables
 let socket = null;
+let activeResearchLeaseId = null;
+let researchHeartbeatTimer = null;
 let lastPrice = null;
 let activeRetailStop = null;
 let activeSmartStop = null;
@@ -1460,6 +1462,40 @@ let userIntentDisconnect = true;
 let reconnectTimer = null;
 let reconnectAttempts = 0;
 
+function stopResearchClientHeartbeat() {
+  if (researchHeartbeatTimer) clearInterval(researchHeartbeatTimer);
+  researchHeartbeatTimer = null;
+}
+
+function sendResearchClientHeartbeat() {
+  if (socket?.readyState === WebSocket.OPEN) {
+    socket.send(JSON.stringify({ type: 'client_heartbeat', at: Date.now() }));
+  }
+}
+
+function startResearchClientHeartbeat() {
+  stopResearchClientHeartbeat();
+  sendResearchClientHeartbeat();
+  researchHeartbeatTimer = setInterval(sendResearchClientHeartbeat, 15_000);
+}
+
+function releaseActiveResearchSession({ keepalive = false } = {}) {
+  const leaseId = activeResearchLeaseId;
+  activeResearchLeaseId = null;
+  if (!leaseId) return Promise.resolve();
+  const token = accessToken();
+  if (!token) return Promise.resolve();
+  return originalFetch('/research/session/release', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ lease_id: leaseId }),
+    keepalive,
+  }).catch(() => { });
+}
+
 function disconnectStream() {
   userIntentDisconnect = true;
   reconnectAttempts = 0;
@@ -1468,6 +1504,8 @@ function disconnectStream() {
     reconnectTimer = null;
   }
   stopLoaderAnimation();
+  stopResearchClientHeartbeat();
+  releaseActiveResearchSession();
   if (socket) {
     socket.onclose = null; // Prevent onclose from triggering auto-reconnect
     socket.close(1000, 'User Disconnected');
@@ -1619,6 +1657,27 @@ function updateConnectionUI(connected) {
   }
 }
 
+function updateLivePrice(rawPrice) {
+  const currentPrice = Number(rawPrice);
+  if (!Number.isFinite(currentPrice)) return;
+  if (lastPrice !== null) {
+    if (currentPrice > lastPrice) {
+      priceVal.style.color = 'var(--neon-green)';
+      setTimeout(() => { priceVal.style.color = ''; }, 400);
+    } else if (currentPrice < lastPrice) {
+      priceVal.style.color = 'var(--neon-red)';
+      setTimeout(() => { priceVal.style.color = ''; }, 400);
+    }
+  }
+  lastPrice = currentPrice;
+  priceVal.textContent = formatCurrency(currentPrice);
+}
+
+function renderMarketTick(payload) {
+  updateLivePrice(payload?.market?.last_price);
+  window.HawkEyeChart?.consumeTick(payload?.chart_tick);
+}
+
 async function startStream(symbol, timeframe, useAi) {
   // Clear any existing reconnect timers
   if (reconnectTimer) {
@@ -1628,6 +1687,8 @@ async function startStream(symbol, timeframe, useAi) {
 
   // Detach any existing socket event handlers before closing
   if (socket) {
+    stopResearchClientHeartbeat();
+    await releaseActiveResearchSession();
     socket.onclose = null;
     socket.close();
     socket = null;
@@ -1671,6 +1732,7 @@ async function startStream(symbol, timeframe, useAi) {
     // Subscribe
     const subPayload = { symbol, timeframe, use_ai: useAi };
     socket.send(JSON.stringify(subPayload));
+    startResearchClientHeartbeat();
     logMsg(`Subscribed to ${symbol} [${timeframe}]. Evidence review convened.`, 'ws-send');
   };
 
@@ -1686,6 +1748,16 @@ async function startStream(symbol, timeframe, useAi) {
         if (socket) {
           socket.close(retryable ? 1013 : 1000, "Server error reported");
         }
+        return;
+      }
+
+      if (payload.type === 'research_session') {
+        activeResearchLeaseId = payload.lease_id || null;
+        return;
+      }
+
+      if (payload.type === 'market_tick') {
+        renderMarketTick(payload);
         return;
       }
 
@@ -1711,6 +1783,8 @@ async function startStream(symbol, timeframe, useAi) {
 
   socket.onclose = (event) => {
     socket = null;
+    stopResearchClientHeartbeat();
+    releaseActiveResearchSession();
     updateConnectionUI(false);
     logMsg(`WebSocket closed (code ${event.code}${event.reason ? `: ${event.reason}` : ''}).`, event.code === 1000 ? 'system' : 'error');
     const terminalCode = [4400, 4403, 4429].includes(event.code);
@@ -1732,6 +1806,17 @@ async function startStream(symbol, timeframe, useAi) {
     updateConnectionUI(false);
   };
 }
+
+window.addEventListener('pagehide', () => {
+  userIntentDisconnect = true;
+  stopResearchClientHeartbeat();
+  releaseActiveResearchSession({ keepalive: true });
+  if (socket) {
+    socket.onclose = null;
+    socket.close(1000, 'Research page closed');
+    socket = null;
+  }
+});
 
 function useAnalysisSnapshot(payload) {
   const snapshot = payload?.analysis_snapshot;
@@ -2314,18 +2399,7 @@ function renderDashboard(data) {
   }
 
   // Live Price Ticker Flashing
-  const currentPrice = parseFloat(data.market.last_price);
-  if (lastPrice !== null) {
-    if (currentPrice > lastPrice) {
-      priceVal.style.color = 'var(--neon-green)';
-      setTimeout(() => priceVal.style.color = '', 400);
-    } else if (currentPrice < lastPrice) {
-      priceVal.style.color = 'var(--neon-red)';
-      setTimeout(() => priceVal.style.color = '', 400);
-    }
-  }
-  lastPrice = currentPrice;
-  priceVal.textContent = formatCurrency(currentPrice);
+  updateLivePrice(data.market.last_price);
 
   const rawChange = parseFloat(data.market.price_change_pct_24h || 0);
   changeVal.textContent = (rawChange >= 0 ? '+' : '') + rawChange.toFixed(2) + '%';

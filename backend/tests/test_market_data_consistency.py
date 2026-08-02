@@ -33,7 +33,15 @@ def test_research_websocket_uses_futures_history_and_stream() -> None:
 
     assert subscriber.rest_client.market == "futures"
     assert subscriber.rest_client.base_url == "https://fapi.binance.com"
-    assert subscriber.websocket_url.startswith("wss://fstream.binance.com/")
+    assert subscriber.market_websocket_url.startswith(
+        "wss://fstream.binance.com/market/stream?streams="
+    )
+    assert "btcusdt@kline_15m" in subscriber.market_websocket_url
+    assert "btcusdt@ticker" in subscriber.market_websocket_url
+    assert subscriber.book_websocket_url.startswith(
+        "wss://fstream.binance.com/public/stream?streams="
+    )
+    assert "btcusdt@depth20@500ms" in subscriber.book_websocket_url
 
 
 def test_weekly_candles_are_supported_for_higher_timeframe_context() -> None:

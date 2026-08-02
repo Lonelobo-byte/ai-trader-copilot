@@ -190,7 +190,7 @@ async def signal_monitor_loop() -> None:
                 timeframe,
                 limit=200,
             )
-            story = build_market_story(candles)
+            story = await asyncio.to_thread(build_market_story, candles)
             if len(story_cache) >= 128 and key not in story_cache:
                 story_cache.pop(next(iter(story_cache)))
             story_cache[key] = (bucket, story)

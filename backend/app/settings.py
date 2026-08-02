@@ -79,6 +79,13 @@ class Settings(BaseSettings):
     binance_public_base_url: str = "https://api.binance.com"
     binance_futures_base_url: str = "https://fapi.binance.com"
     binance_stream_base_url: str = "wss://stream.binance.com:9443"
+    # Binance USD-M separated market events (ticker/kline/trades) from public
+    # book events in its 2026 stream namespace.  Research needs both feeds:
+    # the market stream advances the live candle while the public stream keeps
+    # depth synchronized with that candle.
+    binance_futures_market_ws_url: str = "wss://fstream.binance.com/market/stream"
+    binance_futures_book_ws_url: str = "wss://fstream.binance.com/public/stream"
+    binance_futures_mini_ticker_ws_url: str = "wss://fstream.binance.com/market/ws/!miniTicker@arr"
     gdelt_doc_api: str = "https://api.gdeltproject.org/api/v2/doc/doc"
 
     # Keep live research responsive without allowing every browser tab to fan
@@ -95,11 +102,14 @@ class Settings(BaseSettings):
     analysis_compute_max_concurrency: int = 4
     analysis_compute_wait_seconds: float = 20.0
     analysis_websocket_config_timeout_seconds: float = 10.0
+    # Lightweight chart ticks continue while the heavier synchronized
+    # research dossier is rebuilt at this bounded cadence.
+    analysis_live_refresh_seconds: float = 5.0
     # One bounded process-wide execution tape. These public feeds use no API
     # key and are shared by every dashboard, scanner, and analysis request.
     multi_venue_ws_enabled: bool = True
     binance_spot_public_ws_url: str = "wss://stream.binance.com:9443/stream"
-    binance_perp_public_ws_url: str = "wss://fstream.binance.com/stream"
+    binance_perp_public_ws_url: str = "wss://fstream.binance.com/market/stream"
     bybit_spot_public_ws_url: str = "wss://stream.bybit.com/v5/public/spot"
     bybit_perp_public_ws_url: str = "wss://stream.bybit.com/v5/public/linear"
     # Startup warm set only. Any valid USDT market selected in Radar/Research

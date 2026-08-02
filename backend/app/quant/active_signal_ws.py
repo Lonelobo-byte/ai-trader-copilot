@@ -23,11 +23,6 @@ from app.signal_service import advance_signal, _record_data, _apply
 
 logger = logging.getLogger(__name__)
 
-# Combined ticker WebSocket endpoint for the perpetual price series used by
-# Research, Radar and all persisted signal levels.
-_FUTURES_MINI_TICKER_WS = "wss://fstream.binance.com/ws/!miniTicker@arr"
-
-
 class ActiveSignalWSMonitor:
     """Sub-second real-time price monitor using Binance MiniTicker Array WebSockets."""
 
@@ -67,7 +62,7 @@ class ActiveSignalWSMonitor:
         # from Binance USD-M perpetual candles. Monitor the same contract here;
         # spot remains corroborating execution-flow evidence, never the price
         # that activates an entry or hits a stop/target.
-        ws_url = _FUTURES_MINI_TICKER_WS
+        ws_url = get_settings().binance_futures_mini_ticker_ws_url
 
         while self._running:
             try:
@@ -107,6 +102,7 @@ class ActiveSignalWSMonitor:
                                     relevant_prices[symbol] = price
                             if relevant_prices:
                                 await self._evaluate_open_signals(relevant_prices)
+                        await asyncio.sleep(0)
 
             except asyncio.CancelledError:
                 logger.info("Active Signal WebSocket Monitor task cancelled.")

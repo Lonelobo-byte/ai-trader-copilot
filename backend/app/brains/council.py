@@ -247,6 +247,7 @@ async def run_ai_council(
     intelligence: dict[str, Any] | None = None,
     ai_override: AIRequestConfig | None = None,
     defer_ai_validation: bool = False,
+    precomputed_features: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Run the institutional committee analysis.
 
@@ -270,7 +271,10 @@ async def run_ai_council(
     )
 
     # ── Step 2: Compute quant features ───────────────────────────────────
-    features = compute_quant_features(intelligence)
+    features = precomputed_features or await asyncio.to_thread(
+        compute_quant_features,
+        intelligence,
+    )
     logger.info(f"🔬 Feature engine computed: regime={features.get('volatility', {}).get('regime', 'N/A')}")
 
     # Step 3: Independent deterministic engines create the dossier. Only the
@@ -279,7 +283,8 @@ async def run_ai_council(
     blockout = _check_macro_blockout(calendar_events)
     historical_stats = await _fetch_historical_stats(symbol, features, intelligence)
     portfolio_state = await load_portfolio_state(settings)
-    quantitative = build_quantitative_assessment(
+    quantitative = await asyncio.to_thread(
+        build_quantitative_assessment,
         intelligence.get("candles", []),
         intelligence.get("order_book", {"bids": [], "asks": []}),
         account_value=settings.default_account_size_usd,
@@ -291,7 +296,8 @@ async def run_ai_council(
         current_drawdown_pct=float(portfolio_state.get("current_drawdown_pct") or 0.0),
         gross_exposure_pct=float(portfolio_state.get("gross_exposure_pct") or 0.0),
     )
-    dossier = build_institutional_dossier(
+    dossier = await asyncio.to_thread(
+        build_institutional_dossier,
         symbol=symbol,
         timeframe=timeframe,
         features=features,
