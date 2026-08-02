@@ -92,7 +92,9 @@ class Settings(BaseSettings):
     # out into a complete independent market-data request.  These defaults are
     # deliberately conservative for small Docker hosts and can be tuned per
     # deployment through environment variables.
-    market_snapshot_cache_seconds: float = 8.0
+    # Current ticker/book/tape values are replaced by the live WebSocket event,
+    # so the slower contextual snapshot can safely be shared for 30 seconds.
+    market_snapshot_cache_seconds: float = 30.0
     market_snapshot_cache_max_entries: int = 96
     market_intelligence_max_concurrency: int = 8
     # Research tabs share one Binance connection per symbol/timeframe.  These
@@ -104,7 +106,7 @@ class Settings(BaseSettings):
     analysis_websocket_config_timeout_seconds: float = 10.0
     # Lightweight chart ticks continue while the heavier synchronized
     # research dossier is rebuilt at this bounded cadence.
-    analysis_live_refresh_seconds: float = 5.0
+    analysis_live_refresh_seconds: float = 10.0
     # One bounded process-wide execution tape. These public feeds use no API
     # key and are shared by every dashboard, scanner, and analysis request.
     multi_venue_ws_enabled: bool = True

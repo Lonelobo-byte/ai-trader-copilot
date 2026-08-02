@@ -1,0 +1,21 @@
+<header class="sticky top-0 z-40 ml-[76px] flex h-[74px] items-center justify-between border-b border-white/[0.07] bg-[#0c0d14]/85 px-8 text-[#fcfcfc] backdrop-blur-2xl">
+  <div>
+    <div class="flex items-center gap-3">
+      <h1 class="font-sans text-[17px] font-bold tracking-[-0.02em]">Market Discovery Radar</h1>
+      <span class="rounded-md border border-[#3e97ff]/20 bg-[#3e97ff]/[0.08] px-2 py-1 font-mono text-[9px] font-bold tracking-[0.14em] text-[#3e97ff]">CAUSAL V1</span>
+    </div>
+    <div class="mt-1 flex items-center gap-2 text-[11px] font-medium text-[#5e6278]">
+      <span>Home</span><span class="text-white/10">/</span><span>Causal Market Discovery</span>
+    </div>
+  </div>
+  <div class="flex items-center gap-3">
+    <div v-if="showEngineStatus" class="flex items-center gap-2 rounded-xl border border-[#7239ea]/20 bg-[#7239ea]/[0.07] px-3.5 py-2 text-[11px] font-semibold text-[#a78bfa]">
+      <span class="h-1.5 w-1.5 rounded-full bg-[#a78bfa] shadow-[0_0_9px_#a78bfa]"></span>
+      Causal evidence engine: Active
+    </div>
+    <div class="flex items-center gap-2 rounded-xl border border-[#50cd89]/20 bg-[#50cd89]/[0.06] px-3.5 py-2 text-[11px] font-semibold text-[#50cd89]">
+      <span class="h-1.5 w-1.5 rounded-full bg-[#50cd89] shadow-[0_0_9px_#50cd89]"></span>
+      Radar Online
+    </div>
+  </div>
+</header>

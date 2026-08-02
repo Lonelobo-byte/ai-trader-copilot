@@ -1,0 +1,12 @@
+<aside class="flex h-full min-h-[620px] w-[76px] flex-col items-center border-r border-white/5 bg-[#080c14]/90 py-6 text-[#5e6278] shadow-[4px_0_24px_rgba(0,0,0,.4)]">
+  <div class="mb-9 text-2xl text-[#3e97ff]">🔮</div>
+  <nav class="flex w-full flex-1 flex-col items-center gap-4">
+    <a :href="dashboardHref" :class="{ 'bg-[#3e97ff]/10 text-[#3e97ff] shadow-[inset_0_0_10px_rgba(62,151,255,.14)]': activeItem === 'dashboard' }" class="flex h-12 w-12 items-center justify-center rounded-xl">
+      <svg viewBox="0 0 24 24" class="h-5 w-5 fill-none stroke-current" stroke-width="2"><rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="10" width="7" height="11" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/></svg>
+    </a>
+    <a :href="radarHref" :class="{ 'bg-[#3e97ff]/10 text-[#3e97ff]': activeItem === 'radar' }" class="flex h-12 w-12 items-center justify-center rounded-xl">
+      <svg viewBox="0 0 24 24" class="h-5 w-5 fill-none stroke-current" stroke-width="2"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><path d="M12 2v20M2 12h20"/></svg>
+    </a>
+  </nav>
+  <div class="flex h-9 w-9 items-center justify-center rounded-full bg-gradient-to-br from-[#3e97ff] to-[#7239ea] text-xs font-bold text-[#0c0d14]">AP</div>
+</aside>

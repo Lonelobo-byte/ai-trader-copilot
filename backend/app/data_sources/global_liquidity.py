@@ -8,6 +8,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 import httpx
+from .http_client import get_http_client
 
 logger = logging.getLogger(__name__)
 
@@ -22,13 +23,13 @@ async def fetch_global_liquidity_index() -> dict[str, Any]:
         fng_val = 50
         fng_classification = "Neutral"
 
-        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-            resp = await client.get(_FEAR_GREED_API, params={"limit": 1})
-            if resp.status_code == 200:
-                data = resp.json()
-                if "data" in data and len(data["data"]) > 0:
-                    fng_val = int(data["data"][0].get("value", 50))
-                    fng_classification = data["data"][0].get("value_classification", "Neutral")
+        client = await get_http_client()
+        resp = await client.get(_FEAR_GREED_API, params={"limit": 1}, timeout=_TIMEOUT)
+        if resp.status_code == 200:
+            data = resp.json()
+            if "data" in data and len(data["data"]) > 0:
+                fng_val = int(data["data"][0].get("value", 50))
+                fng_classification = data["data"][0].get("value_classification", "Neutral")
 
         score = min(100, max(0, fng_val))
         status = "RISK_APPETITE_NEUTRAL"

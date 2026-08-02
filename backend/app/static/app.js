@@ -87,6 +87,7 @@ let lastReceivedNews = null;
 let isMacroAlertDismissed = false;
 let loaderInterval = null;
 let membershipCapacityPoll = null;
+let pendingDashboardPayload = null;
 
 const membershipCapacityTrigger = document.getElementById('membership-capacity-trigger');
 const membershipCardLayer = document.getElementById('membership-card-layer');
@@ -1704,6 +1705,9 @@ async function startStream(symbol, timeframe, useAi) {
     connectBtn.style.cursor = 'not-allowed';
     connectBtn.textContent = '⏳ Connecting...';
   }
+  // The chart engine is intentionally lazy. Download it only when live
+  // Research starts and overlap that work with authentication/socket setup.
+  window.HawkEyeChart?.warmup()?.catch(() => {});
 
   if (window.Notification && Notification.permission === "default") {
     Notification.requestPermission();
@@ -1762,7 +1766,11 @@ async function startStream(symbol, timeframe, useAi) {
       }
 
       logMsg(`Received update tick. Price: ${payload.market.last_price}`, 'ws-receive');
-      renderDashboard(payload);
+      if (document.hidden) {
+        pendingDashboardPayload = payload;
+      } else {
+        renderDashboard(payload);
+      }
 
       // Trigger notification
       if (window.Notification && Notification.permission === "granted") {
@@ -3586,6 +3594,7 @@ function renderSignalHistory(signals) {
 }
 
 async function refreshSignalHistory() {
+  if (document.hidden) return;
   try {
     const response = await fetch('/signals/history?limit=50');
     if (!response.ok) throw new Error('Signal history request failed.');
@@ -3601,10 +3610,20 @@ let signalHistoryTimer = null;
 function startSignalHistoryPolling() {
   if (signalHistoryTimer) return;
   refreshSignalHistory();
-  // History changes only when a signal advances; a 15-second cadence keeps
-  // the ledger current without every open dashboard tab polling the server.
-  signalHistoryTimer = setInterval(refreshSignalHistory, 15000);
+  // Live transitions already arrive on the research stream. History is a
+  // ledger view, so poll only visible tabs at a lower database cadence.
+  signalHistoryTimer = setInterval(refreshSignalHistory, 30000);
 }
+
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) return;
+  if (pendingDashboardPayload) {
+    const payload = pendingDashboardPayload;
+    pendingDashboardPayload = null;
+    renderDashboard(payload);
+  }
+  if (protectedDashboardStarted) refreshSignalHistory();
+});
 
 // economic and backtest/training operations handlers
 if (runBacktestBtn) {

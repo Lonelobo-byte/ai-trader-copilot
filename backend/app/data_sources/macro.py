@@ -1,6 +1,5 @@
 import logging
 import asyncio
-import yfinance as yf
 
 logger = logging.getLogger(__name__)
 
@@ -9,6 +8,11 @@ async def fetch_macro_data() -> dict:
     # Use asyncio.to_thread because yfinance is synchronous and blocks
     try:
         def fetch():
+            # yfinance imports pandas and a sizeable numerical stack.  Loading
+            # it at module import made every API/Radar-only process pay that
+            # memory and startup cost even when macro data was never requested.
+            import yfinance as yf
+
             tickers = yf.Tickers("DX-Y.NYB NQ=F GC=F ^TNX")
             data = {}
             for sym, t in tickers.tickers.items():
@@ -46,4 +50,3 @@ async def fetch_macro_data() -> dict:
     except Exception as exc:
         logger.error(f"Failed to fetch macro data: {exc}")
         return {"error": "Macro data unavailable"}
-

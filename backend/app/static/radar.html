@@ -1540,140 +1540,6 @@
       </div>
     </header>
 
-    <template id="legacy-radar-layout">
-    <main class="radar-container flight-deck-container">
-      <!-- SUMMARY BANNER CARDS -->
-      <div class="radar-summary-cards">
-        <div class="card radar-summary-card active-breakouts">
-          <h3>Aligned Contexts</h3>
-          <div class="radar-summary-metric">
-            <h2 id="summary-breakout-count" style="font-size: 2rem; font-weight: 700; line-height: 1;">0</h2>
-            <span class="label radar-summary-caption">live-confirmed review candidates</span>
-          </div>
-        </div>
-        <div class="card radar-summary-card hot-zones">
-          <h3>Highest Evidence Score</h3>
-          <div class="radar-summary-metric">
-            <h2 id="summary-top-score"
-              style="font-size: 2rem; font-weight: 700; line-height: 1; font-family: var(--font-mono); color: var(--neon-gold);">
-              -</h2>
-            <span id="summary-top-symbol" class="label radar-summary-caption" style="font-weight: 700;">-</span>
-          </div>
-        </div>
-        <div class="card radar-summary-card">
-          <h3>Volatility Regime</h3>
-          <div class="radar-summary-metric">
-            <h2 id="summary-vol-state"
-              style="font-size: 1.5rem; font-weight: 700; line-height: 1; color: var(--neon-blue);">STABLE</h2>
-            <span class="label radar-summary-caption">dominant realized-volatility state</span>
-          </div>
-        </div>
-        <div class="card radar-summary-card"
-          style="display: flex; align-items: center; justify-content: center; padding: 0.75rem 1.5rem; min-height: 105px; position: relative;">
-          <h3 style="position: absolute; top: 1rem; left: 1.5rem; margin: 0; padding: 0; border: none;">Live Scan
-            Telemetry</h3>
-          <div class="radar-scope" style="margin: 1.35rem auto 0 auto; width: 80px; height: 80px; border-width: 1px;">
-            <div class="radar-sweep"></div>
-            <div class="radar-grid-circle"></div>
-            <div class="radar-grid-circle-inner"></div>
-            <div class="radar-crosshair-h"></div>
-            <div class="radar-crosshair-v"></div>
-            <div class="radar-dot" style="width: 4px; height: 4px; top: 25%; left: 70%;"></div>
-            <div class="radar-dot red-alert" style="width: 4px; height: 4px; top: 70%; left: 30%;"></div>
-          </div>
-        </div>
-      </div>
-
-      <!-- FILTER BAR -->
-      <div class="radar-filters">
-        <div class="filter-group">
-          <button class="filter-btn active" data-filter="all">All Contexts</button>
-          <button class="filter-btn" data-filter="recommended">Review Candidates</button>
-          <button class="filter-btn" data-filter="bullish">Bullish Context</button>
-          <button class="filter-btn" data-filter="bearish">Bearish Context</button>
-        </div>
-
-        <div style="display: flex; align-items: center; gap: 0.75rem;">
-          <label for="scan-mode-select" style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary);">Scan
-            Mode:</label>
-          <select id="scan-mode-select"
-            style="background: rgba(8, 14, 24, 0.9); border: 1px solid var(--border-color); color: var(--text-primary); font-size: 0.8rem; font-weight: 600; padding: 6px 16px; border-radius: 8px; outline: none; cursor: pointer; transition: all var(--transition-speed);">
-            <option value="5m,1h">⚡ Scalp Scan (5m / 1h)</option>
-            <option value="15m,4h" selected>🕒 Intraday Scan (15m / 4h)</option>
-            <option value="1h,1d">📅 Swing Scan (1h / 1d)</option>
-          </select>
-          <button id="ai-radar-btn" class="top-research-btn" type="button" onclick="buildTopResearchBriefs()">
-            <span>Build Top-3 Research Briefs</span>
-            <span class="top-research-btn-state" id="top-research-btn-state">READY</span>
-          </button>
-        </div>
-
-        <div class="radar-refresh-info">
-          <span class="radar-refresh-spinner" id="refresh-spinner"></span>
-          <span id="refresh-text">Next scan in 30s</span>
-        </div>
-      </div>
-
-      <!-- BREAKOUT RECORDS TABLE -->
-      <div class="radar-table-container">
-        <table class="radar-table">
-          <thead>
-            <tr>
-              <th>Symbol / Causal Thesis</th>
-              <th>Causal Score</th>
-              <th>Regime &amp; Vol</th>
-              <th>Liquidity Reference</th>
-              <th>Price × OI</th>
-              <th>Order Flow</th>
-              <th>Evidence Coverage</th>
-              <th>Review Status</th>
-              <th>Action</th>
-            </tr>
-          </thead>
-          <tbody id="radar-records-tbody">
-            <!-- Populated dynamically via JS -->
-            <tr>
-              <td colspan="9">
-                <div class="radar-evidence-loading is-active" role="status" aria-live="polite">
-                  <div class="evidence-radar-orbit" aria-hidden="true"><span></span><i></i></div>
-                  <div class="evidence-loading-copy">
-                    <div class="evidence-loading-meta">Live collection in progress</div>
-                    <h3>Acquiring market evidence</h3>
-                    <p>Mapping the current context before Radar ranks any opportunity.</p>
-                    <div class="evidence-loading-stages" aria-label="Evidence collection stages">
-                      <div class="evidence-stage active"><span class="evidence-stage-label">Liquidity map</span>
-                        <div class="evidence-stage-bar"></div>
-                      </div>
-                      <div class="evidence-stage"><span class="evidence-stage-label">Positioning</span>
-                        <div class="evidence-stage-bar"></div>
-                      </div>
-                      <div class="evidence-stage"><span class="evidence-stage-label">Order flow</span>
-                        <div class="evidence-stage-bar"></div>
-                      </div>
-                    </div>
-                    <div class="evidence-loading-progress" aria-hidden="true"><span></span></div>
-                  </div>
-                </div>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-
-      <section class="radar-research-briefs" id="radar-research-briefs" hidden aria-live="polite">
-        <div class="radar-research-heading">
-          <div>
-            <span class="research-kicker">Deterministic evidence · manual research</span>
-            <h2>Top-3 Research Briefs</h2>
-            <p id="research-briefs-summary">Each brief explains the current context without changing Radar’s ranking or
-              authorizing a trade.</p>
-          </div>
-          <span class="research-run-status" id="research-run-status">READY</span>
-        </div>
-        <div class="research-brief-list" id="research-brief-list"></div>
-      </section>
-    </main>
-    </template>
     <main class="radar-container flight-deck-container"></main>
 
     <!-- AI VERIFICATION OVERLAY MODAL -->
@@ -1690,9 +1556,7 @@
     </div>
 
     <script>
-      // Mount only the approved Causal Flight Deck. The archived table source
-      // lives in an inert template, so it cannot create duplicate IDs or cost
-      // an unnecessary browser layout before being replaced.
+      // Mount the approved Causal Flight Deck.
       const radarContainer = document.querySelector('main.radar-container');
       radarContainer.innerHTML = `
         <section class="flight-deck" aria-label="Causal Flight Deck">
@@ -1754,8 +1618,6 @@
             </section>
           </div>
         </section>`;
-      document.getElementById('legacy-radar-layout')?.remove();
-
       // State management
       let activeFilter = 'all';
       let rawBreakouts = [];
@@ -1896,172 +1758,6 @@
         if (token) headers.set('Authorization', `Bearer ${token}`);
         return radarOriginalFetch(url, { ...options, headers, credentials: 'same-origin', cache: 'no-store' });
       }
-      // Render breakout records
-      function renderLegacyBreakoutTable() {
-        stopRadarEvidenceLoading();
-        const filtered = rawBreakouts.filter(item => {
-          if (activeFilter === 'recommended') {
-            return item.review_status === 'REVIEW_CANDIDATE';
-          }
-          if (activeFilter === 'bullish') return item.direction === 'BULLISH';
-          if (activeFilter === 'bearish') return item.direction === 'BEARISH';
-          return true;
-        });
-
-        if (filtered.length === 0) {
-          recordsTbody.innerHTML = `
-          <tr>
-            <td colspan="10">
-              <div class="radar-empty-state">
-                <span class="icon">💤</span>
-                <p>No active breakouts match the filter category.</p>
-              </div>
-            </td>
-          </tr>
-        `;
-          return;
-        }
-
-        recordsTbody.innerHTML = filtered.map(item => {
-          // Color mapping for score
-          let scoreClass = 'score-low';
-          let fillClass = 'score-low-fill';
-          if (item.score >= 75) {
-            scoreClass = 'score-high';
-            fillClass = 'score-high-fill';
-          } else if (item.score >= 40) {
-            scoreClass = 'score-medium';
-            fillClass = 'score-medium-fill';
-          }
-
-          // Trend indicators
-          let trendText = item.direction === 'BULLISH' ? '🟢 Buy' : '🔴 Sell';
-          if (item.status.includes('EXHAUSTED')) {
-            trendText = item.direction === 'BULLISH' ? '🟢 Reversal Long' : '🔴 Reversal Short';
-          } else if (item.status.includes('BREAKDOWN')) {
-            trendText = '📉 Breakdown Short';
-          } else if (item.status.includes('BREAKOUT')) {
-            trendText = '🚀 Breakout Long';
-          }
-          let trendClass = item.direction === 'BULLISH' ? 'bullish' : 'bearish';
-
-          // Direction is only labelled a breakout after the API confirms both
-          // timeframe structure and a completed close through the prior swing.
-          if (item.status === 'LIVE_CONFIRMED_REVIEW') {
-            trendText = item.direction === 'BULLISH' ? 'Live-Confirmed Long Review' : 'Live-Confirmed Short Review';
-            trendClass = item.direction === 'BULLISH' ? 'bullish' : 'bearish';
-          } else if (item.status === 'STRUCTURE_CONFIRMED_PENDING_LIVE_CONFIRMATION') {
-            trendText = item.direction === 'BULLISH' ? 'Breakout — Live Check Pending' : 'Breakdown — Live Check Pending';
-            trendClass = item.direction === 'BULLISH' ? 'bullish' : 'bearish';
-          } else if (item.status === 'LIVE_CONFIRMATION_REJECTED') {
-            trendText = item.direction === 'BULLISH' ? 'Long Structure — Live Flow Rejected' : 'Short Structure — Live Flow Rejected';
-            trendClass = 'neutral';
-          } else if (item.status === 'CONFIRMED_BULLISH_BREAKOUT') {
-            trendText = 'Confirmed Breakout Long';
-            trendClass = 'bullish';
-          } else if (item.status === 'CONFIRMED_BEARISH_BREAKDOWN') {
-            trendText = 'Confirmed Breakdown Short';
-            trendClass = 'bearish';
-          } else if (item.status === 'BULLISH_TREND_WATCH') {
-            trendText = 'Bullish Trend Watch';
-            trendClass = 'bullish';
-          } else if (item.status === 'BEARISH_TREND_WATCH') {
-            trendText = 'Bearish Trend Watch';
-            trendClass = 'bearish';
-          } else {
-            trendText = 'Structure unconfirmed';
-            trendClass = 'neutral';
-          }
-
-          // Quality Badge formatting for Top-Left tag
-          let qualityBadgeHtml = item.quality_badge || '🔍 QUANT VERIFIED';
-          const smc = item.smc_confluence || {};
-          const smcSummary = smc.phase
-            ? `Phase: ${smc.phase.replace(/_/g, ' ')} · SMC confluence ${smc.score_adjustment >= 0 ? '+' : ''}${smc.score_adjustment || 0}`
-            : 'SMC confluence unavailable';
-          let badgeTheme = 'badge-quant';
-          let rowTheme = '';
-
-          if (item.review_status === 'REVIEW_CANDIDATE') {
-            badgeTheme = 'badge-verified';
-            rowTheme = 'row-verified';
-          } else if (qualityBadgeHtml.includes('HIGH RISK') || (item.risk_flags || []).length > 0) {
-            badgeTheme = 'badge-rejected';
-            rowTheme = 'row-rejected';
-          } else if (qualityBadgeHtml.includes('TOP TIER')) {
-            badgeTheme = 'badge-top-tier';
-          }
-
-          // Recommendation Tag (Clear decision helper for user)
-          let recBadge = '<span class="priority-badge low">🟡 WATCHLIST</span>';
-          if (qualityBadgeHtml.includes('REJECTED') || item.ai_verdict === 'AVOID' || item.ai_verdict === 'LIKELY_TRAP') {
-            recBadge = '<span class="priority-badge" style="background: rgba(241, 65, 108, 0.2); color: #f1416c; border: 1px solid rgba(241, 65, 108, 0.5); font-weight: 700;">🔴 AVOID / TRAP</span>';
-          } else if (item.score >= 75 && (qualityBadgeHtml.includes('AI VERIFIED') || qualityBadgeHtml.includes('TOP TIER'))) {
-            recBadge = '<span class="priority-badge critical" style="background: rgba(80, 205, 137, 0.2); color: #50cd89; border: 1px solid rgba(80, 205, 137, 0.5); font-weight: 700;">🟢 TOP CONVICTION</span>';
-          } else if (item.score >= 50) {
-            recBadge = '<span class="priority-badge high" style="background: rgba(62, 151, 255, 0.15); color: #3e97ff; border: 1px solid rgba(62, 151, 255, 0.35); font-weight: 700;">🟢 RECOMMENDED</span>';
-          }
-
-          // Radar never authorizes a trade. Override legacy score-only labels
-          // with the evidence-backed manual-review state from the API.
-          recBadge = item.review_status === 'REVIEW_CANDIDATE'
-            ? '<span class="priority-badge high">REVIEW CANDIDATE</span>'
-            : '<span class="priority-badge low">WATCH ONLY</span>';
-
-          // Price formatting
-          const priceText = `${item.price_change_pct >= 0 ? '+' : ''}${item.price_change_pct}%`;
-          const priceClass = item.price_change_pct >= 0 ? 'change-pos' : 'change-neg';
-
-          // Volume formatting
-          const volUsdt = item.volume_usdt;
-          const formattedVol = volUsdt >= 1000000
-            ? `$${(volUsdt / 1000000).toFixed(2)}M`
-            : `$${(volUsdt / 1000).toFixed(0)}K`;
-
-          const emoji = item.direction === 'BULLISH' ? '📈' : '📉';
-
-          return `
-          <tr class="${rowTheme}">
-            <td class="symbol-cell" style="padding-top: 10px; padding-bottom: 10px;">
-              <div style="display: flex; flex-direction: column; align-items: flex-start; gap: 4px;">
-                <span class="top-badge-tag ${badgeTheme}" title="${(smc.supporting_factors || smc.risk_flags || []).join(' ')}">${qualityBadgeHtml}</span>
-                <div style="display: flex; align-items: center; gap: 6px; margin-top: 2px;">
-                  <span class="symbol-logo">${emoji}</span>
-                  <strong style="font-size: 0.95rem; font-weight: 800;">${item.symbol}</strong>
-                </div>
-                <span style="font-size: 0.62rem; color: var(--text-muted); font-family: var(--font-mono);">${smcSummary}</span>
-              </div>
-            </td>
-            <td>
-              <div class="score-cell">
-                <span class="score-badge ${scoreClass}">${item.score}</span>
-                <div class="score-bar">
-                  <div class="score-fill ${fillClass}" style="width: ${item.score}%"></div>
-                </div>
-              </div>
-            </td>
-            <td>
-              <span class="direction-badge ${trendClass}">${trendText}</span>
-            </td>
-            <td class="value-mono">${item.rvol}x</td>
-            <td class="value-mono">${item.atr_ratio}x</td>
-            <td class="value-mono">${item.rsi}</td>
-            <td class="value-mono ${priceClass}" style="font-weight: 600;">${priceText}</td>
-            <td class="value-mono">${formattedVol}</td>
-            <td>
-              ${recBadge}
-            </td>
-            <td>
-              <a href="index.html?symbol=${item.symbol}" class="action-btn-sm">Review↗️</a>
-            </td>
-          </tr>
-        `;
-        }).join('');
-      }
-
-      // Causal Radar renderer. This definition intentionally replaces the
-      // retired breakout/indicator table above while preserving the existing
-      // filter and review-modal wiring.
       function radarStoryView(payload = {}) {
         const story = payload.market_story || payload.market_structure?.story || {};
         const directional = payload.market_context?.actionability || payload.actionability || story.actionability || {};
@@ -2191,63 +1887,6 @@
         </section>`;
       }
 
-      function renderLegacyCausalTable() {
-        const filtered = rawBreakouts.filter(item => {
-          if (activeFilter === 'recommended') return item.review_status === 'REVIEW_CANDIDATE';
-          if (activeFilter === 'bullish') return item.direction === 'BULLISH';
-          if (activeFilter === 'bearish') return item.direction === 'BEARISH';
-          return true;
-        });
-        if (!filtered.length) {
-          recordsTbody.innerHTML = `<tr><td colspan="9"><div class="radar-empty-state"><span class="icon">⌛</span><p>No aligned causal context matches this filter.</p></div></td></tr>`;
-          return;
-        }
-        const label = value => String(value || 'UNAVAILABLE').replace(/_/g, ' ');
-        const poolText = pool => pool ? `${label(pool.kind)} · ${Number(pool.price).toLocaleString(undefined, { maximumFractionDigits: 6 })}` : 'No mapped pool';
-        recordsTbody.innerHTML = filtered.map(item => {
-          const context = item.market_context || {};
-          const components = context.components || {};
-          const structure = item.market_structure || {};
-          const positioning = item.positioning || {};
-          const volatility = item.volatility_context || {};
-          const coverage = item.coverage || context.coverage || {};
-          const flow = components.order_flow || {};
-          const actualFlow = item.advanced_confirmation?.actual_flow_evidence || {};
-          const isLong = item.direction === 'BULLISH';
-          const directionClass = isLong ? 'bullish' : item.direction === 'BEARISH' ? 'bearish' : 'neutral';
-          const scoreClass = item.score >= 70 ? 'score-high' : item.score >= 55 ? 'score-medium' : 'score-low';
-          const scoreFill = item.score >= 70 ? 'score-high-fill' : item.score >= 55 ? 'score-medium-fill' : 'score-low-fill';
-          const story = radarStoryView(item);
-          const reviewReady = item.review_status === 'REVIEW_CANDIDATE' && story.actionable && !story.chaseProhibited;
-          const thesis = story.chaseProhibited
-            ? String(story.state).toUpperCase() === 'PULLBACK_REQUIRED'
-              ? 'BREAKOUT BLOCKED — WAIT FOR PULLBACK'
-              : 'MOVE CONSUMED — DO NOT CHASE'
-            : story.actionable
-              ? `${item.direction} FRESH-EVENT CONTEXT`
-              : item.direction === 'NEUTRAL' ? 'WAIT — no aligned causal thesis' : `${item.direction} context`;
-          const contradictions = (item.contradictions || []).map(label).join(', ');
-          const state = String(story.state).toUpperCase() === 'INVALIDATED'
-            ? '<span class="priority-badge lifecycle-invalid">INVALIDATED</span>'
-            : story.chaseProhibited
-              ? '<span class="priority-badge lifecycle-stale">DO NOT CHASE</span>'
-              : reviewReady
-                ? '<span class="priority-badge high">REVIEW CANDIDATE</span>'
-                : '<span class="priority-badge low">WAIT / WATCH</span>';
-          return `
-            <tr class="${reviewReady ? 'row-verified' : ''}">
-              <td class="symbol-cell"><div style="display:flex;flex-direction:column;gap:4px"><strong style="font-size:.95rem">${escapeResearch(item.symbol)}</strong><span class="top-badge-tag ${reviewReady ? 'badge-verified' : 'badge-quant'}">${escapeResearch(thesis)}</span><span style="font-size:.62rem;color:var(--text-muted)">${escapeResearch(contradictions ? `Contradiction: ${contradictions}` : 'Evidence aligned so far')}</span></div></td>
-              <td><div class="score-cell"><span class="score-badge ${scoreClass}">${item.score}</span><div class="score-bar"><div class="score-fill ${scoreFill}" style="width:${item.score}%"></div></div></div></td>
-              <td><span class="direction-badge ${directionClass}">${escapeResearch(label(structure.phase))} · ${escapeResearch(label(volatility.state))}</span>${radarLifecycleMarkup(item)}</td>
-              <td class="value-mono">${poolText(item.target_pool)}</td>
-              <td class="value-mono">${label(positioning.state)}${positioning.oi_change_pct !== undefined ? ` · ${Number(positioning.oi_change_pct).toFixed(2)}%` : ''}</td>
-              <td class="value-mono">${label(actualFlow.active_aggressor || flow.bias || 'UNAVAILABLE')}<span style="display:block;margin-top:3px;font-size:.58rem;color:var(--text-muted)">Tape: ${label(actualFlow.status || 'WARMING')}</span></td>
-              <td class="value-mono">${coverage.available_domains || 0}/${coverage.required_domains || 4} domains</td>
-              <td>${state}</td>
-              <td><div class="radar-action-group"><button class="action-btn-sm" type="button" onclick="verifySetupWithAI('${item.symbol}')">Review</button><a class="action-btn-sm research-btn" href="index.html?symbol=${encodeURIComponent(item.symbol)}" target="_blank" rel="noopener" title="Open ${item.symbol} research in a new tab">Research ↗</a></div></td>
-            </tr>`;
-        }).join('');
-      }
 
       // Flight Deck renderer. This final definition replaces the legacy table
       // renderers while reusing their canonical story interpretation.
@@ -2456,156 +2095,6 @@
         renderFlightStage(filtered.find(item => item.symbol === selectedRadarSymbol) || filtered[0]);
       }
 
-      // Trigger causal review modal
-      async function verifyLegacySetupWithAI(symbol) {
-        modalTitleSymbol.textContent = `AI SMC structure analysis: ${symbol}`;
-        modalOverlay.classList.add('active');
-        modalBodyContent.innerHTML = `
-        <div class="ai-loading-box">
-          <div class="ai-loader-ring"></div>
-          <p style="color: var(--text-secondary); font-size: 0.9rem;">Gathering timeframe candle histories...</p>
-          <p class="text-muted" style="font-size: 0.75rem; margin-top: 0.35rem;">Analyzing order books and volatility bands...</p>
-        </div>
-      `;
-
-        try {
-          const response = await premiumRadarFetch('/quant/verify-setup', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ symbol })
-          });
-
-          const data = await radarReadApiPayload(response);
-          if (!response.ok) throw new Error(data.detail || 'AI Verification query failed.');
-
-          renderAIResult(data);
-        } catch (err) {
-          modalBodyContent.innerHTML = `
-          <div class="radar-empty-state" style="color: var(--neon-red); padding: 2rem 1rem;">
-            <span class="icon">⚠️</span>
-            <p>Setup Verification Failed</p>
-            <span class="text-muted" style="font-size: 0.8rem; display: block; margin-top: 0.5rem;">${escapeResearch(err.message)}</span>
-          </div>
-        `;
-        }
-      }
-
-      // Render AI setup verification payload
-      function renderLegacyAIResult(data) {
-        // Normalize underscores to spaces for style matching
-        const normalizedVerdict = (data.verdict || '').replace(/_/g, ' ').toUpperCase();
-
-        // Determine color banner mapping
-        let bannerClass = 'verdict-continuation';
-        if (normalizedVerdict === 'PULLBACK ENTRY') bannerClass = 'verdict-pullback';
-        else if (normalizedVerdict === 'LIQUIDITY SWEEP TRAP') bannerClass = 'verdict-sweep';
-        else if (normalizedVerdict === 'REVERSAL WARNING') bannerClass = 'verdict-reversal';
-
-        const levels = data.levels || {};
-        const invalidLevel = levels.invalidation_level || 'N/A';
-
-        const bullets = (data.reasoning || [])
-          .map(bullet => `<li>${bullet}</li>`)
-          .join('');
-
-        modalBodyContent.innerHTML = `
-        <div class="ai-verdict-banner ${bannerClass}">
-          <span>Verdict: ${data.verdict}</span>
-          <span>Confidence: ${data.confidence_pct}%</span>
-        </div>
-
-        <!-- LIQUIDITY & SLIPPAGE SHIELD -->
-        <div style="background: rgba(255,255,255,0.02); border: 1px solid var(--border-color); border-radius: 8px; padding: 0.75rem 1rem; margin-bottom: 1.25rem; display: flex; flex-direction: column; gap: 0.5rem;">
-          <h4 style="font-size: 0.75rem; font-weight: 700; text-transform: uppercase; color: var(--text-muted); margin: 0; display: flex; justify-content: space-between; align-items: center;">
-            <span>🛡️ Liquidity Safety Shield</span>
-            <span style="font-size: 0.7rem; font-weight: 600; color: ${(data.liquidity?.spread_pct > 0.15 || data.liquidity?.depth_bids_1pct < 15000) ? 'var(--neon-red)' : 'var(--neon-green)'};">
-              ${(data.liquidity?.spread_pct > 0.15 || data.liquidity?.depth_bids_1pct < 15000) ? '⚠️ THIN LIQUIDITY RISK' : '✅ LIQUIDITY SECURE'}
-            </span>
-          </h4>
-          <div style="display: flex; gap: 1rem; margin-top: 0.25rem;">
-            <div style="flex: 1;">
-              <span style="display: block; font-size: 0.65rem; color: var(--text-muted);">Bid-Ask Spread</span>
-              <strong style="font-family: var(--font-mono); font-size: 0.85rem; color: ${data.liquidity?.spread_pct > 0.15 ? 'var(--neon-red)' : 'var(--text-primary)'};">
-                ${data.liquidity?.spread_pct ? data.liquidity.spread_pct.toFixed(4) : '0.0000'}%
-              </strong>
-            </div>
-            <div style="flex: 1;">
-              <span style="display: block; font-size: 0.65rem; color: var(--text-muted);">1% Bid Depth</span>
-              <strong style="font-family: var(--font-mono); font-size: 0.85rem; color: ${data.liquidity?.depth_bids_1pct < 15000 ? 'var(--neon-red)' : 'var(--text-primary)'};">
-                $${data.liquidity?.depth_bids_1pct ? data.liquidity.depth_bids_1pct.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '0.00'}
-              </strong>
-            </div>
-            <div style="flex: 1;">
-              <span style="display: block; font-size: 0.65rem; color: var(--text-muted);">1% Ask Depth</span>
-              <strong style="font-family: var(--font-mono); font-size: 0.85rem; color: ${data.liquidity?.depth_asks_1pct < 15000 ? 'var(--neon-red)' : 'var(--text-primary)'};">
-                $${data.liquidity?.depth_asks_1pct ? data.liquidity.depth_asks_1pct.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '0.00'}
-              </strong>
-            </div>
-          </div>
-        </div>
-
-        <!-- TOKEN HEALTH & VESTING RISK AUDIT -->
-        <div style="background: rgba(255,255,255,0.02); border: 1px solid var(--border-color); border-radius: 8px; padding: 0.75rem 1rem; margin-bottom: 1.25rem; display: flex; flex-direction: column; gap: 0.5rem;">
-          <h4 style="font-size: 0.75rem; font-weight: 700; text-transform: uppercase; color: var(--text-muted); margin: 0; display: flex; justify-content: space-between; align-items: center;">
-            <span>🛡️ Token Health & Vesting Audit</span>
-            <span style="font-size: 0.7rem; font-weight: 600; color: ${(data.token_health?.unlocks_warning !== 'None' || data.token_health?.concentration_risk !== 'None' || data.token_health?.dead_coin_signals !== 'None') ? 'var(--neon-gold)' : 'var(--neon-blue)'};">
-              ${(data.token_health?.unlocks_warning !== 'None' || data.token_health?.concentration_risk !== 'None' || data.token_health?.dead_coin_signals !== 'None') ? '⚠️ RISK DETECTED' : '✅ SECURE STRUCTURE'}
-            </span>
-          </h4>
-          <div style="display: flex; gap: 1rem; margin-top: 0.25rem;">
-            <div style="flex: 1;">
-              <span style="display: block; font-size: 0.65rem; color: var(--text-muted);">V/MC Ratio</span>
-              <strong style="font-family: var(--font-mono); font-size: 0.85rem; color: ${data.token_health?.v_mc_ratio < 0.01 ? 'var(--neon-red)' : 'var(--text-primary)'};">
-                ${data.token_health?.v_mc_ratio ? data.token_health.v_mc_ratio.toFixed(4) : 'N/A'}
-              </strong>
-            </div>
-            <div style="flex: 2;">
-              <span style="display: block; font-size: 0.65rem; color: var(--text-muted);">Unlocks & Vesting</span>
-              <span style="font-size: 0.75rem; color: ${data.token_health?.unlocks_warning !== 'None' ? 'var(--neon-gold)' : 'var(--text-secondary)'};">
-                ${data.token_health?.unlocks_warning || 'Clean'}
-              </span>
-            </div>
-            <div style="flex: 2;">
-              <span style="display: block; font-size: 0.65rem; color: var(--text-muted);">Whale Concentration</span>
-              <span style="font-size: 0.75rem; color: ${data.token_health?.concentration_risk !== 'None' ? 'var(--neon-gold)' : 'var(--text-secondary)'};">
-                ${data.token_health?.concentration_risk || 'Normal Distribution'}
-              </span>
-            </div>
-          </div>
-          ${data.token_health?.dead_coin_signals !== 'None' ? `
-            <div style="margin-top: 0.35rem; padding: 0.35rem 0.5rem; background: rgba(244,63,94,0.08); border-left: 2px solid var(--neon-red); border-radius: 4px; font-size: 0.72rem; color: var(--neon-red);">
-              ⚠️ Dead Coin Signal: ${data.token_health.dead_coin_signals}
-            </div>
-          ` : ''}
-        </div>
-
-        <p style="font-size: 0.9rem; font-weight: 500; margin-bottom: 1rem; color: var(--text-primary);">
-          ${data.structure}
-        </p>
-
-        <div class="ai-levels-grid">
-          <div class="ai-level-item">
-            <span>Target Resistance</span>
-            <strong>${levels.key_resistance || 'N/A'}</strong>
-          </div>
-          <div class="ai-level-item">
-            <span>Key Support</span>
-            <strong>${levels.key_support || 'N/A'}</strong>
-          </div>
-          <div class="ai-level-item invalid">
-            <span>Invalidation</span>
-            <strong>${invalidLevel}</strong>
-          </div>
-        </div>
-
-        <div class="ai-reasoning-section">
-          <h4>SMC Price Action Breakdown</h4>
-          <ul class="ai-reasoning-list">
-            ${bullets}
-          </ul>
-        </div>
-      `;
-      }
 
       // Causal review overrides the legacy AI/indicator modal copy.
       async function verifySetupWithAI(symbol) {
@@ -2920,34 +2409,6 @@
         }
       });
 
-      // Update Summary Header metrics
-      function updateLegacySummary() {
-        const activeCount = rawBreakouts.filter(item => item.review_status === 'REVIEW_CANDIDATE').length;
-        breakoutCountEl.textContent = activeCount;
-
-        if (rawBreakouts.length > 0) {
-          const topItem = rawBreakouts[0];
-          topScoreEl.textContent = topItem.score;
-          topSymbolEl.textContent = topItem.symbol;
-        } else {
-          topScoreEl.textContent = "-";
-          topSymbolEl.textContent = "-";
-        }
-
-        if (rawBreakouts.length > 0) {
-          const avgAtr = rawBreakouts.reduce((acc, item) => acc + item.atr_ratio, 0) / rawBreakouts.length;
-          if (avgAtr >= 1.6) {
-            volStateEl.textContent = "EXPLOSIVE";
-            volStateEl.style.color = "var(--neon-red)";
-          } else if (avgAtr >= 1.1) {
-            volStateEl.textContent = "VOLATILE";
-            volStateEl.style.color = "var(--neon-gold)";
-          } else {
-            volStateEl.textContent = "STABLE";
-            volStateEl.style.color = "var(--neon-blue)";
-          }
-        }
-      }
 
       function updateSummary() {
         const activeCount = rawBreakouts.filter(item => item.review_status === 'REVIEW_CANDIDATE').length;
@@ -2981,6 +2442,7 @@
       // Timing scanning loops
       function startTimer() {
         refreshTimer = setInterval(() => {
+          if (document.hidden) return;
           secondsRemaining = Math.max(0, Math.ceil((nextRadarRefreshAtMs - sharedRadarNow()) / 1000));
           if (secondsRemaining <= 0) {
             fetchBreakouts();
@@ -2994,6 +2456,12 @@
           }
         }, 1000);
       }
+
+      document.addEventListener('visibilitychange', () => {
+        if (document.hidden || isFetchingRadar) return;
+        secondsRemaining = Math.max(0, Math.ceil((nextRadarRefreshAtMs - sharedRadarNow()) / 1000));
+        if (secondsRemaining <= 0) fetchBreakouts();
+      });
 
       async function startRadar() {
         try {
@@ -3009,75 +2477,7 @@
       startRadar();
       setResearchButtonState();
     </script>
-    <script>
-      // Sci-Fi neural constellation background
-      const canvas = document.getElementById('scifi-canvas');
-      if (canvas) {
-        const ctx = canvas.getContext('2d');
-        let particles = [];
-        const particleCount = 70;
-
-        function resizeCanvas() {
-          canvas.width = window.innerWidth;
-          canvas.height = window.innerHeight;
-        }
-        window.addEventListener('resize', resizeCanvas);
-        resizeCanvas();
-
-        class Particle {
-          constructor() {
-            this.x = Math.random() * canvas.width;
-            this.y = Math.random() * canvas.height;
-            this.vx = (Math.random() - 0.5) * 0.45;
-            this.vy = (Math.random() - 0.5) * 0.45;
-            this.radius = Math.random() * 1.5 + 0.6;
-          }
-          update() {
-            this.x += this.vx;
-            this.y += this.vy;
-            if (this.x < 0 || this.x > canvas.width) this.vx *= -1;
-            if (this.y < 0 || this.y > canvas.height) this.vy *= -1;
-          }
-          draw() {
-            ctx.beginPath();
-            ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
-            ctx.fillStyle = 'rgba(62, 151, 255, 0.4)';
-            ctx.fill();
-          }
-        }
-
-        for (let i = 0; i < particleCount; i++) {
-          particles.push(new Particle());
-        }
-
-        function animate() {
-          ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-          // Draw links
-          for (let i = 0; i < particles.length; i++) {
-            particles[i].update();
-            particles[i].draw();
-
-            for (let j = i + 1; j < particles.length; j++) {
-              const dx = particles[i].x - particles[j].x;
-              const dy = particles[i].y - particles[j].y;
-              const dist = Math.sqrt(dx * dx + dy * dy);
-
-              if (dist < 110) {
-                ctx.beginPath();
-                ctx.moveTo(particles[i].x, particles[i].y);
-                ctx.lineTo(particles[j].x, particles[j].y);
-                ctx.strokeStyle = 'rgba(62, 151, 255, ' + (0.12 * (1 - dist / 110)) + ')';
-                ctx.lineWidth = 0.5;
-                ctx.stroke();
-              }
-            }
-          }
-          requestAnimationFrame(animate);
-        }
-        animate();
-      }
-    </script>
+    <script src="ambient-motion.js?v=20260802-perf1"></script>
   </div>
 </body>
 

@@ -20,6 +20,148 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/quant", tags=["radar"])
 
 
+def _selected(source: dict[str, Any], *keys: str) -> dict[str, Any]:
+    """Copy only fields required by the public Radar flight deck."""
+    return {key: source[key] for key in keys if key in source}
+
+
+def _compact_event(value: Any) -> dict[str, Any]:
+    event = value if isinstance(value, dict) else {}
+    return _selected(
+        event,
+        "detected",
+        "event_id",
+        "type",
+        "direction",
+        "age_bars",
+        "break_level",
+        "broken_level",
+        "swept_level",
+        "invalidation_level",
+        "state",
+    )
+
+
+def _compact_actionability(value: Any) -> dict[str, Any]:
+    actionability = value if isinstance(value, dict) else {}
+    result = _selected(
+        actionability,
+        "status",
+        "state",
+        "direction",
+        "actionable",
+        "chase_prohibited",
+        "reason",
+        "event_type",
+        "event_id",
+        "event_age_bars",
+        "event_level",
+    )
+    for key in ("aligned_event", "selected_event"):
+        if key in actionability:
+            result[key] = _compact_event(actionability.get(key))
+    return result
+
+
+def _radar_card_row(row: dict[str, Any]) -> dict[str, Any]:
+    """Project a persisted dossier into the compact public discovery contract.
+
+    Full evidence remains in PostgreSQL and is returned only by the protected
+    ``verify-setup`` route.  Sending it for all 40 candidates made every public
+    refresh transfer and parse nearly two megabytes of JSON.
+    """
+    result = _selected(
+        row,
+        "symbol",
+        "score",
+        "review_status",
+        "status",
+        "direction",
+        "close_price",
+        "price_change_pct",
+        "atr_ratio",
+        "volume_usdt",
+        "quality_badge",
+    )
+
+    context = row.get("market_context") if isinstance(row.get("market_context"), dict) else {}
+    context_result = _selected(context, "status", "direction", "score")
+    if "actionability" in context:
+        context_result["actionability"] = _compact_actionability(context.get("actionability"))
+    order_flow = ((context.get("components") or {}).get("order_flow") or {})
+    if order_flow:
+        context_result["components"] = {
+            "order_flow": _selected(order_flow, "available", "status", "bias")
+        }
+    if context_result:
+        result["market_context"] = context_result
+
+    story = row.get("market_story") if isinstance(row.get("market_story"), dict) else {}
+    story_result = _selected(
+        story,
+        "available",
+        "current_state",
+        "what_happened",
+        "what_is_happening",
+    )
+    if "latest_event" in story:
+        story_result["latest_event"] = _compact_event(story.get("latest_event"))
+    if "actionability" in story:
+        story_result["actionability"] = _compact_actionability(story.get("actionability"))
+    scenarios = story.get("next_scenarios")
+    if isinstance(scenarios, list):
+        story_result["next_scenarios"] = [
+            _selected(item, "scenario", "condition")
+            for item in scenarios
+            if isinstance(item, dict)
+        ]
+    if story_result:
+        result["market_story"] = story_result
+
+    structure = row.get("market_structure") if isinstance(row.get("market_structure"), dict) else {}
+    if structure:
+        result["market_structure"] = _selected(structure, "phase")
+    positioning = row.get("positioning") if isinstance(row.get("positioning"), dict) else {}
+    if positioning:
+        result["positioning"] = _selected(positioning, "available", "state", "oi_change_pct")
+    volatility = row.get("volatility_context") if isinstance(row.get("volatility_context"), dict) else {}
+    if volatility:
+        result["volatility_context"] = _selected(volatility, "available", "state")
+    coverage = row.get("coverage") or context.get("coverage")
+    if isinstance(coverage, dict):
+        result["coverage"] = _selected(coverage, "available_domains", "required_domains", "coverage_ratio")
+    target_pool = row.get("target_pool")
+    if isinstance(target_pool, dict):
+        result["target_pool"] = _selected(target_pool, "kind", "price", "side")
+
+    advanced = row.get("advanced_confirmation") if isinstance(row.get("advanced_confirmation"), dict) else {}
+    advanced_result = _selected(advanced, "state")
+    actual_flow = advanced.get("actual_flow_evidence")
+    if isinstance(actual_flow, dict):
+        advanced_result["actual_flow_evidence"] = _selected(
+            actual_flow,
+            "available",
+            "status",
+            "active_aggressor",
+            "bias",
+            "net_delta_usd",
+            "confidence",
+        )
+    live_location = advanced.get("market_story_live_location")
+    if isinstance(live_location, dict):
+        advanced_result["market_story_live_location"] = _selected(
+            live_location, "evaluated", "passed", "distance_atr"
+        )
+    if advanced_result:
+        result["advanced_confirmation"] = advanced_result
+
+    for key in ("contradictions", "risk_flags"):
+        values = row.get(key)
+        if isinstance(values, list) and values:
+            result[key] = values
+    return result
+
+
 @router.get("/breakout-radar", response_model=list[dict[str, Any]])
 async def get_radar_breakouts(
     request: Request,
@@ -50,7 +192,8 @@ async def get_radar_breakouts(
             response.headers["X-Radar-Snapshot-At"] = shared.captured_at
         if shared.next_refresh_at:
             response.headers["X-Radar-Next-Refresh-At"] = shared.next_refresh_at
-        return shared.candidates
+        response.headers["X-Radar-Payload-Mode"] = "cards-v1"
+        return [_radar_card_row(row) for row in shared.candidates]
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:

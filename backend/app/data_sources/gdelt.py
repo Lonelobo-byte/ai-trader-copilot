@@ -93,8 +93,12 @@ async def fetch_gdelt_news(
     # Gather GDELT and CoinTelegraph RSS in parallel using asyncio.gather
     import asyncio
     
-    gdelt_timeout_task = asyncio.wait_for(fetch_raw_gdelt(symbol, gdelt_api_url), timeout=1.8)
-    rss_task = fetch_rss_news(symbol)
+    gdelt_timeout_task = asyncio.wait_for(fetch_raw_gdelt(symbol, gdelt_api_url), timeout=1.25)
+    # RSS is optional context and must finish inside the aggregator's news
+    # budget. Previously its 8-second client timeout was wrapped only by the
+    # outer news timeout, making cold research wait for a known
+    # cancellation path instead of returning the sources that completed.
+    rss_task = asyncio.wait_for(fetch_rss_news(symbol), timeout=1.25)
     
     results = await asyncio.gather(
         gdelt_timeout_task,
@@ -225,8 +229,8 @@ async def fetch_global_news(
     gdelt_api_url: str = "https://api.gdeltproject.org/api/v2/doc/doc",
 ) -> list[dict[str, Any]]:
     """Fetch global industry cryptocurrency news headlines in parallel."""
-    gdelt_timeout_task = asyncio.wait_for(fetch_raw_gdelt("crypto", gdelt_api_url), timeout=1.8)
-    rss_task = fetch_rss_news("crypto_global")
+    gdelt_timeout_task = asyncio.wait_for(fetch_raw_gdelt("crypto", gdelt_api_url), timeout=1.25)
+    rss_task = asyncio.wait_for(fetch_rss_news("crypto_global"), timeout=1.25)
     
     results = await asyncio.gather(
         gdelt_timeout_task,

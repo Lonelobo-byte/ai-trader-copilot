@@ -8,10 +8,10 @@ is deliberately served while one worker refreshes it in the background.
 from __future__ import annotations
 
 import asyncio
-import copy
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from time import monotonic
 from typing import Any
 
 from sqlalchemy import select, text
@@ -158,17 +158,24 @@ async def refresh_radar_pair(ltf: str, htf: str, *, settings: Settings | None = 
                 captured_at = as_utc(existing.captured_at)
                 state = "FRESH" if _is_fresh(existing, now=utcnow(), settings=settings) else "STALE_REFRESHING"
                 return RadarRead(
-                    copy.deepcopy(existing.payload), captured_at.isoformat() if captured_at else None,
+                    existing.payload, captured_at.isoformat() if captured_at else None,
                     _next_refresh_at(existing, settings=settings, stale=state == "STALE_REFRESHING"), state,
                 )
             return None
         try:
+            scan_started = monotonic()
             candidates = await get_breakout_candidates(ltf=ltf, htf=htf, use_ai=False)
             if not candidates:
                 # The scanner uses non-empty watch rows even when no setup is
                 # actionable. An empty result therefore means its upstream
                 # universe failed; retain the last valid shared snapshot.
                 raise RuntimeError("Radar market universe returned no candidates.")
+            logger.info(
+                "Shared Radar refresh completed for %s in %.3fs with %d candidates.",
+                key,
+                monotonic() - scan_started,
+                len(candidates),
+            )
         except Exception as exc:
             logger.exception("Shared Radar refresh failed for %s", key)
             async with AsyncSessionLocal() as db:
@@ -193,7 +200,7 @@ async def refresh_radar_pair(ltf: str, htf: str, *, settings: Settings | None = 
             snapshot.last_error = None
             await db.commit()
         return RadarRead(
-            copy.deepcopy(candidates), captured_at.isoformat(),
+            candidates, captured_at.isoformat(),
             (captured_at + timedelta(seconds=freshness_seconds(ltf, htf, settings))).isoformat(), "FRESH",
         )
 
@@ -234,13 +241,13 @@ async def read_radar_pair(ltf: str, htf: str, *, settings: Settings | None = Non
         captured_at = as_utc(snapshot.captured_at)
         if _is_fresh(snapshot, now=now, settings=settings):
             return RadarRead(
-                copy.deepcopy(snapshot.payload), captured_at.isoformat() if captured_at else None,
+                snapshot.payload, captured_at.isoformat() if captured_at else None,
                 _next_refresh_at(snapshot, settings=settings), "FRESH",
             )
         if _is_servable_stale(snapshot, now=now, settings=settings):
             _background_refresh(ltf, htf, settings)
             return RadarRead(
-                copy.deepcopy(snapshot.payload), captured_at.isoformat() if captured_at else None,
+                snapshot.payload, captured_at.isoformat() if captured_at else None,
                 _next_refresh_at(snapshot, settings=settings, stale=True), "STALE_REFRESHING",
             )
 
@@ -264,7 +271,7 @@ async def read_radar_pair(ltf: str, htf: str, *, settings: Settings | None = Non
                 ):
                     state = "FRESH" if _is_fresh(current, now=utcnow(), settings=settings) else "STALE_REFRESHING"
                     return RadarRead(
-                        copy.deepcopy(current.payload),
+                        current.payload,
                         current_captured_at.isoformat(),
                         _next_refresh_at(current, settings=settings, stale=state == "STALE_REFRESHING"),
                         state,
@@ -283,7 +290,7 @@ async def read_radar_pair(ltf: str, htf: str, *, settings: Settings | None = Non
                     captured_at = as_utc(snapshot.captured_at)
                     state = "FRESH" if _is_fresh(snapshot, now=utcnow(), settings=settings) else "STALE_REFRESHING"
                     return RadarRead(
-                        copy.deepcopy(snapshot.payload), captured_at.isoformat() if captured_at else None,
+                        snapshot.payload, captured_at.isoformat() if captured_at else None,
                         _next_refresh_at(snapshot, settings=settings, stale=state == "STALE_REFRESHING"), state,
                     )
         raise RuntimeError("The shared Radar snapshot is being prepared. Please retry shortly.")

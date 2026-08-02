@@ -1,0 +1,6 @@
+{
+  "app/scratch/test_news.py::test_rss": true,
+  "tests/test_institutional_committee.py::test_cross_venue_evidence_reaches_cio_dossier_and_memorandum": true,
+  "tests/test_multi_venue_ws.py::test_single_qualified_source_produces_low_confidence_actual_flow": true,
+  "tests/test_multi_venue_ws.py::test_confirmed_tape_can_replace_missing_legacy_ratio": true
+}

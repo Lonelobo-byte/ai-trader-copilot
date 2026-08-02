@@ -130,17 +130,19 @@ async def log_request_time(request: Request, call_next):
             return JSONResponse(status_code=400, content={"detail": "Invalid Content-Length header."})
     start_time = time()
     response = await call_next(request)
+    latency_seconds = time() - start_time
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    response.headers["Server-Timing"] = f"app;dur={latency_seconds * 1000:.1f}"
     logger.info(
         "Request processed",
         extra={
             "method": request.method,
             "path": request.url.path,
             "status_code": response.status_code,
-            "latency_seconds": round(time() - start_time, 4),
+            "latency_seconds": round(latency_seconds, 4),
         },
     )
     return response

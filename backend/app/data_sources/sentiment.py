@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-import httpx
+from .http_client import get_http_client
 
 logger = logging.getLogger(__name__)
 
@@ -25,8 +25,8 @@ async def fetch_fear_greed_index() -> dict[str, Any]:
     url = "https://api.alternative.me/fng/"
     params = {"limit": 1, "format": "json"}
     try:
-        async with httpx.AsyncClient(timeout=8.0) as client:
-            response = await client.get(url, params=params)
+        client = await get_http_client()
+        response = await client.get(url, params=params, timeout=5.0)
         response.raise_for_status()
         data = response.json()
         entry = data.get("data", [{}])[0]
@@ -79,8 +79,8 @@ async def fetch_trending_coins() -> list[dict[str, Any]]:
     """
     url = "https://api.coingecko.com/api/v3/search/trending"
     try:
-        async with httpx.AsyncClient(timeout=8.0) as client:
-            response = await client.get(url)
+        client = await get_http_client()
+        response = await client.get(url, timeout=5.0)
         response.raise_for_status()
         data = response.json()
         coins = []

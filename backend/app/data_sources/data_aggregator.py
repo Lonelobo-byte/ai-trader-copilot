@@ -50,7 +50,7 @@ _FETCH_GATES: dict[int, asyncio.Semaphore] = {}
 DEFAULT_TTL = 30.0          # seconds for price-sensitive data
 SLOW_TTL = 120.0            # seconds for slow-moving data (macro, sentiment)
 NEWS_TTL = 300.0             # 5 minutes for news
-NEWS_TIMEOUT_SECONDS = 3.0
+NEWS_TIMEOUT_SECONDS = 2.0
 SLOW_SOURCE_TIMEOUT_SECONDS = 5.0
 DERIVATIVES_TIMEOUT_SECONDS = 5.0
 
@@ -307,20 +307,18 @@ async def fetch_market_intelligence(
         fetch_global_liquidity_index(), timeout=SLOW_SOURCE_TIMEOUT_SECONDS
     )
 
-    # Gather core data
-    core_results = await asyncio.gather(
+    # Build one gather plan for every uncached source.  Keeping these in three
+    # sequential ``gather`` calls made the core, higher-timeframe, and context
+    # timeout windows additive even though the function advertised concurrent
+    # collection.  One gather starts every source in the same event-loop turn;
+    # the slowest source now determines latency instead of the sum of groups.
+    core_tasks = [
         candles_task, ticker_task, order_book_task, trades_task,
         funding_task, oi_task, derivatives_task,
-        return_exceptions=True,
-    )
-
-    # Gather MTF candles
+    ]
     mtf_keys = list(mtf_tasks.keys())
-    mtf_results = await asyncio.gather(*mtf_tasks.values(), return_exceptions=True)
-
-    # Gather slow data (only the ones not cached)
-    slow_tasks = []
-    slow_keys = []
+    slow_tasks: list[Any] = []
+    slow_keys: list[str] = []
     if news_task:
         slow_tasks.append(news_task)
         slow_keys.append("news")
@@ -340,11 +338,18 @@ async def fetch_market_intelligence(
         slow_tasks.append(liquidity_task)
         slow_keys.append("global_liquidity")
 
-    slow_results = {}
-    if slow_tasks:
-        raw_slow = await asyncio.gather(*slow_tasks, return_exceptions=True)
-        for key, res in zip(slow_keys, raw_slow):
-            slow_results[key] = res
+    all_results = await asyncio.gather(
+        *core_tasks,
+        *mtf_tasks.values(),
+        *slow_tasks,
+        return_exceptions=True,
+    )
+    core_end = len(core_tasks)
+    mtf_end = core_end + len(mtf_keys)
+    core_results = all_results[:core_end]
+    mtf_results = all_results[core_end:mtf_end]
+    raw_slow = all_results[mtf_end:]
+    slow_results = dict(zip(slow_keys, raw_slow))
 
     # ── Unpack results with safe defaults ────────────────────────────────
 

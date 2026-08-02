@@ -1,0 +1,29 @@
+<aside class="fixed inset-y-0 left-0 z-50 flex w-[76px] flex-col items-center border-r border-white/[0.07] bg-[#0b0c13]/95 py-4 text-[#a1a5b7] shadow-[12px_0_32px_rgba(0,0,0,0.18)] backdrop-blur-xl">
+  <a :href="homeHref" class="mb-7 grid h-11 w-11 place-items-center rounded-xl border border-[#3e97ff]/20 bg-[#3e97ff]/[0.08] text-[#3e97ff] shadow-[0_0_22px_rgba(62,151,255,0.10)]" aria-label="APEX AI home">
+    <svg class="h-6 w-6" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <circle cx="12" cy="12" r="8.5" stroke="currentColor" stroke-width="1.4"/>
+      <path d="M12 3.5v17M3.5 12h17M6 6l12 12" stroke="currentColor" stroke-width="1.1" opacity=".7"/>
+      <circle cx="12" cy="12" r="2" fill="currentColor"/>
+    </svg>
+  </a>
+  <nav class="flex flex-1 flex-col items-center gap-3">
+    <a :href="homeHref" :class="{ 'border-[#3e97ff]/30 bg-[#3e97ff]/10 text-[#3e97ff]': activeItem === 'dashboard' }" class="grid h-11 w-11 place-items-center rounded-xl border border-transparent transition-colors" aria-label="Co-Pilot Dashboard">
+      <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true">
+        <rect x="3" y="3" width="7" height="9" rx="1.5"/>
+        <rect x="14" y="3" width="7" height="5" rx="1.5"/>
+        <rect x="14" y="11" width="7" height="10" rx="1.5"/>
+        <rect x="3" y="15" width="7" height="6" rx="1.5"/>
+      </svg>
+    </a>
+    <a :href="radarHref" :class="{ 'border-[#3e97ff]/30 bg-[#3e97ff]/10 text-[#3e97ff]': activeItem === 'radar' }" class="relative grid h-11 w-11 place-items-center rounded-xl border border-transparent transition-colors" aria-label="Market Discovery Radar">
+      <span v-if="activeItem === 'radar'" class="absolute -left-[17px] h-6 w-0.5 rounded-full bg-[#3e97ff] shadow-[0_0_10px_#3e97ff]"></span>
+      <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+        <circle cx="12" cy="12" r="9" stroke-width="1.7"/>
+        <circle cx="12" cy="12" r="5.2" stroke-width="1.2" opacity=".8"/>
+        <path d="M12 3v18M3 12h18" stroke-width="1.1" opacity=".7"/>
+        <path d="M12 12l5.8-5.8" stroke-width="1.6"/>
+      </svg>
+    </a>
+  </nav>
+  <div class="grid h-10 w-10 place-items-center rounded-xl border border-white/[0.08] bg-white/[0.04] font-mono text-[10px] font-bold tracking-wider text-[#fcfcfc]">AP</div>
+</aside>

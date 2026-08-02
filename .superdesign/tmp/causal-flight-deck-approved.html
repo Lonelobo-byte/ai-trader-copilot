@@ -1,0 +1,302 @@
+<!DOCTYPE html><html lang="en"><head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Causal Flight Deck | APEX AI</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://code.iconify.design/iconify-icon/1.0.7/iconify-icon.min.js"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-color: #0c0d14;
+      --panel-bg: #151621;
+      --card-bg: #151621;
+      --border-color: rgba(255, 255, 255, 0.05);
+      --text-primary: #fcfcfc;
+      --text-secondary: #a1a5b7;
+      --text-muted: #5e6278;
+      --neon-green: #50cd89;
+      --neon-red: #f1416c;
+      --neon-blue: #3e97ff;
+      --neon-gold: #f1bc00;
+      --neon-purple: #7239ea;
+      --font-sans: 'Inter', sans-serif;
+      --font-mono: 'JetBrains Mono', monospace;
+    }
+    @view-transition { navigation: auto; }
+    body { background-color: var(--bg-color); color: var(--text-primary); font-family: var(--font-sans); overflow: hidden; }
+    .custom-scrollbar::-webkit-scrollbar { width: 4px; }
+    .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+    .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 10px; }
+    .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: var(--neon-blue); }
+    .radar-scope-mini {
+      position: relative;
+      background: rgba(0,0,0,0.5);
+      border-radius: 50%;
+      overflow: hidden;
+    }
+    .radar-sweep-mini {
+      position: absolute;
+      inset: 0;
+      background: conic-gradient(from 0deg, rgba(62, 151, 255, 0.3), transparent 30%);
+      animation: sweep 4s linear infinite;
+    }
+    @keyframes sweep { to { transform: rotate(360deg); } }
+    .cockpit-card { transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1); }
+    .cockpit-card:hover { border-color: var(--neon-blue); background: rgba(62, 151, 255, 0.03); }
+    .active-cockpit-card { border-color: var(--neon-blue); background: rgba(62, 151, 255, 0.05); }
+    .glow-blob { position: absolute; border-radius: 50%; filter: blur(120px); opacity: 0.15; pointer-events: none; z-index: -1; }
+  </style>
+</head>
+<body>
+  <div class="min-h-screen bg-[#0c0d14] flex relative overflow-hidden">
+    <!-- Sidebar -->
+    <sd-component componentid="a9d5662b-3c5d-4257-8f43-200367ae6664" name="ApexSidebar" props='{"activeItem": "radar"}'></sd-component>
+
+    <div class="flex-1 flex flex-col ml-[76px]">
+      <!-- Header -->
+      <sd-component componentid="f67e4635-8a86-425b-b013-94db36c7c560" name="RadarTopHeader"></sd-component>
+
+      <!-- Main Cockpit Layout -->
+      <div class="flex-1 flex flex-col overflow-hidden">
+        
+        <!-- Live Scan Ribbon Header -->
+        <div class="px-6 py-4 border-b border-white/5 bg-[#0c0d14]/80 backdrop-blur-md z-20 flex items-center justify-between">
+          <div class="flex items-center gap-8">
+            <div class="flex flex-col">
+              <span class="text-[0.55rem] font-mono text-white/40 uppercase tracking-widest">Market Pulse</span>
+              <div class="flex items-center gap-3">
+                <div class="radar-scope-mini w-8 h-8 border border-white/10">
+                  <div class="radar-sweep-mini"></div>
+                  <div class="absolute w-0.5 h-0.5 bg-green-400 rounded-full" style="top:30%; left:60%"></div>
+                </div>
+                <span class="text-xs font-bold text-white tracking-tight">SCAN ACTIVE</span>
+              </div>
+            </div>
+
+            <div class="h-8 w-px bg-white/5"></div>
+
+            <div class="flex gap-6">
+              <div class="flex flex-col">
+                <span class="text-[0.55rem] font-mono text-white/40 uppercase tracking-widest">Recommended</span>
+                <span class="text-lg font-bold text-[#7239ea]">14</span>
+              </div>
+              <div class="flex flex-col">
+                <span class="text-[0.55rem] font-mono text-white/40 uppercase tracking-widest">Top Evidence</span>
+                <span class="text-lg font-bold text-[#f1bc00]">88% <small class="text-[0.6rem] text-white/60 ml-1">BTC</small></span>
+              </div>
+              <div class="flex flex-col">
+                <span class="text-[0.55rem] font-mono text-white/40 uppercase tracking-widest">Volatility</span>
+                <span class="text-lg font-bold text-[#3e97ff]">STABLE</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="flex items-center gap-4">
+            <div class="flex bg-black/40 p-1 rounded-lg border border-white/5">
+              <button class="px-3 py-1.5 text-[0.7rem] font-bold text-white bg-white/10 rounded-md transition-all">All</button>
+              <button class="px-3 py-1.5 text-[0.7rem] font-bold text-white/40 hover:text-white transition-all">Candidates</button>
+              <button class="px-3 py-1.5 text-[0.7rem] font-bold text-white/40 hover:text-white transition-all">Bullish</button>
+            </div>
+            <select class="bg-black/40 border border-white/5 text-white text-[0.7rem] font-bold py-2 px-3 rounded-lg outline-none cursor-pointer hover:border-white/20">
+              <option>🕒 Intraday (15m/4h)</option>
+              <option>⚡ Scalp (5m/1h)</option>
+              <option>📅 Swing (1h/1d)</option>
+            </select>
+            <button class="flex items-center gap-2 bg-[#3e97ff]/10 border border-[#3e97ff]/30 text-[#3e97ff] px-4 py-2 rounded-lg text-[0.7rem] font-bold hover:bg-[#3e97ff]/20">
+              <span>Build Research Briefs</span>
+              <span class="bg-[#50cd89]/10 text-[#50cd89] text-[0.55rem] px-1.5 rounded">READY</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Two-Pane Interface -->
+        <div class="flex-1 flex overflow-hidden">
+          
+          <!-- Left Pane: Opportunity Stream -->
+          <div class="w-[380px] border-r border-white/5 flex flex-col bg-[#0c0d14]/30 custom-scrollbar overflow-y-auto">
+            <div class="p-4 border-b border-white/5 bg-black/10 flex justify-between items-center">
+              <span class="text-[0.65rem] font-bold text-white/60 uppercase tracking-widest">Ranked Opportunities</span>
+              <span class="text-[0.6rem] font-mono text-[#5e6278]">REFRESH IN 24S</span>
+            </div>
+            
+            <!-- Opportunity List -->
+            <div class="flex flex-col">
+              <!-- Selected Item -->
+              <div class="p-4 border-b border-white/5 cursor-pointer active-cockpit-card transition-all">
+                <div class="flex justify-between items-start mb-2">
+                  <div class="flex flex-col">
+                    <span class="text-xs font-mono text-[#3e97ff] font-bold">CANDIDATE #01</span>
+                    <h4 class="text-lg font-bold text-white">BTC/USDT</h4>
+                  </div>
+                  <div class="bg-[#50cd89]/10 border border-[#50cd89]/30 text-[#50cd89] text-[0.65rem] font-mono px-2 py-0.5 rounded">88 SCORE</div>
+                </div>
+                <div class="flex items-center gap-2 mb-3">
+                  <span class="text-[0.6rem] px-1.5 py-0.5 rounded bg-[#10b981]/10 text-[#50cd89] border border-[#10b981]/20">BULLISH BREAKOUT</span>
+                  <span class="text-[0.6rem] text-white/40 uppercase font-bold tracking-tighter">Stable Vol</span>
+                </div>
+                <div class="flex justify-between items-center">
+                  <span class="text-[0.6rem] font-mono text-white/30">EVIDENCE: 4/4 DOMAINS</span>
+                  <div class="flex gap-1.5">
+                    <button class="px-3 py-1 bg-white/5 border border-white/5 rounded text-[0.65rem] font-bold hover:bg-[#3e97ff] hover:text-black transition-all">Review</button>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Other Items -->
+              <div class="p-4 border-b border-white/5 cursor-pointer cockpit-card transition-all">
+                <div class="flex justify-between items-start mb-2">
+                  <div class="flex flex-col">
+                    <span class="text-xs font-mono text-white/30 font-bold uppercase tracking-tighter">Candidate #02</span>
+                    <h4 class="text-md font-bold text-white/80">ETH/USDT</h4>
+                  </div>
+                  <div class="bg-white/5 border border-white/10 text-white/60 text-[0.65rem] font-mono px-2 py-0.5 rounded">74 SCORE</div>
+                </div>
+                <div class="flex items-center gap-2 mb-2">
+                  <span class="text-[0.6rem] px-1.5 py-0.5 rounded bg-white/5 text-white/40 border border-white/10 uppercase font-bold">Neutral Context</span>
+                </div>
+                <span class="text-[0.6rem] font-mono text-white/20">EVIDENCE: 3/4 DOMAINS</span>
+              </div>
+
+              <div class="p-4 border-b border-white/5 cursor-pointer cockpit-card transition-all opacity-60">
+                <div class="flex justify-between items-start mb-2">
+                  <div class="flex flex-col">
+                    <span class="text-xs font-mono text-[#f1416c]/60 font-bold uppercase tracking-tighter">Degraded Context</span>
+                    <h4 class="text-md font-bold text-white/60">SOL/USDT</h4>
+                  </div>
+                  <div class="bg-white/5 border border-white/10 text-white/40 text-[0.65rem] font-mono px-2 py-0.5 rounded">42 SCORE</div>
+                </div>
+                <span class="text-[0.6rem] font-mono text-white/20">LIQUIDITY EXHAUSTED · WATCH ONLY</span>
+              </div>
+            </div>
+
+            <!-- Loading State -->
+            <div class="p-8 flex flex-col items-center justify-center text-center space-y-4 border-t border-white/5">
+              <div class="relative w-10 h-10">
+                <div class="absolute inset-0 border-2 border-[#3e97ff]/20 rounded-full"></div>
+                <div class="absolute inset-0 border-2 border-t-[#3e97ff] rounded-full animate-spin"></div>
+              </div>
+              <div class="space-y-1">
+                <span class="text-[0.6rem] font-mono text-[#3e97ff] uppercase tracking-widest">Mapping Context</span>
+                <p class="text-[0.65rem] text-white/40">Acquiring venue evidence...</p>
+              </div>
+            </div>
+          </div>
+
+          <!-- Right Pane: Intelligence Stage -->
+          <div class="flex-1 flex flex-col overflow-y-auto custom-scrollbar bg-[#0c0d14] relative">
+            <div class="glow-blob w-[500px] h-[500px] bg-[#3e97ff]/10 top-[-20%] right-[-10%]"></div>
+            <div class="glow-blob w-[400px] h-[400px] bg-[#7239ea]/10 bottom-[-20%] left-[10%]"></div>
+
+            <!-- Stage Header -->
+            <div class="p-8 border-b border-white/5 flex justify-between items-start">
+              <div class="space-y-2">
+                <div class="flex items-center gap-3">
+                  <span class="px-2 py-0.5 rounded bg-[#50cd89]/10 text-[#50cd89] border border-[#50cd89]/30 font-mono text-[0.6rem] font-bold">CANDIDATE READY</span>
+                  <span class="text-white/20 font-mono text-[0.65rem]">ID: SMC-DISC-001</span>
+                </div>
+                <h2 class="text-4xl font-extrabold text-white tracking-tight">BTC/USDT <span class="text-white/20">Intelligence Stage</span></h2>
+                <p class="text-[#a1a5b7] text-sm max-w-2xl">Bullish Fresh-Event Context. Mapping structural breakout with aligned order-flow and cumulative accumulation evidence.</p>
+              </div>
+              <div class="flex flex-col items-end gap-2">
+                <div class="flex items-center gap-2">
+                  <span class="text-xs font-mono text-white/40">EVIDENCE COVERAGE</span>
+                  <div class="flex gap-1">
+                    <div class="w-1.5 h-4 bg-[#50cd89] rounded-sm"></div>
+                    <div class="w-1.5 h-4 bg-[#50cd89] rounded-sm"></div>
+                    <div class="w-1.5 h-4 bg-[#50cd89] rounded-sm"></div>
+                    <div class="w-1.5 h-4 bg-[#50cd89] rounded-sm"></div>
+                  </div>
+                </div>
+                <a href="#" class="text-[0.7rem] font-bold text-[#3e97ff] hover:underline">VIEW RAW TELEMETRY ↗</a>
+              </div>
+            </div>
+
+            <!-- Intelligence Metrics Ribbon -->
+            <div class="grid grid-cols-4 border-b border-white/5 bg-black/20 backdrop-blur-sm">
+              <div class="p-6 border-r border-white/5">
+                <span class="text-[0.55rem] font-mono text-white/40 uppercase tracking-widest block mb-2">Event Age</span>
+                <strong class="text-md font-mono text-[#fcfcfc]">14 BARS <span class="text-white/20">/ 15M</span></strong>
+              </div>
+              <div class="p-6 border-r border-white/5">
+                <span class="text-[0.55rem] font-mono text-white/40 uppercase tracking-widest block mb-2">Liquidity Ref</span>
+                <strong class="text-md font-mono text-[#fcfcfc]">94,201.50 <span class="text-[#50cd89] text-xs font-bold">+2.4% DEEP</span></strong>
+              </div>
+              <div class="p-6 border-r border-white/5">
+                <span class="text-[0.55rem] font-mono text-white/40 uppercase tracking-widest block mb-2">Price × OI</span>
+                <strong class="text-md font-mono text-[#fcfcfc]">ACCUM <span class="text-[#50cd89] text-xs font-bold">+4.12%</span></strong>
+              </div>
+              <div class="p-6">
+                <span class="text-[0.55rem] font-mono text-white/40 uppercase tracking-widest block mb-2">Terminal Protection</span>
+                <strong class="text-md font-mono text-[#f1416c]">93,105.00 <span class="text-white/20">SL</span></strong>
+              </div>
+            </div>
+
+            <!-- The Market Story Sequence -->
+            <div class="p-8 space-y-12">
+              <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                <!-- Step 01 -->
+                <div class="space-y-4">
+                  <div class="flex items-center gap-3">
+                    <div class="w-8 h-8 rounded-full bg-white/5 border border-white/10 flex items-center justify-center text-[0.7rem] font-mono font-bold text-[#3e97ff]">01</div>
+                    <span class="text-[0.65rem] font-bold text-white uppercase tracking-widest">What Happened</span>
+                  </div>
+                  <div class="bg-black/40 p-5 rounded-xl border border-white/5 space-y-3 min-h-[160px]">
+                    <p class="text-sm text-[#a1a5b7] leading-relaxed">Structural shift confirmed on the 4H timeframe. Price cleared the dominant internal swing high at 93.8k with impulsive volume. All lower timeframe fair-value gaps remained unmitigated during the leg up.</p>
+                  </div>
+                </div>
+
+                <!-- Step 02 -->
+                <div class="space-y-4">
+                  <div class="flex items-center gap-3">
+                    <div class="w-8 h-8 rounded-full bg-white/5 border border-white/10 flex items-center justify-center text-[0.7rem] font-mono font-bold text-[#50cd89]">02</div>
+                    <span class="text-[0.65rem] font-bold text-white uppercase tracking-widest">Happening Now</span>
+                  </div>
+                  <div class="bg-black/40 p-5 rounded-xl border border-white/5 space-y-3 min-h-[160px]">
+                    <p class="text-sm text-[#a1a5b7] leading-relaxed">Consolidation above the breakout point. Venue data shows Bybit and Coinbase order flows are synced bullish. Aggressive limit orders appearing at the 94.2k liquidity shelf.</p>
+                  </div>
+                </div>
+
+                <!-- Step 03 -->
+                <div class="space-y-4">
+                  <div class="flex items-center gap-3">
+                    <div class="w-8 h-8 rounded-full bg-white/5 border border-white/10 flex items-center justify-center text-[0.7rem] font-mono font-bold text-[#f1bc00]">03</div>
+                    <span class="text-[0.65rem] font-bold text-white uppercase tracking-widest">Conditional Next</span>
+                  </div>
+                  <div class="bg-black/40 p-5 rounded-xl border border-white/5 space-y-3 min-h-[160px] relative">
+                    <p class="text-sm text-[#a1a5b7] leading-relaxed">Continuation toward 96.5k target likely if current value area holds. Manual review suggested for entry trigger on 15m pullback.</p>
+                    <div class="pt-3 border-t border-white/5">
+                      <span class="text-[0.6rem] font-mono text-[#f1416c] font-bold uppercase">Failure Condition:</span>
+                      <p class="text-[0.65rem] text-white/40">Invalidated if price closes below 93.1k on 1H candle.</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Action Bar -->
+              <div class="bg-[#151621] p-6 rounded-2xl border border-white/5 shadow-2xl flex items-center justify-between">
+                <div class="flex items-center gap-6">
+                  <div>
+                    <span class="text-[0.55rem] font-mono text-white/40 uppercase tracking-widest block">Reward/Risk</span>
+                    <strong class="text-lg text-white font-mono">3.42 <span class="text-white/20">PROJECTED</span></strong>
+                  </div>
+                  <div class="h-10 w-px bg-white/5"></div>
+                  <div>
+                    <span class="text-[0.55rem] font-mono text-white/40 uppercase tracking-widest block">Status</span>
+                    <span class="text-[0.7rem] font-bold text-[#50cd89]">FRESH EVENT · MANUAL REVIEW ONLY</span>
+                  </div>
+                </div>
+                <div class="flex gap-3">
+                  <button class="px-6 py-3 bg-[#3e97ff] text-black font-bold text-sm rounded-xl hover:shadow-[0_0_20px_rgba(62,151,255,0.3)] transition-all">Verify Analysis</button>
+                  <button class="px-6 py-3 bg-white/5 border border-white/10 text-white font-bold text-sm rounded-xl hover:bg-white/10 transition-all">Research Symbol ↗</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Scanline effect -->
+  <div class="fixed inset-0 pointer-events-none opacity-[0.035] bg-[linear-gradient(rgba(18,16,33,0)_50%,rgba(0,0,0,0.25)_50%),linear-gradient(90deg,rgba(255,0,0,0.06),rgba(0,255,0,0.02),rgba(0,0,255,0.06))] bg-[length:100%_2px,3px_100%]"></div>
+</body></html>

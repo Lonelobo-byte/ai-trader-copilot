@@ -11,6 +11,8 @@
     resizeObserver: null,
     controlsBound: false,
     futureBars: 32,
+    enginePromise: null,
+    engineFailed: false,
   };
 
   const element = (id) => document.getElementById(id);
@@ -109,17 +111,37 @@
     ordered.slice(0, Math.max(0, ordered.length - 200)).forEach((key) => state.candles.delete(key));
   }
 
+  function showEngineFailure() {
+    const emptyCopy = element('hawk-chart-empty');
+    if (!emptyCopy) return;
+    emptyCopy.querySelector('strong').textContent = 'Chart engine unavailable';
+    emptyCopy.querySelector('p').textContent = 'The chart library could not load. Check the browser network policy and retry.';
+  }
+
+  function loadEngine() {
+    if (window.echarts) return Promise.resolve(window.echarts);
+    if (state.engineFailed) return Promise.reject(new Error('Chart engine load previously failed.'));
+    if (state.enginePromise) return state.enginePromise;
+    state.enginePromise = new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = 'https://cdn.jsdelivr.net/npm/echarts@6.1.0/dist/echarts.min.js';
+      script.async = true;
+      script.dataset.hawkChartEngine = 'echarts';
+      script.onload = () => window.echarts ? resolve(window.echarts) : reject(new Error('ECharts did not initialize.'));
+      script.onerror = () => reject(new Error('ECharts download failed.'));
+      document.head.appendChild(script);
+    }).catch((error) => {
+      state.engineFailed = true;
+      showEngineFailure();
+      throw error;
+    });
+    return state.enginePromise;
+  }
+
   function ensureChart() {
     if (state.chart) return state.chart;
     const root = element('hawk-eye-chart');
-    if (!root || !window.echarts) {
-      const emptyCopy = element('hawk-chart-empty');
-      if (emptyCopy && !window.echarts) {
-        emptyCopy.querySelector('strong').textContent = 'Chart engine unavailable';
-        emptyCopy.querySelector('p').textContent = 'The chart library could not load. Check the browser network policy and retry.';
-      }
-      return null;
-    }
+    if (!root || !window.echarts) return null;
     state.chart = window.echarts.init(root, null, { renderer: 'canvas', useDirtyRect: true });
     state.chart.on('datazoom', (event) => {
       const zoom = event.batch?.[0] || event;
@@ -299,9 +321,15 @@
       </div>`;
   }
 
-  function render() {
+  function render(lightweight = false) {
     const chart = ensureChart();
-    if (!chart || !state.contract) return;
+    if (!chart) {
+      if (state.contract && !state.engineFailed) {
+        loadEngine().then(() => render(lightweight)).catch(() => {});
+      }
+      return;
+    }
+    if (!state.contract) return;
     const candles = [...state.candles.values()].sort((a, b) => a.open_time - b.open_time);
     if (!candles.length) return;
     const realTimes = candles.map((row) => String(row.open_time));
@@ -417,9 +445,10 @@
         },
       ],
     };
-    // Live market ticks must paint immediately; deferring the ECharts update
-    // could leave a continuously busy page showing the previous close.
-    chart.setOption(option, { notMerge: true, lazyUpdate: false });
+    // Full dossiers replace annotation state. Price-only ticks can merge into
+    // the existing chart and use ECharts' dirty-rectangle renderer instead of
+    // rebuilding every component and display list from scratch.
+    chart.setOption(option, { notMerge: !lightweight, lazyUpdate: lightweight });
   }
 
   function displayAction(decision) {
@@ -531,7 +560,7 @@
       badge.className = 'hawk-chart-live-badge live';
       badge.innerHTML = '<i></i>LIVE';
     }
-    render();
+    if (!document.hidden) render(true);
   }
 
   function reset() {
@@ -550,5 +579,5 @@
   }
 
   bindControls();
-  window.HawkEyeChart = { consume, consumeTick, reset };
+  window.HawkEyeChart = { consume, consumeTick, reset, warmup: loadEngine };
 })();

@@ -1185,6 +1185,7 @@
       let paymentCurrencyCatalog = new Map();
       let paymentSuccessTimer = null;
       let paymentSuccessShown = false;
+      let researchAssetsPromise = null;
       const paymentModal = document.getElementById('payment-modal');
       const paymentSetup = document.getElementById('payment-setup');
       const paymentLoading = document.getElementById('payment-loading');
@@ -1194,7 +1195,23 @@
       const paymentCurrencyResults = document.getElementById('payment-currency-results');
       const paymentCurrencyInputMark = document.getElementById('payment-currency-input-mark');
       const paymentSelectedToken = document.getElementById('payment-selected-token');
-      const unlock = (token, role = 'member') => {
+      const loadResearchScript = (src) => new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = src;
+        script.async = false;
+        script.onload = resolve;
+        script.onerror = () => reject(new Error(`Could not load ${src.split('?')[0]}.`));
+        document.body.appendChild(script);
+      });
+      const ensureResearchAssets = () => {
+        if (!researchAssetsPromise) {
+          researchAssetsPromise = loadResearchScript('hawk-chart.js?v=20260802-perf1')
+            .then(() => loadResearchScript('app.js?v=20260802-perf1'));
+        }
+        return researchAssetsPromise;
+      };
+      const unlock = async (token, role = 'member') => {
+        await ensureResearchAssets();
         gate.style.display = 'none';
         window.atcAuthenticated = true;
         window.atcUserRole = role;
@@ -1586,7 +1603,7 @@
         try {
           const r = await fetch('/auth/refresh', { method: 'POST' });
           if (!r.ok) return showLogin(expiredSession ? 'Your session expired. Please sign in again.' : '');
-          const d = await readApiPayload(r); sessionStorage.setItem('atc_access_token', d.access_token); routeAfterAuth(d.access_token, true);
+          const d = await readApiPayload(r); sessionStorage.setItem('atc_access_token', d.access_token); await routeAfterAuth(d.access_token, true);
         } catch (_) { showLogin('Could not restore your session. Please sign in again.'); }
       };
       // Always mint a fresh short-lived token from the HttpOnly refresh cookie
@@ -1599,83 +1616,12 @@
         try {
           const r = await fetch(register ? '/auth/register' : '/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: document.getElementById('auth-email').value, password: document.getElementById('auth-password').value }) });
           const d = await readApiPayload(r); if (!r.ok) throw new Error(d.detail || 'Could not authenticate.');
-          sessionStorage.setItem('atc_access_token', d.access_token); routeAfterAuth(d.access_token);
+          sessionStorage.setItem('atc_access_token', d.access_token); await routeAfterAuth(d.access_token);
         } catch (e) { error.textContent = e.message; } finally { submit.disabled = false; }
       };
     })();
   </script>
-  <script src="https://cdn.jsdelivr.net/npm/echarts@6.1.0/dist/echarts.min.js"></script>
-  <script src="hawk-chart.js?v=20260801-live-history1"></script>
-  <script src="app.js?v=20260801-session-liveness1"></script>
-  <script>
-    // Sci-Fi neural constellation background
-    const canvas = document.getElementById('scifi-canvas');
-    if (canvas) {
-      const ctx = canvas.getContext('2d');
-      let particles = [];
-      const particleCount = 70;
-
-      function resizeCanvas() {
-        canvas.width = window.innerWidth;
-        canvas.height = window.innerHeight;
-      }
-      window.addEventListener('resize', resizeCanvas);
-      resizeCanvas();
-
-      class Particle {
-        constructor() {
-          this.x = Math.random() * canvas.width;
-          this.y = Math.random() * canvas.height;
-          this.vx = (Math.random() - 0.5) * 0.45;
-          this.vy = (Math.random() - 0.5) * 0.45;
-          this.radius = Math.random() * 1.5 + 0.6;
-        }
-        update() {
-          this.x += this.vx;
-          this.y += this.vy;
-          if (this.x < 0 || this.x > canvas.width) this.vx *= -1;
-          if (this.y < 0 || this.y > canvas.height) this.vy *= -1;
-        }
-        draw() {
-          ctx.beginPath();
-          ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
-          ctx.fillStyle = 'rgba(62, 151, 255, 0.4)';
-          ctx.fill();
-        }
-      }
-
-      for (let i = 0; i < particleCount; i++) {
-        particles.push(new Particle());
-      }
-
-      function animate() {
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-        // Draw links
-        for (let i = 0; i < particles.length; i++) {
-          particles[i].update();
-          particles[i].draw();
-
-          for (let j = i + 1; j < particles.length; j++) {
-            const dx = particles[i].x - particles[j].x;
-            const dy = particles[i].y - particles[j].y;
-            const dist = Math.sqrt(dx * dx + dy * dy);
-
-            if (dist < 110) {
-              ctx.beginPath();
-              ctx.moveTo(particles[i].x, particles[i].y);
-              ctx.lineTo(particles[j].x, particles[j].y);
-              ctx.strokeStyle = 'rgba(62, 151, 255, ' + (0.12 * (1 - dist / 110)) + ')';
-              ctx.lineWidth = 0.5;
-              ctx.stroke();
-            }
-          }
-        }
-        requestAnimationFrame(animate);
-      }
-      animate();
-    }
-  </script>
+  <script src="ambient-motion.js?v=20260802-perf1"></script>
   <!-- AGENT DOSSIER MODAL OVERLAY -->
   <div class="modal-overlay dossier-modal-overlay" id="agent-dossier-modal"
     style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100vh; background: rgba(8, 10, 18, 0.85); backdrop-filter: blur(10px); z-index: 99999; align-items: center; justify-content: center;"

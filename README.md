@@ -110,6 +110,32 @@ sources, and never treats missing evidence as neutral confirmation.
 
 REST analysis now uses one shared snapshot for candles, higher timeframes, order book, trades, derivatives, macro, sentiment, news, and calendar context. The response includes `data_quality` so missing core sources are visible and can block signal publication.
 
+### Production performance profile
+
+The production defaults are tuned for a small 1–2 GB Docker host. Caddy serves
+versioned CSS and JavaScript directly with immutable caching, while HTML remains
+revalidated. Radar stores one full shared dossier per timeframe pair but sends
+only a compact discovery-card contract to public browsers; protected Review
+reads the complete persisted row on demand. Identical live research snapshots
+share contextual data for 30 seconds and quant-feature computation for two
+seconds, while ticker, order-book, candle and execution-tape values continue to
+come from the current WebSocket event. Full dossier refreshes run every 10
+seconds; lightweight chart ticks remain immediate.
+
+Keep one application process on a 1 GB host. The Compose defaults cap
+OpenBLAS/NumPy thread pools to one thread so concurrent requests do not
+oversubscribe the CPU. Before increasing worker count, move background jobs and
+the process-local execution tape to dedicated shared infrastructure. Inspect a
+running host with:
+
+```bash
+docker stats --no-stream
+free -h
+nproc
+uptime
+vmstat 1 5
+```
+
 The Breakout Radar is an opportunity-triage screen, not a signal generator. It
 first requires a completed close through a 20-candle structural level with
 multi-timeframe alignment, participation, and a decisive candle. Only the
@@ -136,4 +162,4 @@ SCANNING -> PENDING_ENTRY -> ACTIVE -> TP1_SECURED -> TP2_SECURED -> TP3_SECURED
                                   +-> STOPPED_OUT      +-> INVALIDATED / protected exit
 ```
 
-The monitor runs from the live WebSocket and every five seconds in the background. A published setup remains `PENDING_ENTRY` until it receives a fresh leave-and-retest of its entry zone; it is not an immediate market entry. It sends explicit `WAIT_FOR_ENTRY`, `HOLD_POSITION`, `PROTECT_PROFIT`, `TAKE_PROFIT_COMPLETE`, or `EXIT_TRADE` commands. Stops are never widened, are kept outside the entry zone, and an adverse reversal exits the signal before TP1.
+The monitor runs from the live WebSocket with a 10-second active-signal REST fallback. A published setup remains `PENDING_ENTRY` until it receives a fresh leave-and-retest of its entry zone; it is not an immediate market entry. It sends explicit `WAIT_FOR_ENTRY`, `HOLD_POSITION`, `PROTECT_PROFIT`, `TAKE_PROFIT_COMPLETE`, or `EXIT_TRADE` commands. Stops are never widened, are kept outside the entry zone, and an adverse reversal exits the signal before TP1.

@@ -5,8 +5,8 @@ calendar API are returned.  Simulated/mock events are only injected when
 ``app_env`` is ``'local'`` or ``'test'`` to facilitate UI development.
 """
 import logging
-import httpx
 from datetime import datetime, timedelta, timezone
+from .http_client import get_http_client
 
 logger = logging.getLogger(__name__)
 
@@ -41,37 +41,37 @@ async def fetch_economic_events(app_env: str = "local") -> list[dict]:
     is_dev = app_env in ("local", "test")
 
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            r = await client.get(url, headers=headers, params=params)
-            if r.status_code == 200:
-                data = r.json()
-                events = []
-                for event in data.get("result", []):
-                    importance = event.get("importance", 0)
-                    imp_str = "LOW"
-                    if importance == 0:
-                        imp_str = "MEDIUM"
-                    elif importance == 1:
-                        imp_str = "HIGH"
-                        
-                    dt_str = event.get("date")
+        client = await get_http_client()
+        r = await client.get(url, headers=headers, params=params, timeout=5.0)
+        if r.status_code == 200:
+            data = r.json()
+            events = []
+            for event in data.get("result", []):
+                importance = event.get("importance", 0)
+                imp_str = "LOW"
+                if importance == 0:
+                    imp_str = "MEDIUM"
+                elif importance == 1:
+                    imp_str = "HIGH"
+
+                dt_str = event.get("date")
+                events.append({
+                    "title": event.get("title"),
+                    "country": "US",
+                    "importance": imp_str,
+                    "time": dt_str
+                })
+            if events:
+                logger.info(f"Successfully fetched {len(events)} events from TradingView.")
+                # Only inject simulated HIGH event in dev/test environments
+                if is_dev and not any(e["importance"] == "HIGH" for e in events):
                     events.append({
-                        "title": event.get("title"),
+                        "title": "US Core CPI MoM (Simulated)",
                         "country": "US",
-                        "importance": imp_str,
-                        "time": dt_str
+                        "importance": "HIGH",
+                        "time": (now + timedelta(minutes=45)).isoformat() + "Z"
                     })
-                if events:
-                    logger.info(f"Successfully fetched {len(events)} events from TradingView.")
-                    # Only inject simulated HIGH event in dev/test environments
-                    if is_dev and not any(e["importance"] == "HIGH" for e in events):
-                        events.append({
-                            "title": "US Core CPI MoM (Simulated)",
-                            "country": "US",
-                            "importance": "HIGH",
-                            "time": (now + timedelta(minutes=45)).isoformat() + "Z"
-                        })
-                    return events
+                return events
     except Exception as e:
         logger.warning(f"Failed to fetch live calendar from TradingView: {e}.")
 

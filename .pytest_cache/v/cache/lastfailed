@@ -1,0 +1,4 @@
+{
+  "backend/tests/test_analysis.py": true,
+  "backend/tests/test_signal_lifecycle.py": true
+}

@@ -44,6 +44,12 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-ai_trader}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-ai_trader}
       TRUSTED_PROXY_HEADERS: "true"
+      # Keep NumPy/OpenBLAS from oversubscribing a small Lightsail CPU and
+      # multiplying thread-stack memory during concurrent analysis requests.
+      OMP_NUM_THREADS: ${OMP_NUM_THREADS:-1}
+      OPENBLAS_NUM_THREADS: ${OPENBLAS_NUM_THREADS:-1}
+      NUMEXPR_NUM_THREADS: ${NUMEXPR_NUM_THREADS:-1}
+      MALLOC_ARENA_MAX: ${MALLOC_ARENA_MAX:-2}
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -79,6 +85,7 @@ services:
       DOMAIN: ${DOMAIN:?Set DOMAIN in .env}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./backend/app/static:/srv/static:ro
       - caddy_data:/data
       - caddy_config:/config
     depends_on:

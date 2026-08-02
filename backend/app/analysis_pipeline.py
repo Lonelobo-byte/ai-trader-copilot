@@ -8,8 +8,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections import OrderedDict
+from copy import deepcopy
 from datetime import datetime, timezone
 from hashlib import sha256
+from time import monotonic
 from typing import Any
 
 from app.brains.council import finalize_ai_council_validation, run_ai_council
@@ -32,6 +35,80 @@ _ai_council_cache: dict[str, dict[str, Any]] = {}
 _ai_council_cache_candle: dict[str, int | None] = {}
 _ai_council_locks: dict[str, asyncio.Lock] = {}
 _AI_COUNCIL_CACHE_MAX_ENTRIES = 128
+
+# Quant features are deterministic for an identical candle/ticker/book/tape
+# snapshot. Multiple subscribers to the same shared stream often analyze that
+# exact event together, so one short-lived single-flight avoids repeating the
+# same CPU work per user without sharing AI output or user configuration.
+_FEATURE_CACHE: OrderedDict[str, tuple[float, dict[str, Any]]] = OrderedDict()
+_FEATURE_INFLIGHT: dict[str, asyncio.Task[dict[str, Any]]] = {}
+_FEATURE_CACHE_LOCK = asyncio.Lock()
+_FEATURE_CACHE_SECONDS = 2.0
+_FEATURE_CACHE_MAX_ENTRIES = 128
+
+
+def _value(source: Any, key: str, default: Any = None) -> Any:
+    if isinstance(source, dict):
+        return source.get(key, default)
+    return getattr(source, key, default)
+
+
+def _feature_snapshot_key(symbol: str, timeframe: str, intelligence: dict[str, Any]) -> str:
+    candles = intelligence.get("candles") or []
+    candle = candles[-1] if candles else None
+    ticker = intelligence.get("ticker") or {}
+    book = intelligence.get("order_book") or {}
+    bids = book.get("bids") or []
+    asks = book.get("asks") or []
+    tape = intelligence.get("execution_tape") or intelligence.get("multi_venue") or {}
+    actual_flow = tape.get("actual_flow") or {}
+    identity = (
+        symbol.upper(), timeframe,
+        _value(candle, "open_time"), _value(candle, "open"),
+        _value(candle, "high"), _value(candle, "low"),
+        _value(candle, "close"), _value(candle, "volume"),
+        ticker.get("lastPrice"), book.get("last_update_id"),
+        tuple(bids[0]) if bids else None, tuple(asks[0]) if asks else None,
+        actual_flow.get("status"), actual_flow.get("bias"),
+        actual_flow.get("net_delta_usd"), actual_flow.get("trade_count"),
+    )
+    return sha256(repr(identity).encode("utf-8")).hexdigest()
+
+
+async def _compute_quant_features_shared(
+    symbol: str,
+    timeframe: str,
+    intelligence: dict[str, Any],
+) -> dict[str, Any]:
+    key = _feature_snapshot_key(symbol, timeframe, intelligence)
+    now = monotonic()
+    async with _FEATURE_CACHE_LOCK:
+        cached = _FEATURE_CACHE.get(key)
+        if cached and now - cached[0] <= _FEATURE_CACHE_SECONDS:
+            _FEATURE_CACHE.move_to_end(key)
+            return deepcopy(cached[1])
+        if cached:
+            _FEATURE_CACHE.pop(key, None)
+        task = _FEATURE_INFLIGHT.get(key)
+        if task is None:
+            async def build() -> dict[str, Any]:
+                result = await asyncio.to_thread(compute_quant_features, intelligence)
+                async with _FEATURE_CACHE_LOCK:
+                    _FEATURE_CACHE[key] = (monotonic(), result)
+                    _FEATURE_CACHE.move_to_end(key)
+                    while len(_FEATURE_CACHE) > _FEATURE_CACHE_MAX_ENTRIES:
+                        _FEATURE_CACHE.popitem(last=False)
+                return result
+
+            task = asyncio.create_task(build())
+            _FEATURE_INFLIGHT[key] = task
+    try:
+        return deepcopy(await asyncio.shield(task))
+    finally:
+        if task.done():
+            async with _FEATURE_CACHE_LOCK:
+                if _FEATURE_INFLIGHT.get(key) is task:
+                    _FEATURE_INFLIGHT.pop(key, None)
 
 
 def _council_lock(cache_key: str) -> asyncio.Lock:
@@ -185,7 +262,7 @@ async def run_full_analysis(
     intel = attach_live_execution_tape_snapshot(intel, symbol, settings)
     # The explicit route arguments remain authoritative for streaming callers.
     intel["candles"], intel["ticker"], intel["order_book"] = candles, ticker, order_book_raw
-    features = await asyncio.to_thread(compute_quant_features, intel)
+    features = await _compute_quant_features_shared(symbol, timeframe, intel)
 
     # ── Check if an active signal is already open in the database ────────
     from app.signal_service import get_active_signal
