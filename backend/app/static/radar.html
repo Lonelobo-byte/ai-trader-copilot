@@ -1771,6 +1771,7 @@
         const liveLocation = payload.advanced_confirmation?.market_story_live_location || {};
         const liveLocationExtended = liveLocation.evaluated === true && liveLocation.passed === false;
         const state = liveLocationExtended ? 'LIVE_LOCATION_EXTENDED' : baseState;
+        const pullbackRequired = String(state).toUpperCase() === 'PULLBACK_REQUIRED';
         const rawDirection = directional.direction || event.direction || story.actionability?.direction || payload.direction || 'NEUTRAL';
         const direction = rawDirection === 'LONG' ? 'BULLISH' : rawDirection === 'SHORT' ? 'BEARISH' : rawDirection;
         const explicitActionable = typeof directional.actionable === 'boolean'
@@ -1821,6 +1822,8 @@
         const normalizedState = String(state).toUpperCase();
         const tone = normalizedState === 'INVALIDATED'
           ? 'invalidated'
+          : pullbackRequired
+            ? 'monitoring'
           : chaseProhibited
             ? 'stale'
             : actionable
@@ -1832,6 +1835,7 @@
           direction,
           actionable,
           chaseProhibited,
+          pullbackRequired,
           tone,
           eventType,
           eventId: event.event_id || story.actionability?.event_id || null,
@@ -1862,7 +1866,9 @@
         const age = story.age === null || story.age === undefined
           ? 'UNAVAILABLE'
           : `${story.age} BAR${Number(story.age) === 1 ? '' : 'S'}`;
-        const actionText = story.chaseProhibited
+        const actionText = story.pullbackRequired
+          ? 'IMPULSE DETECTED · WAIT FOR COMPLETED RETEST'
+          : story.chaseProhibited
           ? `${researchLabel(story.state)} · DO NOT CHASE`
           : story.actionable
             ? 'FRESH EVENT · MANUAL REVIEW ONLY'
@@ -1903,6 +1909,7 @@
         const invalidated = String(story.state).toUpperCase() === 'INVALIDATED';
         const reviewReady = item.review_status === 'REVIEW_CANDIDATE' && story.actionable && !story.chaseProhibited;
         if (invalidated) return { copy: 'INVALIDATED', tone: 'invalidated', cardTone: 'invalidated' };
+        if (story.pullbackRequired) return { copy: 'PULLBACK REQUIRED', tone: 'monitoring', cardTone: 'monitoring' };
         if (story.chaseProhibited) return { copy: 'DO NOT CHASE', tone: 'stale', cardTone: 'stale' };
         if (reviewReady) return { copy: 'CANDIDATE READY', tone: 'actionable', cardTone: 'actionable' };
         if (story.actionable) return { copy: 'MANUAL REVIEW', tone: 'actionable', cardTone: 'actionable' };
@@ -2047,7 +2054,9 @@
           const structure = item.market_structure || {};
           const volatility = item.volatility_context || {};
           const contradictions = (item.contradictions || []).map(value => researchLabel(value)).join(' · ');
-          const thesis = story.chaseProhibited
+          const thesis = story.pullbackRequired
+            ? 'Impulse detected. Wait for price to revisit and hold the event level before manual review.'
+            : story.chaseProhibited
             ? 'Past entry window. Preserve the event as context; do not chase current price.'
             : story.actionable
               ? story.happeningNow
@@ -2213,7 +2222,13 @@
           const invalidated = String(story.state).toUpperCase() === 'INVALIDATED';
           const review = detail.verdict === 'REVIEW_CANDIDATE' && story.actionable && !story.chaseProhibited;
           const briefStateClass = invalidated ? 'invalid' : story.chaseProhibited ? 'stale' : review ? 'review' : 'watch';
-          const briefStateCopy = invalidated ? 'INVALIDATED' : story.chaseProhibited ? 'DO NOT CHASE' : review ? 'RESEARCH READY' : 'WATCH CONTEXT';
+          const briefStateCopy = invalidated
+            ? 'INVALIDATED'
+            : story.pullbackRequired
+              ? 'PULLBACK REQUIRED'
+              : story.chaseProhibited
+                ? 'DO NOT CHASE'
+                : review ? 'RESEARCH READY' : 'WATCH CONTEXT';
           const thesis = `${story.happened} ${story.happeningNow}`;
           const controlText = contradictions.length ? contradictions.map(researchLabel).join(' · ') : 'No contradiction reported in this brief';
           const limitationsText = limitations.length ? limitations[0] : 'No additional limitation was reported.';

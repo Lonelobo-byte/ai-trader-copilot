@@ -415,8 +415,22 @@ def _complete_lifecycle(
     terminal_state: str | None = None
     terminal_at: int | None = None
     terminal_reason = ""
+    extension_observed_at: int | None = None
+    fresh_window_missed_at: int | None = None
     running_max_favourable = 0.0
     campaign_distance_at_event = campaign_distance(candles[index])
+    event_impulse_atr = (
+        abs(_number(event.get("event_close")) - _number(event.get("event_open")))
+        / campaign_atr
+    )
+    # A first decisive displacement candle is the campaign ignition, not a
+    # late follow-on BOS. It can be too extended to enter at the close while
+    # still remaining eligible for a later measured retest.
+    impulse_ignition = bool(
+        int(event.get("campaign_event_sequence", 1)) == 1
+        and bool(event.get("decisive_candle"))
+        and event_impulse_atr >= 1.50
+    )
     for candle_index in range(index, len(candles)):
         candle = candles[candle_index]
         bar_age = candle_index - index
@@ -441,28 +455,37 @@ def _complete_lifecycle(
             )
             break
         bar_distance = distance_atr(candle)
-        if bar_distance > 2.50:
-            terminal_state = "EXTENDED_DO_NOT_CHASE"
-            terminal_at = candle_index
-            terminal_reason = (
-                f"Price moved {bar_distance:.2f} event ATR beyond the event "
-                "level; the original entry has moved away."
-            )
-            break
-        if bar_age > fresh_entry_bars and running_max_favourable >= 1.50:
-            terminal_state = "MISSED"
-            terminal_at = candle_index
-            terminal_reason = (
-                f"The move had already expanded {running_max_favourable:.2f} "
-                f"event ATR when the {fresh_entry_bars}-bar fresh-entry window passed."
-            )
-            break
-        # Evaluate total campaign consumption only after the event-local
-        # terminal rules. This preserves the more precise explanation when an
-        # event itself already extended or aged out, while still preventing a
-        # brand-new late BOS from resetting a mature campaign to "fresh".
+        # Extension invalidates a market entry at the current quote, not the
+        # underlying structure.  Freezing EXTENDED_DO_NOT_CHASE here made a
+        # later completed pullback/reclaim impossible to qualify even though
+        # that retest is a new, measured entry event.  Preserve the extension
+        # in the ledger and require a retest instead; only structural failure,
+        # expiry, or a genuinely consumed campaign remains terminal.
+        if bar_distance > 2.50 and extension_observed_at is None:
+            extension_observed_at = candle_index
+        if (
+            bar_age == 0
+            and impulse_ignition
+            and campaign_distance_at_event > campaign_pullback_atr
+            and extension_observed_at is None
+        ):
+            extension_observed_at = candle_index
+        if (
+            bar_age > fresh_entry_bars
+            and running_max_favourable >= 1.50
+            and fresh_window_missed_at is None
+        ):
+            fresh_window_missed_at = candle_index
+        # Campaign maturity answers whether this structure event was already
+        # late *when it formed*.  Re-evaluating it on every later candle used
+        # to retroactively turn an early BOS into a late BOS after the move
+        # expanded. Current extension has its own pullback-required path.
         leg_distance = campaign_distance(candle)
-        if leg_distance > max_campaign_entry_atr:
+        if (
+            bar_age == 0
+            and leg_distance > max_campaign_entry_atr
+            and not impulse_ignition
+        ):
             terminal_state = "LATE_STRUCTURE_DO_NOT_CHASE"
             terminal_at = candle_index
             terminal_reason = (
@@ -512,17 +535,39 @@ def _complete_lifecycle(
     elif recent_retest and accepted:
         state = "RETESTING"
         actionable = True
-        reason = "Price is testing the event level and the latest completed candle still holds it."
-    elif accepted and pullback_required:
-        state = "PULLBACK_REQUIRED"
         reason = (
-            f"The structure event formed {campaign_distance_at_event:.2f} pre-event ATR from "
-            "its causal origin. Do not enter the breakout; wait for a completed retest."
+            "Price completed a pullback to the event level and still holds it; "
+            "the retest has reopened entry review."
+            if extension_observed_at is not None or fresh_window_missed_at is not None
+            else "Price is testing the event level and the latest completed candle still holds it."
         )
+    elif accepted and (pullback_required or extension_observed_at is not None):
+        state = "PULLBACK_REQUIRED"
+        if extension_observed_at is not None:
+            extension_distance = max(
+                distance_atr(candles[extension_observed_at]),
+                0.0,
+            )
+            reason = (
+                f"The impulse was detected, but price expanded {extension_distance:.2f} event ATR "
+                "from the structure level. Do not enter at the impulse extreme; wait for a "
+                "completed pullback and hold/reclaim."
+            )
+        else:
+            reason = (
+                f"The structure event formed {campaign_distance_at_event:.2f} pre-event ATR from "
+                "its causal origin. Do not enter the breakout; wait for a completed retest."
+            )
     elif accepted and age <= fresh_entry_bars and -0.20 <= signed_distance <= 1.75:
         state = "ACTIONABLE_NOW"
         actionable = True
         reason = "The event remains fresh, accepted, and close enough to its structure level for review."
+    elif accepted and fresh_window_missed_at is not None:
+        state = "MISSED"
+        reason = (
+            f"The original entry window passed after the move expanded "
+            f"{running_max_favourable:.2f} event ATR. A later completed retest can create a new review window."
+        )
     elif accepted:
         reason = "The event remains valid, but current location still needs a fresh retest or continuation trigger."
 
@@ -570,6 +615,15 @@ def _complete_lifecycle(
             "invalidation_level": invalidation_level,
             "invalidated_at_index": invalidated_at,
             "terminal_at_index": terminal_at,
+            "extension_observed": extension_observed_at is not None,
+            "extension_observed_at_index": extension_observed_at,
+            "fresh_entry_window_missed": fresh_window_missed_at is not None,
+            "fresh_entry_window_missed_at_index": fresh_window_missed_at,
+            "retest_rearmed_after_extension": bool(
+                state == "RETESTING" and extension_observed_at is not None
+            ),
+            "impulse_ignition": impulse_ignition,
+            "event_body_atr_before": round(event_impulse_atr, 3),
             "lifecycle_atr": event_atr,
             "lifecycle_atr_basis": "EVENT_CANDLE_ATR",
             "reason": reason,

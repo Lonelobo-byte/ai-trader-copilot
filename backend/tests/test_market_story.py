@@ -157,7 +157,7 @@ def test_held_retest_is_actionable() -> None:
     assert bullish["aligned_event"]["invalidated_at_index"] is None
 
 
-def test_extended_move_is_explicitly_do_not_chase() -> None:
+def test_extended_move_requires_pullback_instead_of_market_chase() -> None:
     story = build_market_story(
         [
             *_base_range(),
@@ -173,10 +173,49 @@ def test_extended_move_is_explicitly_do_not_chase() -> None:
     )
     bullish = evaluate_story_direction(story, "BULLISH")
 
-    assert bullish["state"] == "EXTENDED_DO_NOT_CHASE"
+    assert bullish["state"] == "PULLBACK_REQUIRED"
     assert bullish["actionable"] is False
     assert bullish["chase_prohibited"] is True
     assert bullish["aligned_event"]["current_distance_atr"] > 2.5
+    assert bullish["aligned_event"]["extension_observed"] is True
+    assert bullish["aligned_event"]["entry_timing"] == "WAIT_FOR_PULLBACK"
+
+
+def test_large_initial_breakout_is_impulse_watch_then_rearms_on_retest() -> None:
+    impulse = _candle(
+        25,
+        open_price=100.0,
+        high=104.5,
+        low=99.8,
+        close=104.0,
+        volume=250.0,
+    )
+    initial_story = build_market_story([*_base_range(), impulse])
+    initial = evaluate_story_direction(initial_story, "BULLISH")
+
+    assert initial["state"] == "PULLBACK_REQUIRED"
+    assert initial["actionable"] is False
+    assert initial["aligned_event"]["impulse_ignition"] is True
+    assert initial["aligned_event"]["extension_observed"] is True
+
+    retest_story = build_market_story(
+        [
+            *_base_range(),
+            impulse,
+            _candle(
+                26,
+                open_price=104.0,
+                high=104.1,
+                low=100.1,
+                close=100.5,
+            ),
+        ]
+    )
+    retest = evaluate_story_direction(retest_story, "BULLISH")
+
+    assert retest["state"] == "RETESTING"
+    assert retest["actionable"] is True
+    assert retest["aligned_event"]["retest_rearmed_after_extension"] is True
 
 
 def test_late_same_direction_bos_cannot_reset_a_consumed_campaign() -> None:
@@ -360,7 +399,7 @@ def test_invalidated_event_cannot_be_rehabilitated_by_a_later_volatility_spike()
     )
 
 
-def test_terminal_extension_stays_terminal_after_price_retests() -> None:
+def test_completed_retest_rearms_a_previously_extended_impulse() -> None:
     extended_prefix = [
         *_base_range(),
         _bullish_break(),
@@ -388,9 +427,12 @@ def test_terminal_extension_stays_terminal_after_price_retests() -> None:
     )
     reconstructed = _event_by_id(later_story, original["event_id"])
 
-    assert original["state"] == "EXTENDED_DO_NOT_CHASE"
-    assert reconstructed["state"] == "EXTENDED_DO_NOT_CHASE"
-    assert reconstructed["terminal_at_index"] == original["terminal_at_index"] == 26
+    assert original["state"] == "PULLBACK_REQUIRED"
+    assert reconstructed["state"] == "RETESTING"
+    assert reconstructed["actionable"] is True
+    assert reconstructed["chase_prohibited"] is False
+    assert reconstructed["terminal_at_index"] is None
+    assert reconstructed["retest_rearmed_after_extension"] is True
     assert reconstructed["max_favourable_excursion_atr"] >= original[
         "max_favourable_excursion_atr"
     ]

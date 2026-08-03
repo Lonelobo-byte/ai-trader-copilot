@@ -1078,6 +1078,7 @@ function resolveMarketStory({
     || primary.current_state
     || primary.actionability?.status
     || 'NO_ACTIVE_EVENT';
+  const pullbackRequired = String(state).toUpperCase() === 'PULLBACK_REQUIRED';
   const direction = directional.direction
     || event.direction
     || primary.actionability?.direction
@@ -1147,9 +1148,12 @@ function resolveMarketStory({
     );
   let tone = 'monitoring';
   if (String(state).toUpperCase() === 'INVALIDATED') tone = 'invalidated';
+  else if (pullbackRequired) tone = 'monitoring';
   else if (chaseProhibited || ['EXTENDED_DO_NOT_CHASE', 'LATE_STRUCTURE_DO_NOT_CHASE', 'PULLBACK_REQUIRED', 'MISSED', 'EXPIRED'].includes(String(state).toUpperCase())) tone = 'stale';
   else if (actionable || ['ACTIONABLE_NOW', 'RETESTING'].includes(String(state).toUpperCase())) tone = 'actionable';
-  const actionText = chaseProhibited
+  const actionText = pullbackRequired
+    ? 'PULLBACK REQUIRED · WAIT FOR COMPLETED RETEST'
+    : chaseProhibited
     ? `${marketStoryLabel(state)} · DO NOT CHASE`
     : actionable
       ? 'ACTIONABLE FOR MANUAL REVIEW · LIVE CONTROLS STILL APPLY'
@@ -1163,6 +1167,7 @@ function resolveMarketStory({
     actionable,
     actionabilityKnown,
     chaseProhibited,
+    pullbackRequired,
     tone,
     event,
     eventType,
@@ -1271,12 +1276,18 @@ function renderTradeSetup(setup, marketStory = {}, structureStory = {}) {
   }
   const status = setup?.status || 'NO_TRADE';
   const label = value => String(value || 'UNAVAILABLE').replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').toUpperCase();
-  setupStatusVal.textContent = entryBlocked ? 'DO NOT CHASE' : status.replace(/_/g, ' ');
+  setupStatusVal.textContent = entryBlocked
+    ? story.pullbackRequired ? 'PULLBACK REQUIRED' : 'DO NOT CHASE'
+    : status.replace(/_/g, ' ');
   setupStatusVal.className = `setup-status ${entryBlocked ? 'blocked_by_reward' : status.toLowerCase()}`;
   setupReasonVal.textContent = entryBlocked
     ? rewardInsufficient
       ? rewardReason || 'The setup is mapped, but too little reward remains to justify chasing the move.'
-      : story.happeningNow || 'The directional campaign is already mature; wait for a new causal structure.'
+      : story.happeningNow || (
+        story.pullbackRequired
+          ? 'The impulse is recognized, but a completed retest is required before entry review.'
+          : 'The directional campaign is already mature; wait for a new causal structure.'
+      )
     : setup?.reason || 'Waiting for a qualified setup.';
   if (setupLedgerCard) setupLedgerCard.className = `card exact-setup-card setup-ledger-card ledger-${status.toLowerCase()}${entryBlocked ? ' reward-insufficient' : ''}`;
   if (setupEvidenceHero) setupEvidenceHero.className = `setup-evidence-hero ${entryBlocked ? 'watch_only' : status.toLowerCase()}`;
@@ -3056,7 +3067,9 @@ function renderMonitorConfirmationScenario(data) {
   const displayLabel = scenarioInvalidated
     ? 'MARKET STORY INVALIDATED · WAIT FOR NEW EVENT'
     : scenarioStale
-      ? `${marketStoryLabel(scenarioStoryState)} · DO NOT CHASE`
+      ? scenarioStoryState === 'PULLBACK_REQUIRED'
+        ? 'IMPULSE DETECTED · WAIT FOR COMPLETED RETEST'
+        : `${marketStoryLabel(scenarioStoryState)} · DO NOT CHASE`
       : defaultLabel;
   const scenarioReason = selected.market_story_reason || selected.reason || 'Measured evidence is aligned for this scenario.';
   const displayHtfLabel = selected.higher_timeframe_aligned
@@ -3202,7 +3215,9 @@ function renderMonitorEvidenceState(data, status, isPublished, isTerminalFailure
   if (monitorMissingTitle) monitorMissingTitle.textContent = invalidatedStory
     ? 'A new causal branch is required'
     : staleStory
-      ? 'Fresh event required · do not chase'
+      ? storyState === 'PULLBACK_REQUIRED'
+        ? 'Completed retest required · impulse is being monitored'
+        : 'Fresh event required · do not chase'
       : actionableStory
         ? institutionalConfirmed ? 'Live publication controls' : 'Institutional confirmation controls'
         : tacticalReady
@@ -3237,7 +3252,9 @@ function renderMonitorEvidenceState(data, status, isPublished, isTerminalFailure
   if (monitorWatchStepTwoTitle) monitorWatchStepTwoTitle.textContent = invalidatedStory
     ? 'Wait for a replacement event'
     : staleStory
-      ? 'Do not chase the old move'
+      ? storyState === 'PULLBACK_REQUIRED'
+        ? 'Wait for pullback, hold, and live-flow confirmation'
+        : 'Do not chase the old move'
       : actionableStory
         ? 'Verify live causal controls'
         : tacticalCandidate
@@ -3311,7 +3328,7 @@ function renderMonitorEvidenceState(data, status, isPublished, isTerminalFailure
         ? invalidatedStory
           ? 'INVALIDATED'
           : staleStory
-            ? 'DO NOT CHASE'
+            ? storyState === 'PULLBACK_REQUIRED' ? 'PULLBACK REQUIRED' : 'DO NOT CHASE'
             : actionableStory
               ? marketStoryLabel(storyState)
               : waitingForBreak
@@ -3370,7 +3387,7 @@ function renderSignalMonitor(monitor) {
       monitorStatusVal.textContent = 'STORY INVALIDATED';
       displayStatusClass = 'invalidated';
     } else if (!isPublished && evidence.state === 'stale') {
-      monitorStatusVal.textContent = 'DO NOT CHASE';
+      monitorStatusVal.textContent = evidence.story?.pullbackRequired ? 'PULLBACK REQUIRED' : 'DO NOT CHASE';
       displayStatusClass = 'stale';
     } else if (!isPublished && evidence.state === 'actionable') {
       monitorStatusVal.textContent = evidence.story?.state === 'RETESTING' ? 'RETEST WATCH' : 'ACTIONABLE WATCH';

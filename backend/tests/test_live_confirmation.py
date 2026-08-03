@@ -210,8 +210,8 @@ def test_main_signal_rejects_correct_direction_when_entry_is_extended() -> None:
         )
 
     assert result["passed"] is False
-    assert result["structure_story"]["setup_state"] == "EXTENDED_DO_NOT_CHASE"
-    assert "original entry has moved away" in result["reason"]
+    assert result["structure_story"]["setup_state"] == "PULLBACK_REQUIRED"
+    assert "wait for a completed pullback" in result["reason"].lower()
 
 
 def test_planned_notional_is_blocked_when_displayed_depth_capacity_is_too_small() -> None:
