@@ -683,6 +683,15 @@ def evaluate_story_direction(story: dict[str, Any], direction: str) -> dict[str,
         ),
         None,
     )
+    opposing_sweep = next(
+        (
+            event
+            for event in sweeps
+            if event.get("direction") == opposite
+            and event.get("state") in {"ACTIONABLE_NOW", "RETESTING"}
+        ),
+        None,
+    )
 
     candidate = aligned
     if aligned_sweep and (
@@ -701,6 +710,7 @@ def evaluate_story_direction(story: dict[str, Any], direction: str) -> dict[str,
             "aligned_structure_event": aligned,
             "aligned_liquidity_event": aligned_sweep,
             "opposing_event": opposing,
+            "opposing_liquidity_event": opposing_sweep,
         }
 
     later_opposition = (
@@ -724,6 +734,31 @@ def evaluate_story_direction(story: dict[str, Any], direction: str) -> dict[str,
             "aligned_structure_event": aligned,
             "aligned_liquidity_event": aligned_sweep,
             "opposing_event": later_opposition,
+            "opposing_liquidity_event": opposing_sweep,
+        }
+
+    later_opposing_sweep = (
+        opposing_sweep
+        if opposing_sweep
+        and int(opposing_sweep.get("event_index", -1)) > int(candidate.get("event_index", -1))
+        else None
+    )
+    if later_opposing_sweep:
+        return {
+            "direction": normalized,
+            "state": "CONFLICTED",
+            "actionable": False,
+            "chase_prohibited": False,
+            "reason": (
+                f"A newer {opposite.lower()} liquidity sweep opposes this "
+                f"{normalized.lower()} setup; wait for completed resolution and aligned live flow."
+            ),
+            "reason_code": "NEWER_OPPOSING_LIQUIDITY_SWEEP",
+            "aligned_event": candidate,
+            "aligned_structure_event": aligned,
+            "aligned_liquidity_event": aligned_sweep,
+            "opposing_event": opposing,
+            "opposing_liquidity_event": later_opposing_sweep,
         }
 
     return {
@@ -737,6 +772,7 @@ def evaluate_story_direction(story: dict[str, Any], direction: str) -> dict[str,
         "aligned_structure_event": aligned,
         "aligned_liquidity_event": aligned_sweep,
         "opposing_event": opposing,
+        "opposing_liquidity_event": opposing_sweep,
     }
 
 

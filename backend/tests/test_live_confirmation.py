@@ -1,5 +1,5 @@
 from app.data_sources.binance_public import Candle
-from app.quant.live_confirmation import verify_main_signal_snapshot
+from app.quant.live_confirmation import apply_live_confirmation, verify_main_signal_snapshot
 from unittest.mock import patch
 
 
@@ -66,6 +66,8 @@ def _actionable_sweep_story(direction: str = "BULLISH") -> dict:
         "chase_prohibited": False,
         "break_level": 100.0,
         "swept_level": 100.0,
+        "atr_at_event": 1.0,
+        "invalidation_level": 99.0 if direction == "BULLISH" else 101.0,
         "quality": "STRONG",
         "reason": "Test sweep remains actionable.",
     }
@@ -82,6 +84,52 @@ def _actionable_sweep_story(direction: str = "BULLISH") -> dict:
             "direction": direction,
         },
     }
+
+
+def test_live_quote_below_bullish_invalidation_blocks_causal_review() -> None:
+    event = {
+        "detected": True,
+        "event_id": "CHOCH:BULLISH:10",
+        "type": "CHOCH",
+        "direction": "BULLISH",
+        "event_index": 10,
+        "state": "RETESTING",
+        "actionable": True,
+        "break_level": 100.0,
+        "atr_at_event": 1.0,
+        "invalidation_level": 99.8,
+    }
+    candidate = {
+        "direction": "BULLISH",
+        "score": 80,
+        "risk_flags": [],
+        "causal_radar": True,
+        "market_context": {
+            "actionability": {
+                "actionable": True,
+                "state": "RETESTING",
+                "aligned_event": event,
+            }
+        },
+    }
+    live = {
+        "current_price": 99.7,
+        "data_complete": True,
+        "spread_bps": 2.0,
+        "depth_imbalance": 0.1,
+        "funding_rate": 0.0001,
+        "oi_change_pct": 1.0,
+        "price_change_pct": 0.5,
+        "execution_tape": _live_inputs(99.7)["multi_venue"],
+    }
+
+    apply_live_confirmation(candidate, live)
+
+    checks = candidate["advanced_confirmation"]["checks"]
+    assert checks["market_story_live_location_not_chased"] is True
+    assert checks["market_story_live_invalidation_held"] is False
+    assert candidate["review_status"] == "WATCH_ONLY"
+    assert any("invalidation" in flag.lower() for flag in candidate["risk_flags"])
 
 
 def _prior_break_candles(*, extended: bool = False) -> list[Candle]:

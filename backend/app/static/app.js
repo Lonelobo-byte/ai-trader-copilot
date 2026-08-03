@@ -68,6 +68,7 @@ if (window.atcAuthenticated && accessToken()) scheduleAccessTokenRefresh(accessT
 
 // State Variables
 let socket = null;
+let streamGeneration = 0;
 let activeResearchLeaseId = null;
 let researchHeartbeatTimer = null;
 let lastPrice = null;
@@ -1509,6 +1510,7 @@ function releaseActiveResearchSession({ keepalive = false } = {}) {
 }
 
 function disconnectStream() {
+  streamGeneration += 1;
   userIntentDisconnect = true;
   reconnectAttempts = 0;
   if (reconnectTimer) {
@@ -1519,7 +1521,10 @@ function disconnectStream() {
   stopResearchClientHeartbeat();
   releaseActiveResearchSession();
   if (socket) {
-    socket.onclose = null; // Prevent onclose from triggering auto-reconnect
+    socket.onopen = null;
+    socket.onmessage = null;
+    socket.onerror = null;
+    socket.onclose = null; // Prevent stale callbacks and auto-reconnect
     socket.close(1000, 'User Disconnected');
     socket = null;
   }
@@ -1686,11 +1691,22 @@ function updateLivePrice(rawPrice) {
 }
 
 function renderMarketTick(payload) {
+  if (!payloadMatchesActiveStream(payload)) return;
   updateLivePrice(payload?.market?.last_price);
   window.HawkEyeChart?.consumeTick(payload?.chart_tick);
 }
 
+function payloadMatchesActiveStream(payload) {
+  const snapshot = payload?.analysis_snapshot || payload || {};
+  const symbol = String(payload?.symbol || snapshot.symbol || payload?.chart_tick?.symbol || '').toUpperCase();
+  const timeframe = String(payload?.timeframe || snapshot.timeframe || payload?.chart_tick?.timeframe || '');
+  if (symbol && activeStreamSymbol && symbol !== String(activeStreamSymbol).toUpperCase()) return false;
+  if (timeframe && activeStreamTimeframe && timeframe !== String(activeStreamTimeframe)) return false;
+  return true;
+}
+
 async function startStream(symbol, timeframe, useAi) {
+  const generation = ++streamGeneration;
   // Clear any existing reconnect timers
   if (reconnectTimer) {
     clearTimeout(reconnectTimer);
@@ -1701,8 +1717,12 @@ async function startStream(symbol, timeframe, useAi) {
   if (socket) {
     stopResearchClientHeartbeat();
     await releaseActiveResearchSession();
-    socket.onclose = null;
-    socket.close();
+    const previousSocket = socket;
+    previousSocket.onopen = null;
+    previousSocket.onmessage = null;
+    previousSocket.onerror = null;
+    previousSocket.onclose = null;
+    previousSocket.close();
     socket = null;
   }
 
@@ -1732,28 +1752,33 @@ async function startStream(symbol, timeframe, useAi) {
     updateConnectionUI(false);
     return;
   }
+  if (generation !== streamGeneration) return;
 
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   const wsUrl = `${protocol}//${window.location.host}/ws/analyze`;
 
   logMsg(`Connecting WebSocket: ${wsUrl}...`, 'system');
-  socket = new WebSocket(wsUrl, ['atc-auth', token]);
+  const nextSocket = new WebSocket(wsUrl, ['atc-auth', token]);
+  socket = nextSocket;
 
-  socket.onopen = () => {
+  nextSocket.onopen = () => {
+    if (generation !== streamGeneration || socket !== nextSocket) return;
     reconnectAttempts = 0;
     logMsg('WebSocket connection active.', 'system');
     updateConnectionUI(true);
 
     // Subscribe
     const subPayload = { symbol, timeframe, use_ai: useAi };
-    socket.send(JSON.stringify(subPayload));
+    nextSocket.send(JSON.stringify(subPayload));
     startResearchClientHeartbeat();
     logMsg(`Subscribed to ${symbol} [${timeframe}]. Evidence review convened.`, 'ws-send');
   };
 
-  socket.onmessage = (event) => {
+  nextSocket.onmessage = (event) => {
+    if (generation !== streamGeneration || socket !== nextSocket) return;
     try {
       const payload = JSON.parse(event.data);
+      if (!payloadMatchesActiveStream(payload)) return;
       if (payload.error) {
         const capacityError = payload.code === 'research_capacity_exceeded';
         const retryable = payload.code === 'research_temporarily_unavailable';
@@ -1761,7 +1786,7 @@ async function startStream(symbol, timeframe, useAi) {
         window.showAppToast?.(payload.error, retryable ? 'warning' : 'error');
         userIntentDisconnect = !retryable;
         if (socket) {
-          socket.close(retryable ? 1013 : 1000, "Server error reported");
+          nextSocket.close(retryable ? 1013 : 1000, "Server error reported");
         }
         return;
       }
@@ -1800,7 +1825,8 @@ async function startStream(symbol, timeframe, useAi) {
     }
   };
 
-  socket.onclose = (event) => {
+  nextSocket.onclose = (event) => {
+    if (generation !== streamGeneration || socket !== nextSocket) return;
     socket = null;
     stopResearchClientHeartbeat();
     releaseActiveResearchSession();
@@ -1813,24 +1839,29 @@ async function startStream(symbol, timeframe, useAi) {
       const delay = Math.round(baseDelay * (0.8 + Math.random() * 0.4));
       logMsg(`Live connection paused. Reconnecting in ${Math.max(1, Math.round(delay / 1000))}s...`, 'error');
       reconnectTimer = setTimeout(() => {
-        if (!userIntentDisconnect && socket === null) {
+        if (generation === streamGeneration && !userIntentDisconnect && socket === null) {
           startStream(symbol, timeframe, useAi);
         }
       }, delay);
     }
   };
 
-  socket.onerror = (error) => {
+  nextSocket.onerror = (error) => {
+    if (generation !== streamGeneration || socket !== nextSocket) return;
     logMsg(`WebSocket error occurred.`, 'error');
     updateConnectionUI(false);
   };
 }
 
 window.addEventListener('pagehide', () => {
+  streamGeneration += 1;
   userIntentDisconnect = true;
   stopResearchClientHeartbeat();
   releaseActiveResearchSession({ keepalive: true });
   if (socket) {
+    socket.onopen = null;
+    socket.onmessage = null;
+    socket.onerror = null;
     socket.onclose = null;
     socket.close(1000, 'Research page closed');
     socket = null;
@@ -3637,7 +3668,7 @@ document.addEventListener('visibilitychange', () => {
   if (pendingDashboardPayload) {
     const payload = pendingDashboardPayload;
     pendingDashboardPayload = null;
-    renderDashboard(payload);
+    if (payloadMatchesActiveStream(payload)) renderDashboard(payload);
   }
   if (protectedDashboardStarted) refreshSignalHistory();
 });

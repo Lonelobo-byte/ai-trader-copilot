@@ -74,6 +74,7 @@ def _event_view(event: Mapping[str, Any], candles: Sequence[Any]) -> dict[str, A
         "id": str(event.get("event_id") or f"{event_type}:{event_time}:{level}"),
         "type": event_type,
         "direction": str(event.get("direction") or "NEUTRAL").upper(),
+        "event_index": event_index,
         "time": event_time,
         "price": price if price is not None else level,
         "level": level,
@@ -223,6 +224,32 @@ def build_hawk_eye_chart_contract(
         or {}
     )
     selected_view = _event_view(selected_event, candles) if selected_event else None
+    selected_id = selected_view.get("id") if selected_view else None
+    selected_direction = selected_view.get("direction") if selected_view else None
+    for event_view in (*structure_events, *liquidity_events):
+        is_selected = bool(selected_id and event_view.get("id") == selected_id)
+        event_view["selected"] = is_selected
+        if is_selected:
+            event_view["branch_status"] = "SELECTED"
+            event_view["display_state"] = event_view.get("state")
+            event_view["display_reason"] = event_view.get("reason")
+        else:
+            event_view["branch_status"] = (
+                "OPPOSING_CONTEXT"
+                if selected_direction and event_view.get("direction") != selected_direction
+                else "HISTORICAL_CONTEXT"
+            )
+            event_view["display_state"] = "CONTEXT_ONLY"
+            event_view["display_reason"] = (
+                "Historical completed-candle context only; this is not the currently selected signal branch."
+            )
+    if selected_view:
+        selected_view.update({
+            "selected": True,
+            "branch_status": "SELECTED",
+            "display_state": selected_view.get("state"),
+            "display_reason": selected_view.get("reason"),
+        })
     actual_flow = execution_tape.get("actual_flow") or {}
     actionability = story.get("actionability") or {}
 

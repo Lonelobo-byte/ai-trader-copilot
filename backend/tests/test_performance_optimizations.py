@@ -171,12 +171,15 @@ def test_frontend_assets_are_lazy_shared_and_cacheable() -> None:
     root = Path(__file__).resolve().parents[2]
     index = (root / "backend/app/static/index.html").read_text(encoding="utf-8")
     radar = (root / "backend/app/static/radar.html").read_text(encoding="utf-8")
+    app = (root / "backend/app/static/app.js").read_text(encoding="utf-8")
     hawk = (root / "backend/app/static/hawk-chart.js").read_text(encoding="utf-8")
     caddy = (root / "Caddyfile").read_text(encoding="utf-8")
 
     assert '<script src="https://cdn.jsdelivr.net/npm/echarts' not in index
     assert "loadResearchScript('hawk-chart.js" in index
     assert "echarts.min.js" in hawk and "script.async = true" in hawk
+    assert "streamGeneration" in app and "payloadMatchesActiveStream" in app
+    assert "display_reason" in hawk and "state.candles.clear()" in hawk
     assert 'ambient-motion.js?v=' in index
     assert 'ambient-motion.js?v=' in radar
     assert "particleCount = 70" not in index + radar

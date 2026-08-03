@@ -86,6 +86,7 @@ def apply_live_confirmation(candidate: dict[str, Any], live: dict[str, Any]) -> 
     )
     story_event_level = _number(story_event.get("break_level"))
     story_event_atr = _number(story_event.get("atr_at_event"))
+    story_invalidation_level = _number(story_event.get("invalidation_level"))
     live_price = _number(live.get("current_price"))
     story_event_direction = str(story_event.get("direction", "")).upper()
     story_live_location_evaluated = bool(
@@ -106,6 +107,19 @@ def apply_live_confirmation(candidate: dict[str, Any], live: dict[str, Any]) -> 
         story_live_distance_atr <= 2.5
         if story_live_distance_atr is not None
         else not candidate.get("causal_radar") or not market_story_evaluated
+    )
+    story_live_invalidation_evaluated = bool(
+        market_story_evaluated
+        and live_price > 0
+        and story_invalidation_level > 0
+        and story_event_direction == direction
+    )
+    story_live_invalidation_held = (
+        live_price >= story_invalidation_level
+        if story_live_invalidation_evaluated and direction == "BULLISH"
+        else live_price <= story_invalidation_level
+        if story_live_invalidation_evaluated
+        else not candidate.get("causal_radar") and not candidate.get("require_production_tape")
     )
     structure_confirmation = candidate.get("structure_confirmation") or {}
     structure_gate_evaluated = "passed" in structure_confirmation
@@ -178,6 +192,7 @@ def apply_live_confirmation(candidate: dict[str, Any], live: dict[str, Any]) -> 
         "execution_capacity_sufficient": execution_capacity_sufficient,
         "market_story_actionable": market_story_actionable,
         "market_story_live_location_not_chased": story_live_location_not_chased,
+        "market_story_live_invalidation_held": story_live_invalidation_held,
         "shared_structure_playbook_passed": structure_gate_passed,
     }
     risk_flags = candidate.setdefault("risk_flags", [])
@@ -205,6 +220,12 @@ def apply_live_confirmation(candidate: dict[str, Any], live: dict[str, Any]) -> 
             if story_live_distance_atr is not None
             else "Live price could not be reconciled to the originating completed-candle event."
         ),
+        "market_story_live_invalidation_held": (
+            f"Live price {live_price:.6g} breached the {direction.lower()} event invalidation "
+            f"at {story_invalidation_level:.6g}; the completed-candle retest is no longer valid."
+            if story_live_invalidation_evaluated
+            else "Live price could not be reconciled to the selected event invalidation level."
+        ),
         "shared_structure_playbook_passed": (
             f"Shared structure playbook is not ready: "
             f"{structure_confirmation.get('reason') or 'event quality or higher-timeframe alignment is incomplete.'}"
@@ -219,7 +240,10 @@ def apply_live_confirmation(candidate: dict[str, Any], live: dict[str, Any]) -> 
             *required_names,
             "market_story_actionable",
             "market_story_live_location_not_chased",
+            "market_story_live_invalidation_held",
         )
+    elif candidate.get("require_production_tape") and market_story_evaluated:
+        required_names = (*required_names, "market_story_live_invalidation_held")
     if candidate.get("causal_radar") and structure_gate_evaluated:
         required_names = (*required_names, "shared_structure_playbook_passed")
     required_checks = {key: checks[key] for key in required_names}
@@ -274,6 +298,11 @@ def apply_live_confirmation(candidate: dict[str, Any], live: dict[str, Any]) -> 
             ),
             "maximum_distance_atr": 2.5,
             "passed": story_live_location_not_chased,
+            "invalidation_level": (
+                story_invalidation_level if story_invalidation_level > 0 else None
+            ),
+            "invalidation_evaluated": story_live_invalidation_evaluated,
+            "invalidation_held": story_live_invalidation_held,
         },
         "execution_capacity": {
             "evaluated": execution_capacity_evaluated,
@@ -626,6 +655,7 @@ def verify_main_signal_snapshot(
     tape_flow_ready = publication_flow_is_qualified(execution_tape)
     taker_flow_ready = tape_flow_ready
     live = {
+        "current_price": midpoint if midpoint > 0 else _number(primary[-1].close),
         "data_complete": bool(
             bids and asks and funding_available
             and oi_history.get("available") and taker_flow_ready
@@ -676,6 +706,7 @@ def verify_main_signal_snapshot(
         "score": 75 if all(structure_checks.values()) else 0,
         "risk_flags": risk_flags,
         "require_production_tape": True,
+        "market_context": {"actionability": story_view},
     }
     apply_live_confirmation(candidate, live)
     live_checks = candidate["advanced_confirmation"]["checks"]
@@ -697,6 +728,7 @@ def verify_main_signal_snapshot(
         "score": 75 if all(tactical_structure_checks.values()) else 0,
         "risk_flags": tactical_risk_flags,
         "require_production_tape": True,
+        "market_context": {"actionability": story_view},
     }
     apply_live_confirmation(tactical_candidate, live)
     tactical_live_checks = tactical_candidate["advanced_confirmation"]["checks"]

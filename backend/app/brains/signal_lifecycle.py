@@ -60,6 +60,18 @@ def _event_direction_for_side(side: str) -> str:
     return "BULLISH" if side == "LONG" else "BEARISH" if side == "SHORT" else ""
 
 
+def _live_event_invalidation_held(
+    *, side: str, current_price: float, story: Mapping[str, Any] | None,
+) -> bool | None:
+    event = _story_event(story)
+    if str(event.get("direction") or "").upper() != _event_direction_for_side(side):
+        return None
+    invalidation = _number(event.get("invalidation_level"))
+    if invalidation <= 0 or current_price <= 0:
+        return None
+    return current_price >= invalidation if side == "LONG" else current_price <= invalidation
+
+
 def market_story_matches_signal(
     signal: Mapping[str, Any],
     market_story: Mapping[str, Any] | None,
@@ -234,6 +246,17 @@ def evaluate_signal_approval(
         if trade_setup.get("execution_permitted") is False:
             blockers.append("The deterministic trade plan is research-only and cannot be published.")
         if side:
+            invalidation_held = _live_event_invalidation_held(
+                side=side,
+                current_price=current_price,
+                story=story_view,
+            )
+            if invalidation_held is False:
+                event = _story_event(story_view)
+                blockers.append(
+                    f"Live quote breached the selected event invalidation at "
+                    f"{_number(event.get('invalidation_level')):.6g}."
+                )
             event_distance_atr = _live_event_distance_atr(
                 side=side,
                 current_price=current_price,

@@ -160,8 +160,10 @@
     state.chart.on('click', (params) => {
       const detail = params?.data?.hawkDetail;
       if (!detail) return;
-      const stateCopy = detail.state ? ` · ${String(detail.state).replace(/_/g, ' ')}` : '';
-      window.showAppToast?.(`${eventShortLabel(detail)}${stateCopy}: ${detail.reason || 'Completed-candle event.'}`, 'info', 7000);
+      const displayState = detail.display_state || detail.state;
+      const displayReason = detail.display_reason || detail.reason;
+      const stateCopy = displayState ? ` · ${String(displayState).replace(/_/g, ' ')}` : '';
+      window.showAppToast?.(`${eventShortLabel(detail)}${stateCopy}: ${displayReason || 'Completed-candle event.'}`, 'info', 7000);
     });
     if (window.ResizeObserver) {
       state.resizeObserver = new ResizeObserver(() => state.chart?.resize());
@@ -511,6 +513,13 @@
   function consume(contract) {
     if (!contract || contract.schema_version !== 'hawk_eye_chart.v1') return;
     bindControls();
+    if (state.contract && (
+      String(state.contract.symbol || '').toUpperCase() !== String(contract.symbol || '').toUpperCase()
+      || String(state.contract.timeframe || '') !== String(contract.timeframe || '')
+    )) {
+      state.candles.clear();
+      state.chart?.clear();
+    }
     state.contract = contract;
     mergeCandles(contract);
     element('hawk-chart-empty')?.classList.add('is-hidden');
@@ -521,6 +530,14 @@
   function consumeTick(tick) {
     if (!tick || tick.schema_version !== 'hawk_eye_tick.v1') return;
     bindControls();
+    if (state.contract && (
+      String(state.contract.symbol || '').toUpperCase() !== String(tick.symbol || '').toUpperCase()
+      || String(state.contract.timeframe || '') !== String(tick.timeframe || '')
+    )) {
+      state.candles.clear();
+      state.chart?.clear();
+      state.contract = null;
+    }
     const lastPrice = finite(tick.last_price);
     const rows = Array.isArray(tick.candles) && tick.candles.length
       ? tick.candles.map((candle) => ({ ...candle }))

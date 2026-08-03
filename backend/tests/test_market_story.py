@@ -12,6 +12,42 @@ from app.indicators.market_story import (
 )
 
 
+def test_newer_opposing_liquidity_sweep_conflicts_older_retest() -> None:
+    bullish_retest = {
+        "detected": True,
+        "event_id": "CHOCH:BULLISH:10",
+        "type": "CHOCH",
+        "direction": "BULLISH",
+        "event_index": 10,
+        "state": "RETESTING",
+        "actionable": True,
+        "chase_prohibited": False,
+        "reason": "Bullish retest held on the completed candle.",
+    }
+    bearish_sweep = {
+        "detected": True,
+        "event_id": "LIQUIDITY_SWEEP:BEARISH:11",
+        "type": "LIQUIDITY_SWEEP",
+        "direction": "BEARISH",
+        "event_index": 11,
+        "state": "ACTIONABLE_NOW",
+        "actionable": True,
+        "chase_prohibited": False,
+        "reason": "A newer bearish sweep is active.",
+    }
+
+    result = evaluate_story_direction(
+        {"structure_events": [bullish_retest], "liquidity_events": [bearish_sweep]},
+        "BULLISH",
+    )
+
+    assert result["state"] == "CONFLICTED"
+    assert result["actionable"] is False
+    assert result["chase_prohibited"] is False
+    assert result["reason_code"] == "NEWER_OPPOSING_LIQUIDITY_SWEEP"
+    assert result["opposing_liquidity_event"]["event_id"] == bearish_sweep["event_id"]
+
+
 _BASE_TIME_MS = 1_700_000_000_000
 _INTERVAL_MS = 60_000
 

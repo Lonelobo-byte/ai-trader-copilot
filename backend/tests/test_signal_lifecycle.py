@@ -162,6 +162,26 @@ def test_publication_rechecks_live_quote_distance_from_originating_event() -> No
     assert any("3.00 ATR beyond" in blocker for blocker in approval["blockers"])
 
 
+def test_publication_rejects_live_quote_through_event_invalidation() -> None:
+    setup = _story_setup()
+    setup["market_story"]["selected_event"]["invalidation_level"] = 99.8
+    approval = evaluate_signal_approval(
+        decision=_decision(),
+        trade_setup=setup,
+        risk_idea={"risk_reward": 2.0, "entry_zone_low": 99.5, "entry_zone_high": 100.5},
+        trend={"status": "bullish"},
+        momentum={"bias": "bullish"},
+        order_book={"pressure": "buyers"},
+        data_freshness={"passed": True},
+        liquidity={"passed": True},
+        ai_result=_ai(),
+        current_price=99.7,
+    )
+
+    assert approval["approved"] is False
+    assert any("invalidation at 99.8" in blocker for blocker in approval["blockers"])
+
+
 def test_trade_setup_preserves_low_price_pair_precision() -> None:
     from app.brains.signal_builder import build_ai_driven_trade_setup
     from app.settings import get_settings

@@ -110,3 +110,37 @@ def test_execution_levels_are_hidden_until_plan_is_permitted() -> None:
     assert _contract(execution_permitted=False)["annotations"]["execution_levels"] == []
     levels = _contract(execution_permitted=True)["annotations"]["execution_levels"]
     assert [level["kind"] for level in levels] == ["STOP", "TP1", "TP2"]
+
+
+def test_non_selected_marker_is_projected_as_context_only() -> None:
+    selected = _event()
+    historical = {
+        **selected,
+        "event_id": "CHOCH:BULLISH:2",
+        "type": "CHOCH",
+        "direction": "BULLISH",
+        "event_index": 2,
+        "event_open_time": _candles()[2].open_time,
+        "state": "RETESTING",
+        "actionable": True,
+        "reason": "An older bullish retest held.",
+    }
+    contract = build_hawk_eye_chart_contract(
+        _candles(),
+        symbol="KAITOUSDT",
+        timeframe="15m",
+        story={"structure_events": [historical], "liquidity_events": [selected]},
+        liquidity_map={},
+        trade_setup={"market_story": {"selected_event": selected}},
+        signal_monitor={},
+        live_confirmation={},
+        execution_tape={},
+    )
+
+    old_marker = contract["annotations"]["structure_events"][0]
+    current_marker = contract["annotations"]["liquidity_events"][0]
+    assert old_marker["display_state"] == "CONTEXT_ONLY"
+    assert old_marker["branch_status"] == "OPPOSING_CONTEXT"
+    assert old_marker["selected"] is False
+    assert current_marker["display_state"] == "PULLBACK_REQUIRED"
+    assert current_marker["selected"] is True
